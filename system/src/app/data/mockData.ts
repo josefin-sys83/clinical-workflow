@@ -1,0 +1,122 @@
+import { Project, OpenItem } from '../types/project';
+
+// Mock data demonstrating user with different roles across projects
+// Realistic scenario - user involved in 1-2 active projects
+
+export const mockProjects: Project[] = [];
+
+export const mockCompletedProjects: Project[] = [];
+
+export const mockOpenItems: OpenItem[] = [
+  {
+    id: 'item-001',
+    projectId: 'proj-001',
+    projectName: 'CARDIO-STENT-2024',
+    document: 'Clinical Protocol',
+    section: 'Section 7.3 - Risk Mitigation',
+    description: 'Add device malfunction response procedures and escalation protocol. Define thresholds for study pause criteria.',
+    myRole: 'Project Manager',
+    action: 'Input needed',
+    dueDate: '2026-02-20',
+    priority: 'High',
+    link: '/projects/proj-001/protocol/section-7-3',
+  },
+  {
+    id: 'item-002',
+    projectId: 'proj-001',
+    projectName: 'CARDIO-STENT-2024',
+    document: 'Clinical Study Protocol',
+    section: 'Protocol v2.1',
+    description: 'Sign protocol after Quality Assurance review. Protocol includes expanded age range and updated eligibility criteria.',
+    myRole: 'Project Manager',
+    action: 'Sign',
+    dueDate: '2026-02-18',
+    priority: 'High',
+    link: '/projects/proj-001/documents/protocol-v2-1',
+  },
+  {
+    id: 'item-003',
+    projectId: 'proj-002',
+    projectName: 'NEURO-IMPLANT-EU',
+    document: 'Regulatory Submission',
+    section: 'Safety Assessment - Device Risks',
+    description: 'Verify risk classifications for electromagnetic interference and surgical placement complications align with ISO 14971.',
+    myRole: 'Regulatory Affairs',
+    action: 'Review',
+    dueDate: '2026-02-19',
+    priority: 'High',
+    link: '/projects/proj-002/review/safety-assessment',
+  },
+  {
+    id: 'item-004',
+    projectId: 'proj-001',
+    projectName: 'CARDIO-STENT-2024',
+    document: 'Sponsor Communication',
+    section: 'Amendment 1.2 Approval',
+    description: 'Sponsor feedback received - protocol changes must be implemented before ethics committee resubmission deadline.',
+    myRole: 'Project Manager',
+    action: 'Blocker',
+    dueDate: '2026-02-18',
+    priority: 'High',
+    link: '/projects/proj-001/blockers/sponsor-approval',
+  },
+  {
+    id: 'item-005',
+    projectId: 'proj-002',
+    projectName: 'NEURO-IMPLANT-EU',
+    document: 'Technical Documentation',
+    section: 'Risk Management File',
+    description: 'Clinical data missing for post-market surveillance section - required for final notified body assessment.',
+    myRole: 'Regulatory Affairs',
+    action: 'Blocker',
+    dueDate: '2026-02-17',
+    priority: 'High',
+    link: '/projects/proj-002/blockers/risk-management',
+  },
+  {
+    id: 'item-006',
+    projectId: 'proj-002',
+    projectName: 'NEURO-IMPLANT-EU',
+    document: 'Regulatory Filing',
+    section: 'CE Mark Documentation',
+    description: 'Upload biocompatibility test results (ISO 10993) and clinical evaluation report to notified body portal.',
+    myRole: 'Regulatory Affairs',
+    action: 'Input needed',
+    dueDate: '2026-02-24',
+    priority: 'Medium',
+    link: '/projects/proj-002/regulatory/ce-mark',
+  },
+  {
+    id: 'item-007',
+    projectId: 'proj-001',
+    projectName: 'CARDIO-STENT-2024',
+    document: 'Statistical Analysis Plan',
+    section: 'Primary Endpoint Analysis',
+    description: 'Review updated sample size calculation and interim analysis stopping rules for DSMB review.',
+    myRole: 'Protocol Lead',
+    action: 'Review',
+    dueDate: '2026-02-25',
+    priority: 'Medium',
+    link: '/projects/proj-001/review/statistical-plan',
+  },
+  {
+    id: 'item-008',
+    projectId: 'proj-002',
+    projectName: 'NEURO-IMPLANT-EU',
+    document: 'Clinical Study Protocol',
+    section: 'Protocol v3.0',
+    description: 'Sign protocol after Quality Assurance review. Final version ready for regulatory submission.',
+    myRole: 'Regulatory Affairs',
+    action: 'Sign',
+    dueDate: '2026-02-23',
+    priority: 'Medium',
+    link: '/projects/proj-002/documents/protocol-v3-0',
+  },
+];
+
+// Current user context (in a real app, this would come from auth)
+export const currentUser = {
+  id: 'user-001',
+  name: 'Dr. Sarah Chen',
+  email: 'sarah.chen@clinicalplatform.com',
+};
