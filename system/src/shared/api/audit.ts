@@ -13,6 +13,7 @@ export async function listAuditEvents(projectId: string): Promise<AuditEvent[]> 
     details: e.metadata && (e.metadata.previousContent || e.metadata.newContent) ? ("|||BEFORE|||" + (e.metadata.previousContent || "").replace(/[*#_`]/g, "").substring(0, 500) + "|||AFTER|||" + (e.metadata.newContent || "").replace(/[*#_`]/g, "").substring(0, 500)) : e.metadata?.roles ? e.metadata.roles : undefined,
     at: e.createdAt,
     actor: e.actorUserId ? { id: e.actorUserId, name: e.actorUserId } : undefined,
+    reason: e.metadata?.reason ?? undefined,
   }));
 }
 

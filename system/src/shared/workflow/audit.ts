@@ -25,6 +25,7 @@ export interface AuditEvent {
   };
   summary: string;
   details?: string;
+  reason?: string;
   severity?: IssueSeverity;
   fromState?: DocumentLifecycleState;
   toState?: DocumentLifecycleState;
