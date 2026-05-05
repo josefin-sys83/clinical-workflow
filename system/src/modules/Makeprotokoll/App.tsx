@@ -27,6 +27,10 @@ export default function App() {
   const [roles, setRoles] = React.useState<any[]>([]);
   const [protocol, setProtocol] = React.useState<any>(null);
   const [generatingProtocol, setGeneratingProtocol] = React.useState(false);
+  const [toast, setToast] = React.useState<{ message: string } | null>(null);
+  const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
+  const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
+  const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
   const apiBase = window.location.origin.replace('-5173.', '-3001.');
 
   React.useEffect(() => {
@@ -64,7 +68,7 @@ export default function App() {
   }, [projectId]);
 
   // Current user context
-  const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string) => {
+  const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0): Promise<number> => {
     try {
       const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
         method: 'POST',
@@ -72,9 +76,17 @@ export default function App() {
         body: JSON.stringify({ sectionTitle, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
       });
       const result = await res.json();
-      const issuesArr = result.issues || (Array.isArray(result) ? result : []);
+      let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
       const elements = result.requiredElements || [];
-      if (issuesArr.length > 0 || elements.length > 0) {
+      // Filter out won't-fix descriptions for this section
+      const suppressed = wontFixDescriptions[sectionId] || [];
+      if (suppressed.length > 0) {
+        issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
+      }
+      const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
+      const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
+      // Always update protocol state (even if issuesArr is empty)
+      await new Promise<void>((resolve) => {
         setProtocol((prev: any) => {
           const updatedSections = prev.sections.map((s: any) =>
             s.id === sectionId ? { ...s, issues: issuesArr, requiredElements: elements.length > 0 ? elements : s.requiredElements } : s
@@ -85,11 +97,78 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ data: { protocol: updated } })
           });
+          resolve();
           return updated;
         });
-      }
+      });
+      return resolvedCount;
     } catch (e) {
       console.error('Section analysis failed', e);
+      return 0;
+    }
+  };
+
+  const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string) => {
+    // Capture previous open issue count before re-analysis
+    const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
+    const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
+    // Update section content in protocol state
+    setProtocol((prev: any) => {
+      if (!prev) return prev;
+      const updatedSections = prev.sections.map((s: any) =>
+        s.id === sectionId ? { ...s, content: newContent, updatedAt: new Date().toISOString() } : s
+      );
+      return { ...prev, sections: updatedSections };
+    });
+    // Run re-analysis
+    const sectionTitle = currentSection?.title || '';
+    const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
+    if (resolvedCount > 0) {
+      setToast({ message: `${resolvedCount} issue${resolvedCount > 1 ? 's' : ''} resolved` });
+      setTimeout(() => setToast(null), 3000);
+    }
+  };
+
+  const handleWontFix = async (sectionId: string, issueId: string, comment: string) => {
+    const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
+    const issue = (currentSection?.issues || []).find((i: any) => i.id === issueId);
+    if (!issue) return;
+    const issueDescription = issue.description;
+    // Store won't-fix description
+    setWontFixDescriptions((prev) => {
+      const existing = prev[sectionId] || [];
+      return { ...prev, [sectionId]: [...existing, issueDescription] };
+    });
+    // Remove issue from protocol state
+    setProtocol((prev: any) => {
+      if (!prev) return prev;
+      const updatedSections = prev.sections.map((s: any) =>
+        s.id === sectionId ? { ...s, issues: (s.issues || []).filter((i: any) => i.id !== issueId) } : s
+      );
+      const updated = { ...prev, sections: updatedSections };
+      // Persist to backend
+      fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { protocol: updated } })
+      });
+      return updated;
+    });
+    // Create audit trail entry
+    try {
+      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'note',
+          message: `Issue marked as Won't Fix: ${issue.subsection}`,
+          stepId: 'protocol-make',
+          actorUserId: 'unknown',
+          metadataJson: JSON.stringify({ issueId, comment, sectionId, issueDescription })
+        })
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
     }
   };
 
@@ -642,6 +721,8 @@ export default function App() {
                       ref={el => sectionRefs.current[section.id] = el}
                       isHighlighted={highlightedSection === section.id}
                       isReviewMode={isReviewMode}
+                      onSaved={(newContent, prevContent, reason) => handleSectionSaved(section.id, newContent, prevContent, reason)}
+                      onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
                     />
                   ))}
                 </div>
@@ -681,22 +762,21 @@ export default function App() {
               <div className="flex-1 issues-scroll">
                 <div className="p-4 space-y-3">
                   {filteredSections.map((section) => {
-                    if (!section.issues || section.issues.length === 0) return null;
-                    
-                    return section.issues.map((issue) => {
+                    const openIssues = (section.issues || []).filter((issue: any) => issue.status === 'open');
+                    if (openIssues.length === 0) return null;
+
+                    return openIssues.map((issue: any) => {
                       const isBlocker = issue.severity === 'blocker';
-                      const isWarning = issue.severity === 'warning';
                       const bgColor = isBlocker ? 'bg-red-50' : 'bg-amber-50';
                       const borderColor = isBlocker ? 'border-red-200' : 'border-amber-200';
                       const hoverColor = isBlocker ? 'hover:bg-red-100' : 'hover:bg-amber-100';
-                      const iconColor = isBlocker ? 'text-red-600' : 'text-amber-600';
                       const badgeBgColor = isBlocker ? 'bg-red-100' : 'bg-amber-100';
                       const badgeTextColor = isBlocker ? 'text-red-700' : 'text-amber-700';
                       const linkColor = isBlocker ? 'text-red-700' : 'text-amber-700';
                       const linkHoverColor = isBlocker ? 'hover:text-red-900' : 'hover:text-amber-900';
-                      
+
                       return (
-                        <div 
+                        <div
                           key={issue.id}
                           onClick={() => navigateToSection(section.id)}
                           className={`p-3 rounded border ${bgColor} ${borderColor} cursor-pointer ${hoverColor} transition-colors`}
@@ -712,11 +792,11 @@ export default function App() {
                               <p className="text-xs text-slate-600 leading-relaxed mb-2">
                                 {issue.description}
                               </p>
-                              
+
                               <div className={`pt-2 border-t ${borderColor} space-y-1.5`}>
                                 <div className="flex items-center justify-between">
                                   <span className="text-xs text-slate-500">Affected section</span>
-                                  <button 
+                                  <button
                                     onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
                                     className={`text-xs ${linkColor} ${linkHoverColor} hover:underline`}
                                   >
@@ -736,19 +816,27 @@ export default function App() {
                               </div>
                             </div>
                           </div>
-                          <div 
-                            onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
-                            className={`text-xs ${linkColor} ${linkHoverColor} mt-2 flex items-center gap-1 font-medium cursor-pointer`}
-                          >
-                            <span>Navigate to Section {section.number}</span>
-                            <ChevronRight className="w-3 h-3" />
+                          <div className="flex items-center justify-between mt-2">
+                            <div
+                              onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
+                              className={`text-xs ${linkColor} ${linkHoverColor} flex items-center gap-1 font-medium cursor-pointer`}
+                            >
+                              <span>Navigate to Section {section.number}</span>
+                              <ChevronRight className="w-3 h-3" />
+                            </div>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setRightPanelWontFixModal({ sectionId: section.id, issueId: issue.id }); setRightPanelWontFixComment(''); }}
+                              className="text-xs text-slate-400 hover:text-slate-600 transition-colors ml-2"
+                            >
+                              Won't fix
+                            </button>
                           </div>
                         </div>
                       );
                     });
                   })}
-                  
-                  {filteredSections.every(s => !s.issues || s.issues.length === 0) && (
+
+                  {filteredSections.every(s => (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && (
                     <div className="p-6 text-center">
                       <CheckCircle2 className="w-8 h-8 text-green-600 mx-auto mb-2" />
                       <p className="text-sm text-slate-700 mb-1">No issues found</p>
@@ -820,6 +908,57 @@ export default function App() {
         warningCount={totalWarnings}
         incompleteSections={incompleteSections}
       />
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{position:'fixed', bottom:'1.5rem', right:'1.5rem', zIndex:9999,
+          backgroundColor:'#16a34a', color:'white', padding:'0.75rem 1.25rem',
+          borderRadius:'0.5rem', display:'flex', alignItems:'center', gap:'0.5rem',
+          boxShadow:'0 4px 24px rgba(0,0,0,0.2)', fontSize:'0.875rem', fontWeight:500
+        }}>
+          ✓ {toast.message}
+        </div>
+      )}
+
+      {/* Right Panel Won't Fix Modal */}
+      {rightPanelWontFixModal && (
+        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
+          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
+            <h2 style={{margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Mark as Won't Fix</h2>
+            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
+              Provide a reason for suppressing this issue. This will be saved in the audit trail.
+            </p>
+            <textarea
+              autoFocus
+              value={rightPanelWontFixComment}
+              onChange={(e) => setRightPanelWontFixComment(e.target.value)}
+              placeholder="e.g. Risk accepted per sponsor decision, documented in risk management file"
+              style={{width: '100%', minHeight: '100px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' as const}}
+            />
+            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
+              <button
+                onClick={() => { setRightPanelWontFixModal(null); setRightPanelWontFixComment(''); }}
+                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!rightPanelWontFixComment.trim()}
+                onClick={async () => {
+                  if (rightPanelWontFixModal) {
+                    await handleWontFix(rightPanelWontFixModal.sectionId, rightPanelWontFixModal.issueId, rightPanelWontFixComment.trim());
+                  }
+                  setRightPanelWontFixModal(null);
+                  setRightPanelWontFixComment('');
+                }}
+                style={{padding: '0.5rem 1rem', backgroundColor: rightPanelWontFixComment.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: rightPanelWontFixComment.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

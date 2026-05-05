@@ -66,14 +66,17 @@ interface ProtocolSectionProps {
   onToggle: () => void;
   isHighlighted?: boolean;
   isReviewMode?: boolean;
+  onSaved?: (newContent: string, previousContent: string, reason: string) => Promise<void>;
+  onWontFix?: (issueId: string, comment: string) => void;
 }
 
 function ProtocolSectionComponent(
-  { section, isExpanded, onToggle, isHighlighted = false, isReviewMode = false }: ProtocolSectionProps,
+  { section, isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const [guidanceExpanded, setGuidanceExpanded] = useState(false);
   const [issuesExpanded, setIssuesExpanded] = useState(false);
+  const [warningsExpanded, setWarningsExpanded] = useState(false);
   const [rolesExpanded, setRolesExpanded] = useState(false);
   const [auditTrailOpen, setAuditTrailOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -82,17 +85,20 @@ function ProtocolSectionComponent(
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(section.content || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [changeReason, setChangeReason] = useState('');
-  
-  const isBlocked = section.id === '5' || section.id === '6';
+  const [wontFixModal, setWontFixModal] = useState<string | null>(null); // issueId or null
+  const [wontFixComment, setWontFixComment] = useState('');
+
   const isApproved = section.status === 'complete';
-  
+
   // Count open issues by severity
   const openIssues = section.issues?.filter(i => i.status === 'open') || [];
   const blockerCount = openIssues.filter(i => i.severity === 'blocker').length;
   const warningCount = openIssues.filter(i => i.severity === 'warning').length;
   const totalIssues = openIssues.length;
+  const isBlocked = blockerCount > 0;
 
   return (
     <div 
@@ -322,49 +328,6 @@ function ProtocolSectionComponent(
               </div>
             )}
 
-            {isBlocked && (() => {
-              // Get blocker issues for this section
-              const blockerIssues = openIssues.filter(i => i.severity === 'blocker');
-              
-              return (
-                <div className="border border-red-400 rounded bg-red-50">
-                  <button
-                    onClick={() => setIssuesExpanded(!issuesExpanded)}
-                    className="w-full p-4 text-left transition-colors hover:bg-red-100"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1">
-                        <div className="text-sm font-medium text-red-900">
-                          Blocked by unresolved Issue
-                        </div>
-                      </div>
-                      <ChevronDown className={`w-5 h-5 text-red-600 flex-shrink-0 transition-transform ${issuesExpanded || isReviewMode ? 'rotate-180' : ''}`} />
-                    </div>
-                  </button>
-                  {(issuesExpanded || isReviewMode) && (
-                    <div className="px-4 pb-4 space-y-2 border-t border-red-200">
-                      {blockerIssues.map((issue) => (
-                        <button
-                          key={issue.id}
-                          onClick={() => {
-                            // Scroll to the subsection containing this issue
-                            const subsectionId = issue.subsection.toLowerCase().replace(/\s+/g, '-');
-                            const element = document.getElementById(subsectionId);
-                            if (element) {
-                              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }
-                          }}
-                          className="block w-full text-left text-xs text-red-700 hover:text-red-900 hover:underline leading-relaxed transition-colors pt-3"
-                        >
-                          {issue.description}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
             {/* 4. WHAT THIS SECTION MUST INCLUDE (GUIDANCE) */}
             <div className={`border-2 rounded ${guidanceExpanded ? 'border-slate-300 bg-slate-100' : 'border-slate-200 bg-slate-50'}`}>
               <button
@@ -433,169 +396,80 @@ function ProtocolSectionComponent(
             </div>
 
             {/* ISSUES / ERRORS AREA - System Controlled, Non-Editable */}
-            {/* In AUTHORING mode: compact with expand. In REVIEW mode: always expanded */}
-            {openIssues.length > 0 && !isBlocked && (
-              isReviewMode ? (
-                <div className="space-y-3">
+            {/* In AUTHORING mode: blockers always shown, warnings collapsible. In REVIEW mode: all expanded */}
+            {openIssues.length > 0 && (
+              <div className="space-y-3">
+                {/* Header row */}
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-600" />
-                    <div className="text-sm font-medium text-slate-900">
-                      Issues requiring attention ({openIssues.length})
-                    </div>
+                    {blockerCount > 0 && (
+                      <span className="text-xs font-semibold text-red-700">{blockerCount} blocker{blockerCount > 1 ? 's' : ''}</span>
+                    )}
+                    {blockerCount > 0 && warningCount > 0 && (
+                      <span className="text-xs text-slate-400">·</span>
+                    )}
+                    {warningCount > 0 && (
+                      <span className="text-xs font-semibold text-amber-700">{warningCount} warning{warningCount > 1 ? 's' : ''}</span>
+                    )}
                   </div>
-                  
-                  {openIssues.map((issue) => (
-                    <div 
-                      key={issue.id}
-                      className={`border-l-4 rounded p-4 ${
-                        issue.severity === 'blocker' 
-                          ? 'bg-red-50 border-red-500' 
-                          : 'bg-amber-50 border-amber-500'
-                      }`}
+                  {!isReviewMode && warningCount > 0 && (
+                    <button
+                      onClick={() => setWarningsExpanded(!warningsExpanded)}
+                      className="text-xs text-blue-600 hover:text-blue-700"
                     >
-                      <div className="flex items-start gap-3">
-                        {issue.severity === 'blocker' && <Ban className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />}
-                        {issue.severity === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />}
-                        
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-xs font-medium uppercase tracking-wide ${
-                              issue.severity === 'blocker' 
-                                ? 'text-red-900' 
-                                : 'text-amber-900'
-                            }`}>
-                              {issue.severity}
-                            </span>
-                            <span className="text-xs text-slate-500">•</span>
-                            <span className="text-xs font-medium text-slate-900">{issue.subsection}</span>
-                          </div>
-                          
-                          <p className={`text-xs leading-relaxed mb-2 ${
-                            issue.severity === 'blocker' 
-                              ? 'text-red-800' 
-                              : 'text-amber-800'
-                          }`}>
-                            {issue.description}
-                          </p>
-                          
-                          {issue.reference && (
-                            <div className="text-xs text-slate-600 italic mb-2">
-                              Reference: {issue.reference}
-                            </div>
-                          )}
-                          
-                          <div className="flex items-center gap-3 text-xs text-slate-500 pt-2 border-t border-slate-200">
-                            <span>Raised by: {issue.raisedBy}</span>
-                            <span>•</span>
-                            <span>{issue.raisedDate}</span>
-                            {issue.dueDate && (
-                              <>
-                                <span>•</span>
-                                <span className="text-red-600 font-medium">Due in {issue.dueDate}</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                      {warningsExpanded ? 'Collapse warnings' : 'Show all'}
+                    </button>
+                  )}
                 </div>
-              ) : (
-                !issuesExpanded ? (
-                  <button
-                    onClick={() => setIssuesExpanded(true)}
-                    className="w-full p-3 bg-amber-50 border border-amber-200 rounded text-left hover:bg-amber-100 hover:border-amber-300 transition-colors"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 text-amber-600" strokeWidth={1.5} />
-                        <span className="text-sm text-amber-900">
-                          {openIssues.length} {openIssues.length === 1 ? 'Warning' : 'Warnings'} requiring attention
+
+                {/* Issue cards */}
+                {openIssues.map((issue) => {
+                  const isBlockerIssue = issue.severity === 'blocker';
+                  // In authoring mode: always show blockers, show warnings only if expanded or only 1 warning and 0 blockers
+                  const showCard = isReviewMode || isBlockerIssue || warningsExpanded || (warningCount === 1 && blockerCount === 0);
+                  if (!showCard) return null;
+                  return (
+                    <div
+                      key={issue.id}
+                      className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-red-50 border-red-500' : 'bg-amber-50 border-amber-500'}`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${isBlockerIssue ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
+                          {issue.severity}
                         </span>
-                        {blockerCount > 0 && (
-                          <span className="px-2 py-0.5 bg-red-100 text-red-800 text-xs rounded font-medium">
-                            {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
-                          </span>
+                        <span className="text-xs font-medium text-slate-900">{issue.subsection}</span>
+                      </div>
+                      <p className={`text-xs leading-relaxed mb-1 ${isBlockerIssue ? 'text-red-800' : 'text-amber-800'}`}>
+                        {issue.description}
+                      </p>
+                      {issue.reference && (
+                        <div className="text-xs text-slate-500 italic mb-1">{issue.reference}</div>
+                      )}
+                      <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 mt-1.5">
+                        <span className="text-xs text-slate-500">
+                          {issue.raisedBy} · {issue.raisedDate}
+                          {issue.dueDate && <span className="text-red-600 font-medium"> · Due in {issue.dueDate}</span>}
+                        </span>
+                        {onWontFix && (
+                          <button
+                            onClick={() => { setWontFixModal(issue.id); setWontFixComment(''); }}
+                            className="text-xs text-slate-400 hover:text-slate-600 transition-colors ml-2"
+                          >
+                            Won't fix
+                          </button>
                         )}
                       </div>
-                      <ChevronDown className="w-4 h-4 text-amber-600 -rotate-90" />
                     </div>
-                  </button>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 text-red-600" />
-                        <div className="text-sm font-medium text-slate-900">
-                          Issues requiring attention ({openIssues.length})
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setIssuesExpanded(false)}
-                        className="text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        Collapse
-                      </button>
-                    </div>
-                    
-                    {openIssues.map((issue) => (
-                      <div 
-                        key={issue.id}
-                        className={`border-l-4 rounded p-4 ${
-                          issue.severity === 'blocker' 
-                            ? 'bg-red-50 border-red-500' 
-                            : 'bg-amber-50 border-amber-500'
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          {issue.severity === 'blocker' && <Ban className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />}
-                          {issue.severity === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />}
-                          
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className={`text-xs font-medium uppercase tracking-wide ${
-                                issue.severity === 'blocker' 
-                                  ? 'text-red-900' 
-                                  : 'text-amber-900'
-                              }`}>
-                                {issue.severity}
-                              </span>
-                              <span className="text-xs text-slate-500">•</span>
-                              <span className="text-xs font-medium text-slate-900">{issue.subsection}</span>
-                            </div>
-                            
-                            <p className={`text-xs leading-relaxed mb-2 ${
-                              issue.severity === 'blocker' 
-                                ? 'text-red-800' 
-                                : 'text-amber-800'
-                            }`}>
-                              {issue.description}
-                            </p>
-                            
-                            {issue.reference && (
-                              <div className="text-xs text-slate-600 italic mb-2">
-                                Reference: {issue.reference}
-                              </div>
-                            )}
-                            
-                            <div className="flex items-center gap-3 text-xs text-slate-500 pt-2 border-t border-slate-200">
-                              <span>Raised by: {issue.raisedBy}</span>
-                              <span>•</span>
-                              <span>{issue.raisedDate}</span>
-                              {issue.dueDate && (
-                                <>
-                                  <span>•</span>
-                                  <span className="text-red-600 font-medium">Due in {issue.dueDate}</span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              )
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Re-analyzing banner */}
+            {isAnalyzing && (
+              <div style={{padding: '0.5rem 0.75rem', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.375rem', fontSize: '0.75rem', color: '#1d4ed8'}}>
+                Re-analyzing section for issues...
+              </div>
             )}
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
@@ -732,6 +606,9 @@ function ProtocolSectionComponent(
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
                   setIsSaving(true);
+                  const prevContent = section.content || '';
+                  const newContent = editContent;
+                  const reason = changeReason.trim();
                   try {
                     const apiBase = window.location.origin.replace('-5173.', '-3001.');
                     const parts = window.location.pathname.split('/');
@@ -739,23 +616,64 @@ function ProtocolSectionComponent(
                     await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + section.id, {
                       method: 'PATCH',
                       headers: {'Content-Type': 'application/json'},
-                      body: JSON.stringify({content: editContent, previousContent: section.content || '', reason: changeReason.trim()})
+                      body: JSON.stringify({content: newContent, previousContent: prevContent, reason})
                     });
-                    const analysis = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
-                      method: 'POST',
-                      headers: {'Content-Type': 'application/json'},
-                      body: JSON.stringify({sectionTitle: section.title, sectionContent: editContent, requiredElements: section.requiredElements || []})
-                    }).then(r => r.json());
-                    console.log('Analysis done:', analysis);
                   } catch(e) { console.error(e); }
                   setIsSaving(false);
                   setShowReasonModal(false);
                   setIsEditing(false);
-                  window.location.reload();
+                  if (onSaved) {
+                    setIsAnalyzing(true);
+                    try {
+                      await onSaved(newContent, prevContent, reason);
+                    } finally {
+                      setIsAnalyzing(false);
+                    }
+                  }
                 }}
                 style={{padding: '0.5rem 1rem', backgroundColor: changeReason.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: changeReason.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
               >
                 {isSaving ? 'Saving…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Won't Fix Modal */}
+      {wontFixModal && (
+        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
+          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
+            <h2 style={{margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Mark as Won't Fix</h2>
+            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
+              Provide a reason for suppressing this issue. This will be saved in the audit trail.
+            </p>
+            <textarea
+              autoFocus
+              value={wontFixComment}
+              onChange={(e) => setWontFixComment(e.target.value)}
+              placeholder="e.g. Risk accepted per sponsor decision, documented in risk management file"
+              style={{width: '100%', minHeight: '100px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+            />
+            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
+              <button
+                onClick={() => { setWontFixModal(null); setWontFixComment(''); }}
+                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!wontFixComment.trim()}
+                onClick={() => {
+                  if (onWontFix && wontFixModal) {
+                    onWontFix(wontFixModal, wontFixComment.trim());
+                  }
+                  setWontFixModal(null);
+                  setWontFixComment('');
+                }}
+                style={{padding: '0.5rem 1rem', backgroundColor: wontFixComment.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: wontFixComment.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
+              >
+                Confirm
               </button>
             </div>
           </div>
