@@ -1,3 +1,4 @@
+import { useNavigate, useParams } from 'react-router-dom';
 import { protocolData } from './protocol-data';
 import { SignatureModal } from './SignatureModal';
 import { useState } from 'react';
@@ -5,6 +6,8 @@ import { FileText, Info, X, ArrowRight, ChevronRight, Lock } from 'lucide-react'
 import { ClinicalInvestigationReport } from './ClinicalInvestigationReport';
 
 export function ProtocolDocument() {
+  const navigate = useNavigate();
+  const { projectId } = useParams();
   const [signatures, setSignatures] = useState<{
     investigator?: { name: string; date: string; signature: string };
     sponsor?: { name: string; date: string; signature: string };
@@ -32,7 +35,7 @@ export function ProtocolDocument() {
 
   const handleProceedToCIR = () => {
     if (signatures.investigator && signatures.sponsor) {
-      window.open('https://www.figma.com/make/xdQWchY08uD4wtq3eW5rNh/Make-report?t=WpKWI2ERXY4hhTU9-0', '_blank');
+      navigate(`/projects/${projectId}/workflow/report/make`);
     }
   };
 

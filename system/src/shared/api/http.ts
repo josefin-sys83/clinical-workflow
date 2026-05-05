@@ -19,20 +19,11 @@ async function parseJsonSafe(res: Response) {
   }
 }
 
-function getToken(): string | null {
-  return localStorage.getItem('clinical_system_token');
-}
-
-const API_BASE = window.location.origin.replace('-5173.', '-3001.');
-
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = typeof FormData !== 'undefined' && init?.body instanceof FormData;
-  const token = getToken();
-  const url = `${API_BASE}${path.startsWith('/api') ? path : `/api${path}`}`;
-  const res = await fetch(url, {
+  const res = await fetch(path.startsWith('/api') ? path : `/api${path}`, {
     headers: {
       ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
     ...init,

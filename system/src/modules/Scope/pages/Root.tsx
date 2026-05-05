@@ -236,8 +236,6 @@ export function Root() {
         <ProjectProcessStepper 
           currentStepId={currentStepId} 
           onStepClick={handleProcessStepClick}
-          auditEntries={getAuditEntries()}
-          auditTitle="Audit log"
         />
         
         {/* Main content */}

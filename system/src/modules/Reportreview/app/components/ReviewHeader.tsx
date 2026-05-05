@@ -41,13 +41,7 @@ export function ReviewHeader({
         <div className="flex-1 flex items-center justify-end gap-3">
           {projectRoles && <ProjectRoles roles={projectRoles} />}
           
-          <button
-            onClick={onViewAuditTrail}
-            className="flex items-center gap-2 text-sm text-neutral-700 hover:text-neutral-900 transition-colors"
-          >
-            <History className="h-4 w-4" />
-            Audit Log
-          </button>
+          
         </div>
       </div>
     </header>

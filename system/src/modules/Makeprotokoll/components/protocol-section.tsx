@@ -78,6 +78,9 @@ function ProtocolSectionComponent(
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [showAmendmentWarning, setShowAmendmentWarning] = useState(false);
   const [completenessExpanded, setCompletenessExpanded] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(section.content || '');
+  const [isSaving, setIsSaving] = useState(false);
   
   const isBlocked = section.id === '5' || section.id === '6';
   const isApproved = section.status === 'complete';
@@ -217,7 +220,7 @@ function ProtocolSectionComponent(
                 </div>
                 <div>
                   <span className="text-slate-500">Last Updated:</span>
-                  <span className="ml-2 text-slate-900">{section.updated}</span>
+                  <span className="ml-2 text-slate-900">{section.updated ? new Date(section.updated).toLocaleString("sv-SE", {year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) : ""}</span>
                 </div>
               </div>
               <div className="mt-3 pt-3 border-t border-slate-200">
@@ -594,7 +597,95 @@ function ProtocolSectionComponent(
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
-              {getSectionContent(section.id, section.aiGenerated, section.issues || [])}
+              {section.content ? (() => {
+                if (isEditing) return (
+                  <div>
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      style={{width: '100%', minHeight: '300px', fontSize: '0.9rem', lineHeight: '1.7', padding: '0.75rem', border: '2px solid #3b82f6', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit'}}
+                    />
+                    <div style={{display: 'flex', gap: '0.5rem', marginTop: '0.5rem'}}>
+                      <button
+                        onClick={async () => {
+                          setIsSaving(true);
+                          try {
+                            const apiBase = window.location.origin.replace('-5173.', '-3001.');
+                            const parts = window.location.pathname.split('/');
+                            const projectId = parts[2];
+                            await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + section.id, {
+                              method: 'PATCH',
+                              headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify({content: editContent, previousContent: section.content || ''})
+                            });
+                            // Trigger re-analysis
+                            await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
+                              method: 'POST',
+                              headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify({sectionTitle: section.title, sectionContent: editContent, requiredElements: section.requiredElements || []})
+                            });
+                            // Trigger re-analysis
+                            const analysis = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
+                              method: 'POST',
+                              headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify({sectionTitle: section.title, sectionContent: editContent, requiredElements: section.requiredElements || []})
+                            }).then(r => r.json());
+                            console.log('Analysis done:', analysis);
+                          } catch(e) { console.error(e); }
+                          setIsSaving(false);
+                          setIsEditing(false);
+                          window.location.reload();
+                        }}
+                        style={{padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => { setIsEditing(false); setEditContent(section.content || ''); }}
+                        style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                );
+                const issues = section.issues || [];
+                const quotes = issues.filter((iss) => iss.textQuote);
+                const displayContent = editContent || section.content;
+                if (quotes.length === 0) return (
+                  <div>
+                    <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
+                      <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>✏️ Edit</button>
+                    </div>
+                    <div style={{whiteSpace: 'pre-wrap', lineHeight: '1.7', fontSize: '0.9rem'}}>{displayContent}</div>
+                  </div>
+                );
+                const editBtn = React.createElement('div', {style: {display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}},
+                  React.createElement('button', {onClick: () => { setEditContent(section.content || ''); setIsEditing(true); }, style: {padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}, 'Edit')
+                );
+                let parts = [editBtn];
+                let remaining = section.content;
+                quotes.forEach((iss) => {
+                  const idx = remaining.indexOf(iss.textQuote);
+                  if (idx === -1) return;
+                  if (idx > 0) parts.push(remaining.slice(0, idx));
+                  parts.push(React.createElement('span', {
+                    key: iss.id,
+                    id: 'quote-' + iss.id,
+                    style: {
+                      backgroundColor: iss.severity === 'blocker' ? '#fee2e2' : '#fef9c3',
+                      borderBottom: iss.severity === 'blocker' ? '2px solid #ef4444' : '2px solid #f59e0b',
+                      cursor: 'pointer',
+                      borderRadius: '2px',
+                      padding: '0 2px'
+                    },
+                    title: iss.description
+                  }, iss.textQuote));
+                  remaining = remaining.slice(idx + iss.textQuote.length);
+                });
+                if (remaining) parts.push(remaining);
+                return React.createElement('div', {style: {whiteSpace: 'pre-wrap', lineHeight: '1.7', fontSize: '0.9rem'}}, ...parts);
+              })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
             </ProtocolTextSeparator>
 
             {/* 7. SECTION ACTIONS */}

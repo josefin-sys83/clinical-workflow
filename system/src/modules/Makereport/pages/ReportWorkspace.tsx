@@ -676,16 +676,6 @@ export function ReportWorkspace() {
                 );
               })}
             </div>
-
-            {/* Audit Log Button */}
-            <button
-              onClick={() => setShowAuditLog(true)}
-              className="ml-auto flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors"
-              style={{ fontSize: '14px', fontFamily: 'system-ui, sans-serif', fontWeight: 500 }}
-            >
-              <Clock className="w-4 h-4" />
-              Audit Log
-            </button>
           </div>
         </div>
 
@@ -750,39 +740,6 @@ export function ReportWorkspace() {
           />
         </div>
       </div>
-
-      {/* Audit Log Modal */}
-      <AuditLogModal
-        isOpen={showAuditLog}
-        onClose={() => setShowAuditLog(false)}
-        auditLog={auditLog}
-        sections={sections}
-      />
-
-      {/* Deviations Modal */}
-      <DeviationsModal
-        isOpen={showDeviations}
-        onClose={() => setShowDeviations(false)}
-        deviations={deviations}
-        currentUser={currentUser}
-        onReviewDeviation={handleReviewDeviation}
-      />
-
-      {/* Protocol Amendment Modal */}
-      <ProtocolAmendmentModal
-        isOpen={showAmendmentModal}
-        onClose={() => setShowAmendmentModal(false)}
-        currentUser={currentUser}
-        onSubmit={handleCreateAmendment}
-        existingAmendments={amendments}
-      />
-
-      {/* Protocol Amendments List */}
-      <ProtocolAmendmentsList
-        isOpen={showAmendmentsList}
-        onClose={() => setShowAmendmentsList(false)}
-        amendments={amendments}
-      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle } from 'lucide-react';
 import { ProtocolSection } from './components/protocol-section';
 import { ExportReadinessIndicator } from './components/export-readiness-indicator';
@@ -7,7 +8,7 @@ import { ReviewModeIndicator } from './components/review-mode-indicator';
 import { ReviewModeConfirmation } from './components/review-mode-confirmation';
 import { IssueFilterControl } from './components/issue-filter-control';
 import { WorkflowProgressIndicator } from './components/workflow-progress-indicator';
-import { AuditLogPanel } from './components/audit-log-panel';
+
 
 export default function App() {
   const [expandedSections, setExpandedSections] = useState<string[]>(['1', '6']);
@@ -21,8 +22,80 @@ export default function App() {
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mainContentRef = useRef<HTMLDivElement | null>(null);
 
+  const { projectId } = useParams();
+  const [projectData, setProjectData] = React.useState<any>(null);
+  const [roles, setRoles] = React.useState<any[]>([]);
+  const [protocol, setProtocol] = React.useState<any>(null);
+  const [generatingProtocol, setGeneratingProtocol] = React.useState(false);
+  const apiBase = window.location.origin.replace('-5173.', '-3001.');
+
+  React.useEffect(() => {
+    if (!projectId) return;
+    fetch(apiBase + '/api/projects/' + projectId)
+      .then(r => r.json())
+      .then(p => {
+        if (p.data && p.data.projectData) setProjectData(p.data.projectData);
+        if (p.data && p.data.roles) setRoles(p.data.roles);
+        if (p.data && p.data.protocol) {
+          setProtocol(p.data.protocol);
+          p.data.protocol.sections?.forEach((s) => { if (s.content && (!s.issues || s.issues.length === 0)) analyzeSectionWithAI(s.title, s.content, s.id); });
+        } else {
+          setGeneratingProtocol(true);
+          fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol', { method: 'POST' })
+            .then(r => r.json())
+            .then(result => {
+              if (result) {
+                setProtocol(result);
+                fetch(apiBase + '/api/projects/' + projectId, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ data: { protocol: result } })
+                });
+                result.sections?.forEach((s: any) => {
+                  if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
+                });
+              }
+            })
+            .catch(() => {})
+            .finally(() => setGeneratingProtocol(false));
+        }
+      })
+      .catch(() => {});
+  }, [projectId]);
+
   // Current user context
+  const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string) => {
+    try {
+      const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionTitle, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
+      });
+      const result = await res.json();
+      const issuesArr = result.issues || (Array.isArray(result) ? result : []);
+      const elements = result.requiredElements || [];
+      if (issuesArr.length > 0 || elements.length > 0) {
+        setProtocol((prev: any) => {
+          const updatedSections = prev.sections.map((s: any) =>
+            s.id === sectionId ? { ...s, issues: issuesArr, requiredElements: elements.length > 0 ? elements : s.requiredElements } : s
+          );
+          const updated = { ...prev, sections: updatedSections };
+          fetch(apiBase + '/api/projects/' + projectId, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: { protocol: updated } })
+          });
+          return updated;
+        });
+      }
+    } catch (e) {
+      console.error('Section analysis failed', e);
+    }
+  };
+
   const currentUser = 'Dr. Marcus Rivera';
+
+  
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections(prev => 
@@ -57,7 +130,26 @@ export default function App() {
     }, 100);
   };
 
-  const protocolSections = [
+  const protocolSections = protocol?.sections?.map((s: any, idx: number) => ({
+    id: s.id || String(idx + 1),
+    number: s.id || String(idx + 1),
+    title: s.title || '',
+    status: s.status || 'draft',
+    owner: roles.find((r: any) => r.title === 'Protocol Lead')?.assignedTo?.[0]?.name || '',
+    updated: s.updatedAt || '',
+    comments: 0,
+    aiGenerated: true,
+    reviewStatus: null,
+    locked: false,
+    reviewCycle: 0,
+    reviewer: roles.find((r: any) => r.title === 'Medical Writer')?.assignedTo?.[0]?.name || '',
+    approver: roles.find((r: any) => r.title === 'Regulatory Affairs')?.assignedTo?.[0]?.name || '',
+    approverRole: '',
+    ownerRole: 'Principal Investigator',
+    issues: s.issues || [],
+    requiredElements: s.requiredElements || [],
+    content: s.content || '',
+  })) || [
     { 
       id: '1', 
       number: '1', 
@@ -479,8 +571,7 @@ export default function App() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Workflow Progress Indicator */}
           <WorkflowProgressIndicator 
-            currentStep="protocol-authoring" 
-            onAuditLogClick={() => setShowAuditLog(true)}
+            currentStep="protocol-authoring"
           />
 
           <div className="flex-1 flex overflow-hidden">
@@ -523,8 +614,8 @@ export default function App() {
                 {/* Project ID Header */}
                 <div className="mb-6 pb-4 border-b border-slate-200">
                   <div className="text-xs text-slate-500 mb-1">Clinical Investigation Protocol</div>
-                  <div className="text-lg font-semibold text-slate-900">CIP-2024-MED-0847</div>
-                  <div className="text-sm text-slate-600 mt-1">CARDIA-SUPPORT-2026 | Implantable Cardiac Support Device</div>
+                  {projectId && <div className="text-lg font-semibold text-slate-900">{projectId}</div>}
+                  <div className="text-sm text-slate-600 mt-1">{projectData ? (projectData.projectName + " | " + projectData.deviceName) : ""}</div>
                 </div>
 
                 <div className="mb-6">
@@ -532,9 +623,9 @@ export default function App() {
                   <p className="text-sm text-slate-600 mb-3">Review, edit, and approve each section according to your role and responsibilities</p>
                   
                   {/* AI Disclaimer */}
-                  <div className="flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded">
-                    <Info className="w-3.5 h-3.5 text-blue-600 flex-shrink-0 mt-0.5" />
-                    <span className="text-xs text-blue-700">
+                  <div className="flex items-start gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded">
+                    <Info className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0 mt-0.5" />
+                    <span className="text-xs text-indigo-700">
                       This system continuously uses AI to analyze content for completeness, consistency, and regulatory alignment. 
                       All decisions, approvals, and final responsibility remain with assigned human roles.
                     </span>
@@ -728,12 +819,6 @@ export default function App() {
         blockerCount={totalBlockers}
         warningCount={totalWarnings}
         incompleteSections={incompleteSections}
-      />
-
-      {/* Audit Log Panel */}
-      <AuditLogPanel
-        isOpen={showAuditLog}
-        onClose={() => setShowAuditLog(false)}
       />
     </div>
   );

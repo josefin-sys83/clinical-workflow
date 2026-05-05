@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useNavigate, useParams } from 'react-router-dom';
+import { useState, useEffect } from "react";
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -227,14 +228,90 @@ interface Role {
 }
 
 export function Gate1() {
+  const navigate = useNavigate();
+  const { projectId } = useParams();
   // Section 1: Scope & Device Type
   const [deviceCategory, setDeviceCategory] = useState<string>("implantable");
   const [intendedUse, setIntendedUse] = useState<string>("cardiovascular-support");
   const [customIntendedUse, setCustomIntendedUse] = useState<string>("");
-  const [scopeConfirmed, setScopeConfirmed] = useState(false);
+  const apiBase = window.location.origin.replace('-5173.', '-3001.');
 
-  // Section 2: Requirements
-  const [requirements, setRequirements] = useState<Requirement[]>([
+  const [scopeConfirmed, setScopeConfirmed] = useState(false);
+  const [requirements, setRequirements] = useState<Requirement[]>([]);
+
+  const [generatingRequirements, setGeneratingRequirements] = useState(false);
+
+  const handleConfirmScope = async () => {
+    const newConfirmed = !scopeConfirmed;
+    setScopeConfirmed(newConfirmed);
+    if (newConfirmed) {
+      setGeneratingRequirements(true);
+      try {
+        const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
+        const targetMarkets = project.data?.projectData?.targetMarkets?.join(', ') || '';
+        const synopsisText = project.data?.synopsis?.uploadedFileName ? 'Synopsis uploaded: ' + project.data.synopsis.uploadedFileName : '';
+        const prompt = `You are a MedTech regulatory expert. Based on the following study information, suggest 6-8 specific regulatory requirements.
+
+Device Category: ${deviceCategory}
+Intended Use: ${intendedUse}
+Target Markets: ${targetMarkets}
+${synopsisText}
+
+Return ONLY a JSON array with objects having these exact fields:
+[{"id": "req-1", "title": "Requirement title", "description": "Detailed description", "status": "suggested"}]
+No markdown, no explanation, just the JSON array.`;
+
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt })
+        });
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) setRequirements(data);
+      } catch (e) {
+        console.error('Failed to generate requirements', e);
+      } finally {
+        setGeneratingRequirements(false);
+      }
+    }
+  };
+
+  // Ladda scope-data från backend
+  useEffect(() => {
+    fetch(`${apiBase}/api/projects/${projectId}`)
+      .then(r => r.json())
+      .then(project => {
+        if (project.data?.scope) {
+          const s = project.data.scope;
+          if (s.deviceCategory) setDeviceCategory(s.deviceCategory);
+          if (s.intendedUse) setIntendedUse(s.intendedUse);
+          if (s.customIntendedUse) setCustomIntendedUse(s.customIntendedUse);
+          if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
+          if (s.requirements) setRequirements(s.requirements);
+        }
+      })
+      .catch(() => {});
+  }, [projectId]);
+
+  // Spara scope-data till backend automatiskt
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetch(`${apiBase}/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: {
+            scope: { deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements }
+          }
+        })
+      }).catch(() => {});
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements]);
+
+  // Section 2: Requirements (default values loaded from backend or set below)
+  // requirements useState moved above
+  const [requirementsDefaults] = useState<Requirement[]>([
     {
       id: "req-1",
       title: "ISO 14155 Clinical Investigation Compliance",
@@ -439,11 +516,32 @@ export function Gate1() {
 
   const handleConfirmGate = () => {
     // Open Gate 2 in new window
-    window.open('https://www.figma.com/make/s5kssN1vIwHnwhYjG6CDqU/Make-protokoll?t=Z9GvvGQimeZ6tTL8-0', '_blank');
+    navigate(`/projects/${projectId}/workflow/protocol/make`);
   };
 
+  const maxStep = parseInt(localStorage.getItem('maxStep_' + projectId) || '0');
+  const innerSteps = [
+    { label: 'Setup', path: '/projects/' + projectId + '/workflow/project-setup', status: 'completed' },
+    { label: 'Synopsis', path: '/projects/' + projectId + '/workflow/synopsis', status: 'completed' },
+    { label: 'Scope & Intended Use', path: '/projects/' + projectId + '/workflow/scope', status: 'active' },
+  ];
+
   return (
-    <div className="flex-1 overflow-auto">
+    <div className="flex min-h-screen">
+      <aside className="w-64 bg-white border-r border-slate-200 flex-shrink-0">
+        <div className="p-4">
+          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Project setup</div>
+          <div className="space-y-1">
+            {innerSteps.map((step, i) => (
+              <div key={i} onClick={() => step.status !== 'locked' && navigate(step.path)} className={"flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors " + (step.status === 'active' ? 'bg-blue-50 border border-blue-200 font-medium text-blue-900' : 'text-slate-700 hover:bg-slate-50 cursor-pointer')}>
+                {step.status === 'completed' ? <CheckCircle2 className="w-4 h-4 text-blue-600 flex-shrink-0" /> : step.status === 'active' ? <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0"><span className="text-white text-xs">{i+1}</span></div> : <Lock className="w-4 h-4 text-slate-300 flex-shrink-0" />}
+                {step.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      </aside>
+      <div className="flex-1 overflow-auto">
       <div className="max-w-5xl mx-auto p-8">
         <div className="space-y-6">
           {/* Section 1: Study Scope & Device Type */}
@@ -623,7 +721,7 @@ export function Gate1() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setScopeConfirmed(!scopeConfirmed)}
+                  onClick={handleConfirmScope}
                   className={
                     scopeConfirmed
                       ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
@@ -1057,6 +1155,7 @@ export function Gate1() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CheckCircle2, Circle, Lock, FileText, Target } from 'lucide-react';
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate } from 'react-router-dom';
-import { AuditTrail, AuditEntry } from './AuditTrail';
+
 
 interface WorkflowStep {
   id: string;
@@ -113,7 +113,7 @@ export function ScopeAndIntendedUsePage() {
           <div className="max-w-7xl mx-auto px-6 py-3">
             <div className="flex items-center justify-between">
               <WorkflowBreadcrumb currentStep="project-setup" />
-              <AuditTrail entries={auditEntries} pageTitle="Scope & Intended Use" />
+              
             </div>
           </div>
         </header>

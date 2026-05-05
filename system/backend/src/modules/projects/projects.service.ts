@@ -7,6 +7,7 @@ export type Project = {
   name: string;
   description?: string | null;
   status: 'active' | 'completed';
+  data?: any;
   createdAt: string;
   updatedAt: string;
 };
@@ -15,7 +16,7 @@ export type Project = {
 export class ProjectsService {
   async list(): Promise<Project[]> {
     const { rows } = await getPool().query(
-      `select id, name, description, status, created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
        from projects order by created_at desc`,
     );
     return rows;
@@ -23,7 +24,7 @@ export class ProjectsService {
 
   async listCompleted(): Promise<Project[]> {
     const { rows } = await getPool().query(
-      `select id, name, description, status, created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
        from projects where status='completed' order by created_at desc`,
     );
     return rows;
@@ -31,7 +32,7 @@ export class ProjectsService {
 
   async get(id: string): Promise<Project> {
     const { rows } = await getPool().query(
-      `select id, name, description, status, created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
        from projects where id=$1`,
       [id],
     );
@@ -67,12 +68,61 @@ export class ProjectsService {
     return this.get(id);
   }
 
-  async update(id: string, data: { name?: string; description?: string }): Promise<Project> {
+  async update(id: string, patch: { name?: string; description?: string; data?: any }): Promise<Project> {
     const now = new Date().toISOString();
-    await getPool().query(
-      `update projects set name=coalesce($2,name), description=coalesce($3,description), updated_at=$4 where id=$1`,
-      [id, data.name ?? null, data.description ?? null, now],
-    );
+
+    // If data is provided, merge with existing data instead of overwriting
+    if (patch.data) {
+      const existing = await this.get(id);
+      const mergedData = { ...(existing.data || {}), ...patch.data };
+      await getPool().query(
+        `update projects set 
+          name=coalesce($2,name), 
+          description=coalesce($3,description),
+          data=$4,
+          updated_at=$5 
+         where id=$1`,
+        [id, patch.name ?? null, patch.description ?? null, JSON.stringify(mergedData), now],
+      );
+    } else {
+      await getPool().query(
+        `update projects set 
+          name=coalesce($2,name), 
+          description=coalesce($3,description),
+          updated_at=$4 
+         where id=$1`,
+        [id, patch.name ?? null, patch.description ?? null, now],
+      );
+    }
     return this.get(id);
+  }
+
+  async saveSynopsisFile(projectId: string, fileName: string, bytes: Buffer, mimeType: string): Promise<void> {
+    const now = new Date().toISOString();
+    const existing = await this.get(projectId);
+    const mergedData = {
+      ...(existing.data || {}),
+      synopsisFile: {
+        fileName,
+        mimeType,
+        bytes: bytes.toString('base64'),
+        uploadedAt: now,
+      },
+    };
+    await getPool().query(
+      `update projects set data=$2, updated_at=$3 where id=$1`,
+      [projectId, JSON.stringify(mergedData), now],
+    );
+  }
+
+  async getSynopsisFile(projectId: string): Promise<{ fileName: string; mimeType: string; bytes: Buffer }> {
+    const project = await this.get(projectId);
+    const file = project.data?.synopsisFile;
+    if (!file) throw new NotFoundException('No synopsis file found');
+    return {
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      bytes: Buffer.from(file.bytes, 'base64'),
+    };
   }
 }

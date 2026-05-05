@@ -11,7 +11,6 @@ type WorkflowStep =
 
 interface WorkflowProgressIndicatorProps {
   currentStep: WorkflowStep;
-  onAuditLogClick: () => void;
 }
 
 const WORKFLOW_STEPS: { id: WorkflowStep; label: string }[] = [
@@ -26,14 +25,6 @@ const WORKFLOW_STEPS: { id: WorkflowStep; label: string }[] = [
 
 export function WorkflowProgressIndicator({
   currentStep,
-  onAuditLogClick,
-}: WorkflowProgressIndicatorProps) {
-  return (
-    <div className="bg-white border-b border-slate-200 px-6 py-3 flex items-center relative">
-      {/* Workflow Steps - Centered to page */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2">
-        {WORKFLOW_STEPS.map((step, index) => {
-          const isActive = step.id === currentStep;
           const isLast = index === WORKFLOW_STEPS.length - 1;
 
           return (
@@ -62,15 +53,7 @@ export function WorkflowProgressIndicator({
         })}
       </div>
 
-      {/* Audit Log Button */}
-      <button
-        onClick={onAuditLogClick}
-        className="ml-auto flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors"
-        style={{ fontSize: '14px', fontFamily: 'system-ui, sans-serif', fontWeight: 500 }}
-      >
-        <Clock className="w-4 h-4" />
-        Audit Log
-      </button>
+
     </div>
   );
 }

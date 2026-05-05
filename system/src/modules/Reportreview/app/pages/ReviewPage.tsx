@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ReviewHeader } from '../components/ReviewHeader';
 import { SectionOverview } from '../components/SectionOverview';
 import { ReportContent } from '../components/ReportContent';
@@ -17,6 +17,7 @@ import {
 
 export default function ReviewPage() {
   const navigate = useNavigate();
+  const { projectId } = useParams<{ projectId: string }>();
   const [activeSection, setActiveSection] = useState(reportSections[0].id);
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [aiFindings, setAIFindings] = useState(initialAIFindings);
@@ -87,7 +88,7 @@ export default function ReviewPage() {
     setAuditEntries((prev) => [auditEntry, ...prev]);
     
     // Open approved report in new window
-    window.open('https://www.figma.com/make/C0L1anJsklL9XtiiPUfTR9/PDF-Report--Copy-?p=f&t=igYiFc8tCbdnke2X-0', '_blank');
+    navigate(`/projects/${projectId}/workflow/report/pdf`);
   };
 
   const handleRequestChanges = () => {

@@ -3,10 +3,9 @@ import { History } from 'lucide-react';
 
 interface WorkflowProgressIndicatorProps {
   currentStep: 'project-setup' | 'protocol-authoring' | 'protocol-review' | 'protocol-approval' | 'report-authoring' | 'report-review' | 'report-approval';
-  onAuditLogClick?: () => void;
 }
 
-export function WorkflowProgressIndicator({ currentStep, onAuditLogClick }: WorkflowProgressIndicatorProps) {
+export function WorkflowProgressIndicator({ currentStep}: WorkflowProgressIndicatorProps) {
   const steps = [
     { id: 'project-setup', label: 'Project setup' },
     { id: 'protocol-authoring', label: 'Protocol authoring' },
@@ -41,14 +40,7 @@ export function WorkflowProgressIndicator({ currentStep, onAuditLogClick }: Work
         </div>
       </div>
       
-      {/* Audit log link - absolute positioned top right */}
-      <button 
-        onClick={onAuditLogClick}
-        className="absolute top-1/2 -translate-y-1/2 right-6 text-slate-600 hover:text-slate-900 flex items-center gap-1.5 text-[13px] transition-colors"
-      >
-        <History className="w-3.5 h-3.5" />
-        <span>Audit log</span>
-      </button>
+
     </div>
   );
 }

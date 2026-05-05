@@ -7,6 +7,7 @@ import { WorkflowModule } from './modules/workflow/workflow.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { MeModule } from './modules/me/me.module';
 import { DocumentsModule } from './modules/documents/documents.module';
+import { AiModule } from './modules/ai/ai.module';
 
 @Module({
   imports: [
@@ -16,7 +17,8 @@ import { DocumentsModule } from './modules/documents/documents.module';
     AuditModule,
     DocumentsModule,
     MeModule,
-    AuthModule
+    AuthModule,
+    AiModule,
   ],
   controllers: [HealthController],
 })
