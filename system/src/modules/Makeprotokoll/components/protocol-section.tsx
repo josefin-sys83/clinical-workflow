@@ -134,23 +134,26 @@ function ProtocolSectionComponent(
                   Draft
                 </span>
               )}
-              {isBlocked && blockerCount > 0 && (
-                <span className="text-xs text-slate-600">
-                  Approval blocked by
-                </span>
-              )}
-              {/* Issue Count Indicator */}
+              {/* Issue Count Badges - clickable, expand issues list */}
               {totalIssues > 0 && (
                 <>
                   {blockerCount > 0 && (
-                    <span className="px-2 py-0.5 bg-red-100 text-red-800 text-xs rounded border border-red-300">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); if (!isExpanded) onToggle(); setWarningsExpanded(true); }}
+                      className="px-2 py-0.5 bg-red-100 text-red-800 text-xs rounded border border-red-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer"
+                      title="Click to view blockers"
+                    >
                       {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
-                    </span>
+                    </button>
                   )}
                   {warningCount > 0 && (
-                    <span className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded border border-amber-200">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); if (!isExpanded) onToggle(); setWarningsExpanded(true); }}
+                      className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded border border-amber-200 hover:bg-amber-100 hover:border-amber-300 transition-colors cursor-pointer"
+                      title="Click to view warnings"
+                    >
                       {warningCount} Warning{warningCount > 1 ? 's' : ''}
-                    </span>
+                    </button>
                   )}
                 </>
               )}
@@ -398,29 +401,39 @@ function ProtocolSectionComponent(
             {/* ISSUES / ERRORS AREA - System Controlled, Non-Editable */}
             {/* In AUTHORING mode: blockers always shown, warnings collapsible. In REVIEW mode: all expanded */}
             {openIssues.length > 0 && (
-              <div className="space-y-3">
-                {/* Header row */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+              <div className="space-y-2">
+                {/* Issues toggle row — subtle, full-width clickable */}
+                <button
+                  onClick={() => !isReviewMode && setWarningsExpanded(v => !v)}
+                  className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded border transition-colors text-left ${
+                    isReviewMode
+                      ? 'border-slate-200 cursor-default'
+                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 cursor-pointer'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
                     {blockerCount > 0 && (
-                      <span className="text-xs font-semibold text-red-700">{blockerCount} blocker{blockerCount > 1 ? 's' : ''}</span>
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-red-700">
+                        <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                        {blockerCount} blocker{blockerCount > 1 ? 's' : ''}
+                      </span>
                     )}
                     {blockerCount > 0 && warningCount > 0 && (
-                      <span className="text-xs text-slate-400">·</span>
+                      <span className="text-slate-300 text-xs select-none">·</span>
                     )}
                     {warningCount > 0 && (
-                      <span className="text-xs font-semibold text-amber-700">{warningCount} warning{warningCount > 1 ? 's' : ''}</span>
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
+                        {warningCount} warning{warningCount > 1 ? 's' : ''}
+                      </span>
                     )}
                   </div>
                   {!isReviewMode && warningCount > 0 && (
-                    <button
-                      onClick={() => setWarningsExpanded(!warningsExpanded)}
-                      className="text-xs text-blue-600 hover:text-blue-700"
-                    >
-                      {warningsExpanded ? 'Collapse warnings' : 'Show all'}
-                    </button>
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform ${warningsExpanded ? '' : '-rotate-90'}`}
+                    />
                   )}
-                </div>
+                </button>
 
                 {/* Issue cards */}
                 {openIssues.map((issue) => {
