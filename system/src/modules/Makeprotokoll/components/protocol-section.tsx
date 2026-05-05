@@ -60,6 +60,7 @@ interface ProtocolSectionProps {
     ownerRole?: string;
     issues?: ProtocolIssue[];
     requiredElements?: RequiredElement[];
+    content?: string;
   };
   isExpanded: boolean;
   onToggle: () => void;
@@ -81,6 +82,8 @@ function ProtocolSectionComponent(
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(section.content || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [showReasonModal, setShowReasonModal] = useState(false);
+  const [changeReason, setChangeReason] = useState('');
   
   const isBlocked = section.id === '5' || section.id === '6';
   const isApproved = section.status === 'complete';
@@ -607,35 +610,7 @@ function ProtocolSectionComponent(
                     />
                     <div style={{display: 'flex', gap: '0.5rem', marginTop: '0.5rem'}}>
                       <button
-                        onClick={async () => {
-                          setIsSaving(true);
-                          try {
-                            const apiBase = window.location.origin.replace('-5173.', '-3001.');
-                            const parts = window.location.pathname.split('/');
-                            const projectId = parts[2];
-                            await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + section.id, {
-                              method: 'PATCH',
-                              headers: {'Content-Type': 'application/json'},
-                              body: JSON.stringify({content: editContent, previousContent: section.content || ''})
-                            });
-                            // Trigger re-analysis
-                            await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
-                              method: 'POST',
-                              headers: {'Content-Type': 'application/json'},
-                              body: JSON.stringify({sectionTitle: section.title, sectionContent: editContent, requiredElements: section.requiredElements || []})
-                            });
-                            // Trigger re-analysis
-                            const analysis = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
-                              method: 'POST',
-                              headers: {'Content-Type': 'application/json'},
-                              body: JSON.stringify({sectionTitle: section.title, sectionContent: editContent, requiredElements: section.requiredElements || []})
-                            }).then(r => r.json());
-                            console.log('Analysis done:', analysis);
-                          } catch(e) { console.error(e); }
-                          setIsSaving(false);
-                          setIsEditing(false);
-                          window.location.reload();
-                        }}
+                        onClick={() => { setChangeReason(''); setShowReasonModal(true); }}
                         style={{padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
                       >
                         Save
@@ -731,6 +706,62 @@ function ProtocolSectionComponent(
         )}
       </div>
       
+      {/* Reason for Change Modal */}
+      {showReasonModal && (
+        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
+          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
+            <h2 style={{margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Reason for change</h2>
+            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
+              Describe why this section is being changed. This will be saved in the audit trail.
+            </p>
+            <textarea
+              autoFocus
+              value={changeReason}
+              onChange={(e) => setChangeReason(e.target.value)}
+              placeholder="e.g. Updated inclusion criteria based on updated regulatory guidance"
+              style={{width: '100%', minHeight: '100px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+            />
+            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
+              <button
+                onClick={() => setShowReasonModal(false)}
+                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!changeReason.trim() || isSaving}
+                onClick={async () => {
+                  setIsSaving(true);
+                  try {
+                    const apiBase = window.location.origin.replace('-5173.', '-3001.');
+                    const parts = window.location.pathname.split('/');
+                    const projectId = parts[2];
+                    await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + section.id, {
+                      method: 'PATCH',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({content: editContent, previousContent: section.content || '', reason: changeReason.trim()})
+                    });
+                    const analysis = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({sectionTitle: section.title, sectionContent: editContent, requiredElements: section.requiredElements || []})
+                    }).then(r => r.json());
+                    console.log('Analysis done:', analysis);
+                  } catch(e) { console.error(e); }
+                  setIsSaving(false);
+                  setShowReasonModal(false);
+                  setIsEditing(false);
+                  window.location.reload();
+                }}
+                style={{padding: '0.5rem 1rem', backgroundColor: changeReason.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: changeReason.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
+              >
+                {isSaving ? 'Saving…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Audit Trail Modal */}
       <AuditTrailModal
         isOpen={auditTrailOpen}

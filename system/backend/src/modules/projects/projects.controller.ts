@@ -68,7 +68,7 @@ export class ProjectsController {
   async updateSection(
     @Param('projectId') projectId: string,
     @Param('sectionId') sectionId: string,
-    @Body() body: { content: string; userId?: string; userName?: string; previousContent?: string }
+    @Body() body: { content: string; userId?: string; userName?: string; previousContent?: string; reason?: string }
   ) {
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol;
@@ -88,7 +88,7 @@ export class ProjectsController {
       message: `Section "${section?.title || sectionId}" content updated`,
       stepId: 'protocol-make',
       actorUserId: body.userId || 'unknown',
-      metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, updatedAt: now, editedBy: body.userName || 'Unknown user', previousContent: (body.previousContent || '').substring(0, 500), newContent: body.content.substring(0, 500) })
+      metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, updatedAt: now, editedBy: body.userName || 'Unknown user', reason: body.reason || '', previousContent: (body.previousContent || '').substring(0, 500), newContent: body.content.substring(0, 500) })
     });
 
     return { ok: true, updatedAt: now };
