@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useLocation, Link } from 'react-router-dom';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle } from 'lucide-react';
+import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
+import type { DocumentLifecycleState } from '@/shared/workflow/types';
 import { ProtocolSection } from './components/protocol-section';
 import { ExportReadinessIndicator } from './components/export-readiness-indicator';
 import { ReviewModeEntry } from './components/review-mode-entry';
@@ -8,6 +10,7 @@ import { ReviewModeIndicator } from './components/review-mode-indicator';
 import { ReviewModeConfirmation } from './components/review-mode-confirmation';
 import { IssueFilterControl } from './components/issue-filter-control';
 import { WorkflowProgressIndicator } from './components/workflow-progress-indicator';
+
 
 
 export default function App() {
@@ -23,6 +26,9 @@ export default function App() {
   const mainContentRef = useRef<HTMLDivElement | null>(null);
 
   const { projectId } = useParams();
+  const location = useLocation();
+  const { snapshot } = useWorkflowSnapshot({ projectId });
+
   const [projectData, setProjectData] = React.useState<any>(null);
   const [roles, setRoles] = React.useState<any[]>([]);
   const [protocol, setProtocol] = React.useState<any>(null);
@@ -129,6 +135,95 @@ export default function App() {
     }
   };
 
+  const handleAddComment = async (sectionId: string, content: string, type: string) => {
+    const newComment = {
+      id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      author: currentUser,
+      authorRole: roles.find((r: any) => r.assignedTo?.some((a: any) => a.name === currentUser))?.title || 'Team Member',
+      timestamp: new Date().toLocaleString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+      content,
+      type: type as 'general' | 'issue' | 'approval-request',
+      status: 'open' as const,
+    };
+    setProtocol((prev: any) => {
+      if (!prev) return prev;
+      const updatedSections = prev.sections.map((s: any) =>
+        s.id === sectionId ? { ...s, comments: [...(s.comments || []), newComment] } : s
+      );
+      const updated = { ...prev, sections: updatedSections };
+      fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { protocol: updated } }),
+      });
+      return updated;
+    });
+    try {
+      const section = protocol?.sections?.find((s: any) => s.id === sectionId);
+      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'note',
+          message: `Comment added to section: ${section?.title || sectionId}`,
+          stepId: 'protocol-make',
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({
+            sectionId,
+            sectionTitle: section?.title || sectionId,
+            commentType: type === 'general' ? 'General' : type === 'issue' ? 'Issue' : 'Approval',
+            commentText: content,
+            author: currentUser,
+          }),
+        }),
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
+    }
+  };
+
+  const handleResolveComment = async (sectionId: string, commentId: string) => {
+    const now = new Date().toLocaleString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    setProtocol((prev: any) => {
+      if (!prev) return prev;
+      const updatedSections = prev.sections.map((s: any) =>
+        s.id === sectionId
+          ? {
+              ...s,
+              comments: (s.comments || []).map((c: any) =>
+                c.id === commentId
+                  ? { ...c, status: 'resolved', resolvedBy: currentUser, resolvedDate: now }
+                  : c
+              ),
+            }
+          : s
+      );
+      const updated = { ...prev, sections: updatedSections };
+      fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { protocol: updated } }),
+      });
+      return updated;
+    });
+    try {
+      const section = protocol?.sections?.find((s: any) => s.id === sectionId);
+      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'note',
+          message: `Comment resolved in section: ${section?.title || sectionId}`,
+          stepId: 'protocol-make',
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({ sectionId, commentId }),
+        }),
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
+    }
+  };
+
   const handleWontFix = async (sectionId: string, issueId: string, comment: string) => {
     const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
     const issue = (currentSection?.issues || []).find((i: any) => i.id === issueId);
@@ -216,7 +311,7 @@ export default function App() {
     status: s.status || 'draft',
     owner: roles.find((r: any) => r.title === 'Protocol Lead')?.assignedTo?.[0]?.name || '',
     updated: s.updatedAt || '',
-    comments: 0,
+    comments: s.comments || [],
     aiGenerated: true,
     reviewStatus: null,
     locked: false,
@@ -718,11 +813,14 @@ export default function App() {
                       section={section}
                       isExpanded={expandedSections.includes(section.id)}
                       onToggle={() => toggleSection(section.id)}
+                      onNavigate={() => navigateToSection(section.id)}
                       ref={el => sectionRefs.current[section.id] = el}
                       isHighlighted={highlightedSection === section.id}
                       isReviewMode={isReviewMode}
                       onSaved={(newContent, prevContent, reason) => handleSectionSaved(section.id, newContent, prevContent, reason)}
                       onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
+                      onAddComment={(content, type) => handleAddComment(section.id, content, type)}
+                      onResolveComment={(commentId) => handleResolveComment(section.id, commentId)}
                     />
                   ))}
                 </div>

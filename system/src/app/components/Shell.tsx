@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation, useParams } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { WORKFLOW_STEPS, buildWorkflowPath, getStepByPathname } from '@/shared/workflow/steps';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
@@ -37,6 +37,12 @@ export function Shell() {
   const current = getStepByPathname(location.pathname);
   const { snapshot, refresh } = useWorkflowSnapshot({ projectId });
   const currentIndex = WORKFLOW_STEPS.findIndex(s => s.id === current?.id);
+
+  useEffect(() => {
+    if (projectId && current) {
+      localStorage.setItem(`lastPage_${projectId}`, location.pathname);
+    }
+  }, [location.pathname, projectId, current]);
 
   const stepStates: Partial<Record<WorkflowStepId, DocumentLifecycleState>> = {};
   if (snapshot) {

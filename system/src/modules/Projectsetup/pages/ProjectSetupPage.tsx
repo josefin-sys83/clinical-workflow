@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Lock, CheckCircle2, Circle, Info, X, UserPlus, History } from 'lucide-react';
+import { WORKFLOW_STEPS, buildWorkflowPath } from '@/shared/workflow/steps';
 import { AuditLog } from '../components/AuditLog';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { LockedStateContainer } from '../components/LockedStateContainer';
@@ -187,11 +188,7 @@ export function ProjectSetupPage() {
   const projectManagerAssigned = roles[0].status === 'assigned';
   const allRolesAssigned = roles.every(role => role.status === 'assigned');
 
-  const workflowSteps = [
-    { name: 'Setup', locked: false, active: true, section: 'PROJECT SETUP', path: null },
-    { name: 'Synopsis', locked: false, active: false, section: 'PROJECT SETUP', path: `/projects/${projectId}/workflow/synopsis` },
-    { name: 'Scope & Intended Use', locked: parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0') < 3, active: false, section: 'PROJECT SETUP', path: `/projects/${projectId}/workflow/scope` },
-  ];
+  const maxStep = parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0');
 
   const handleCompleteSetup = async () => {
     logAudit({ domain: 'Approval', action: 'Project Setup completed successfully', details: 'All requirements met. Unlocking Synopsis phase.' });
@@ -220,30 +217,52 @@ export function ProjectSetupPage() {
           <div className="mb-4 px-3">
             <h2 className="text-sm font-semibold text-slate-900">Workflow Steps</h2>
           </div>
-          <div className="mb-2 px-3">
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Project setup</div>
-          </div>
-          <div className="space-y-1">
-            {workflowSteps.map((step, index) => (
-              <div
-                key={index}
-                onClick={() => !step.locked && step.path && navigate(step.path)}
-                style={{ cursor: step.locked ? 'not-allowed' : step.active ? 'default' : 'pointer' }}
-                className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${step.active ? 'bg-blue-50 border border-blue-200' : 'border border-transparent'} ${step.locked ? 'opacity-60' : ''}`}
-              >
-                <div className="mt-0.5">
-                  {step.locked ? <Lock className="w-4 h-4 text-slate-400" /> : step.active ? (
-                    <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center">
-                      <span className="text-white text-xs font-medium">1</span>
-                    </div>
-                  ) : <CheckCircle2 className="w-4 h-4 text-blue-600" />}
+          {(['project', 'protocol', 'report'] as const).map((domain) => {
+            const domainSteps = WORKFLOW_STEPS.filter((s) => s.domain === domain);
+            const domainLabel = domain === 'project' ? 'Project' : domain === 'protocol' ? 'Protocol' : 'Report';
+            return (
+              <div key={domain} className="mb-4">
+                <div className="mb-1 px-3">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{domainLabel}</div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-sm ${step.active ? 'font-medium text-blue-900' : 'text-slate-700'}`}>{step.name}</div>
+                <div className="space-y-0.5">
+                  {domainSteps.map((step) => {
+                    const stepIndex = WORKFLOW_STEPS.indexOf(step);
+                    const isActive = step.id === 'project-setup';
+                    const isLocked = stepIndex > Math.max(maxStep, 1);
+                    const href = step.id === 'dashboard' ? '/dashboard' : projectId ? buildWorkflowPath(projectId, step.id) : '#';
+                    return (
+                      <div
+                        key={step.id}
+                        onClick={() => !isLocked && !isActive && navigate(href)}
+                        style={{ cursor: isLocked ? 'not-allowed' : isActive ? 'default' : 'pointer' }}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+                          isActive ? 'bg-blue-50 border border-blue-200' : isLocked ? 'opacity-50' : 'hover:bg-slate-50 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex-shrink-0">
+                          {isLocked ? (
+                            <Lock className="w-4 h-4 text-slate-400" />
+                          ) : isActive ? (
+                            <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center">
+                              <div className="w-2 h-2 rounded-full bg-white" />
+                            </div>
+                          ) : stepIndex < maxStep ? (
+                            <CheckCircle2 className="w-4 h-4 text-blue-500" />
+                          ) : (
+                            <Circle className="w-4 h-4 text-slate-400" />
+                          )}
+                        </div>
+                        <span className={`text-sm ${isActive ? 'font-medium text-blue-900' : isLocked ? 'text-slate-400' : 'text-slate-700'}`}>
+                          {step.label}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </nav>
         <div className="p-4 border-t border-slate-200 bg-slate-50">
           <div className="text-xs text-slate-600">

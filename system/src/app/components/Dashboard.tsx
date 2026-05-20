@@ -36,7 +36,8 @@ export function Dashboard() {
   }, []);
 
   const handleProjectClick = (projectId: string) => {
-    navigate(`/projects/${projectId}`);
+    const lastPage = localStorage.getItem(`lastPage_${projectId}`);
+    navigate(lastPage || `/projects/${projectId}`);
   };
 
   const handleItemClick = (link: string) => {

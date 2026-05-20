@@ -21,15 +21,17 @@ interface CommentsModalProps {
   sectionTitle: string;
   comments: Comment[];
   onAddComment?: (content: string, type: string) => void;
+  onResolveComment?: (commentId: string) => void;
 }
 
-export function CommentsModal({ 
-  isOpen, 
-  onClose, 
-  sectionNumber, 
-  sectionTitle, 
+export function CommentsModal({
+  isOpen,
+  onClose,
+  sectionNumber,
+  sectionTitle,
   comments,
-  onAddComment 
+  onAddComment,
+  onResolveComment,
 }: CommentsModalProps) {
   const [newComment, setNewComment] = useState('');
   const [commentType, setCommentType] = useState<'general' | 'issue' | 'approval-request'>('general');
@@ -41,6 +43,7 @@ export function CommentsModal({
       onAddComment(newComment, commentType);
       setNewComment('');
       setCommentType('general');
+      onClose();
     }
   };
 
@@ -167,14 +170,16 @@ export function CommentsModal({
                           {comment.content}
                         </p>
 
-                        <div className="mt-3 ml-11 flex items-center gap-2">
-                          <button className="px-3 py-1 text-xs border border-slate-300 text-slate-700 rounded hover:bg-slate-50 transition-colors">
-                            Mark as Resolved
-                          </button>
-                          <button className="px-3 py-1 text-xs border border-slate-300 text-slate-700 rounded hover:bg-slate-50 transition-colors">
-                            Reply
-                          </button>
-                        </div>
+                        {onResolveComment && (
+                          <div className="mt-3 ml-11">
+                            <button
+                              onClick={() => onResolveComment(comment.id)}
+                              className="px-3 py-1 text-xs border border-slate-300 text-slate-700 rounded hover:bg-slate-50 transition-colors"
+                            >
+                              Mark as Resolved
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban } from 'lucide-react';
 import { AuditTrailModal } from './audit-trail-modal';
 import { InlineIssueMarker } from './inline-issue-marker';
@@ -41,6 +41,19 @@ interface AuditEntry {
   aiAssisted?: boolean;
 }
 
+interface SectionComment {
+  id: string;
+  author: string;
+  authorRole: string;
+  timestamp: string;
+  content: string;
+  type: 'general' | 'issue' | 'approval-request' | 'resolved';
+  subsection?: string;
+  status: 'open' | 'resolved';
+  resolvedBy?: string;
+  resolvedDate?: string;
+}
+
 interface ProtocolSectionProps {
   section: {
     id: string;
@@ -49,7 +62,7 @@ interface ProtocolSectionProps {
     status: string;
     owner: string;
     updated: string;
-    comments: number;
+    comments: SectionComment[];
     aiGenerated: boolean;
     reviewStatus: string | null;
     locked?: boolean;
@@ -68,15 +81,18 @@ interface ProtocolSectionProps {
   isReviewMode?: boolean;
   onSaved?: (newContent: string, previousContent: string, reason: string) => Promise<void>;
   onWontFix?: (issueId: string, comment: string) => void;
+  onAddComment?: (content: string, type: string) => void;
+  onResolveComment?: (commentId: string) => void;
+  onNavigate?: () => void;
 }
 
 function ProtocolSectionComponent(
-  { section, isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix }: ProtocolSectionProps,
+  { section, isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
+  const issuesRef = useRef<HTMLDivElement>(null);
   const [guidanceExpanded, setGuidanceExpanded] = useState(false);
   const [issuesExpanded, setIssuesExpanded] = useState(false);
-  const [warningsExpanded, setWarningsExpanded] = useState(false);
   const [rolesExpanded, setRolesExpanded] = useState(false);
   const [auditTrailOpen, setAuditTrailOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -92,6 +108,7 @@ function ProtocolSectionComponent(
   const [wontFixComment, setWontFixComment] = useState('');
 
   const isApproved = section.status === 'complete';
+  const comments = Array.isArray(section.comments) ? section.comments : [];
 
   // Count open issues by severity
   const openIssues = section.issues?.filter(i => i.status === 'open') || [];
@@ -139,8 +156,13 @@ function ProtocolSectionComponent(
                 <>
                   {blockerCount > 0 && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); if (!isExpanded) onToggle(); setWarningsExpanded(true); }}
-                      className="px-2 py-0.5 bg-red-100 text-red-800 text-xs rounded border border-red-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isExpanded) onToggle();
+                        setIssuesExpanded(true);
+                        setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
+                      }}
+                      className="px-2 py-0.5 bg-red-100 text-xs rounded border border-red-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer" style={{color: '#991b1b'}}
                       title="Click to view blockers"
                     >
                       {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
@@ -148,7 +170,12 @@ function ProtocolSectionComponent(
                   )}
                   {warningCount > 0 && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); if (!isExpanded) onToggle(); setWarningsExpanded(true); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isExpanded) onToggle();
+                        setIssuesExpanded(true);
+                        setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
+                      }}
                       className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded border border-amber-200 hover:bg-amber-100 hover:border-amber-300 transition-colors cursor-pointer"
                       title="Click to view warnings"
                     >
@@ -164,7 +191,7 @@ function ProtocolSectionComponent(
                 <User className="w-3 h-3" />
                 <span>{section.owner}</span>
               </div>
-              {section.reviewCycle && (
+              {!!section.reviewCycle && (
                 <div className="flex items-center gap-1">
                   <span>Review Cycle {section.reviewCycle}</span>
                 </div>
@@ -177,7 +204,7 @@ function ProtocolSectionComponent(
                 className="flex items-center gap-1 hover:text-blue-600 transition-colors cursor-pointer"
               >
                 <MessageSquare className="w-3 h-3" />
-                <span>{section.comments} comments</span>
+                <span>{comments.filter(c => c.status === 'open').length} comments</span>
               </button>
               
               {/* Completeness Indicator */}
@@ -401,21 +428,17 @@ function ProtocolSectionComponent(
             {/* ISSUES / ERRORS AREA - System Controlled, Non-Editable */}
             {/* In AUTHORING mode: blockers always shown, warnings collapsible. In REVIEW mode: all expanded */}
             {openIssues.length > 0 && (
-              <div className="space-y-2">
+              <div ref={issuesRef} className="space-y-2">
                 {/* Issues toggle row — subtle, full-width clickable */}
                 <button
-                  onClick={() => !isReviewMode && setWarningsExpanded(v => !v)}
-                  className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded border transition-colors text-left ${
-                    isReviewMode
-                      ? 'border-slate-200 cursor-default'
-                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 cursor-pointer'
-                  }`}
+                  onClick={() => setIssuesExpanded(v => !v)}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors text-left cursor-pointer"
                 >
                   <div className="flex items-center gap-3">
                     {blockerCount > 0 && (
-                      <span className="flex items-center gap-1.5 text-xs font-medium text-red-700">
-                        <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
-                        {blockerCount} blocker{blockerCount > 1 ? 's' : ''}
+                      <span className="flex items-center gap-1.5 text-xs font-medium" style={{color: '#991b1b'}}>
+                        <span className="w-2 h-2 rounded-full bg-red-600 flex-shrink-0" />
+                        {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
                       </span>
                     )}
                     {blockerCount > 0 && warningCount > 0 && (
@@ -424,22 +447,19 @@ function ProtocolSectionComponent(
                     {warningCount > 0 && (
                       <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700">
                         <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
-                        {warningCount} warning{warningCount > 1 ? 's' : ''}
+                        {warningCount} Warning{warningCount > 1 ? 's' : ''}
                       </span>
                     )}
                   </div>
-                  {!isReviewMode && warningCount > 0 && (
-                    <ChevronDown
-                      className={`w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform ${warningsExpanded ? '' : '-rotate-90'}`}
-                    />
-                  )}
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform ${issuesExpanded ? '' : '-rotate-90'}`}
+                  />
                 </button>
 
                 {/* Issue cards */}
                 {openIssues.map((issue) => {
                   const isBlockerIssue = issue.severity === 'blocker';
-                  // In authoring mode: always show blockers, show warnings only if expanded or only 1 warning and 0 blockers
-                  const showCard = isReviewMode || isBlockerIssue || warningsExpanded || (warningCount === 1 && blockerCount === 0);
+                  const showCard = issuesExpanded;
                   if (!showCard) return null;
                   return (
                     <div
@@ -447,12 +467,12 @@ function ProtocolSectionComponent(
                       className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-red-50 border-red-500' : 'bg-amber-50 border-amber-500'}`}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${isBlockerIssue ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
+                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${isBlockerIssue ? 'bg-red-100' : 'bg-amber-100 text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
                           {issue.severity}
                         </span>
                         <span className="text-xs font-medium text-slate-900">{issue.subsection}</span>
                       </div>
-                      <p className={`text-xs leading-relaxed mb-1 ${isBlockerIssue ? 'text-red-800' : 'text-amber-800'}`}>
+                      <p className={`text-xs leading-relaxed mb-1 ${isBlockerIssue ? '' : 'text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
                         {issue.description}
                       </p>
                       {issue.reference && (
@@ -461,7 +481,7 @@ function ProtocolSectionComponent(
                       <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 mt-1.5">
                         <span className="text-xs text-slate-500">
                           {issue.raisedBy} · {issue.raisedDate}
-                          {issue.dueDate && <span className="text-red-600 font-medium"> · Due in {issue.dueDate}</span>}
+                          {issue.dueDate && <span className="font-medium" style={{color: '#991b1b'}}> · Due in {issue.dueDate}</span>}
                         </span>
                         {onWontFix && (
                           <button
@@ -708,11 +728,9 @@ function ProtocolSectionComponent(
         onClose={() => setCommentsOpen(false)}
         sectionNumber={section.number}
         sectionTitle={section.title}
-        comments={getSectionComments(section.id)}
-        onAddComment={(content, type) => {
-          console.log('New comment:', content, type);
-          // In production: API call to save comment with full audit trail
-        }}
+        comments={comments}
+        onAddComment={onAddComment}
+        onResolveComment={onResolveComment}
       />
 
       {/* Amendment Warning Modal */}
@@ -1614,7 +1632,7 @@ function getSectionContent(sectionId: string, aiGenerated: boolean, issues: Prot
                 Age ≥65 years. Severe aortic stenosis defined as aortic valve area ≤1.0 cm² or indexed area ≤0.6 cm²/m² with mean gradient ≥40 mmHg or peak velocity ≥4.0 m/s. Symptomatic disease (NYHA class II or III). Intermediate surgical risk (STS-PROM 4-8%). Heart Team consensus for TAVR appropriateness. Adequate iliofemoral access (vessel diameter ≥5.5mm for 14-16F sheath). Aortic annulus 20-27mm by CT. LVEF ≥30%. Life expectancy &gt;24 months. Willing and able to consent and comply with follow-up.
               </p>
               {blockerIssue && (
-                <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-2">
+                <div className="text-xs bg-red-50 border border-red-200 rounded p-2 mt-2" style={{color: '#991b1b'}}>
                   <strong>Blocker:</strong> These criteria may yield insufficient recruitment pool for N=120 target within 6-month timeline. See cross-section consistency issue.
                 </div>
               )}
@@ -1664,7 +1682,7 @@ function getSectionContent(sectionId: string, aiGenerated: boolean, issues: Prot
                 </span> {assessmentTimingIssue && <InlineIssueMarker issue={assessmentTimingIssue} />}, and 24 months extended (±30d). Unscheduled visits conducted for adverse events or clinical need.
               </p>
               {assessmentTimingIssue && (
-                <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-2">
+                <div className="text-xs bg-red-50 border border-red-200 rounded p-2 mt-2" style={{color: '#991b1b'}}>
                   <strong>Blocker:</strong> Assessment window specification needed. Must define visit window (e.g., 12 months ±14 days) and specify how assessments outside window will be handled in statistical analysis.
                 </div>
               )}

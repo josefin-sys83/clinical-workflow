@@ -122,11 +122,15 @@ export class ProjectsController {
       const result = await mammoth.extractRawText({ buffer: file.buffer });
       text = result.value;
     } else if (mimetype === 'application/pdf' || filename.endsWith('.pdf')) {
-      text = file.buffer.toString('latin1').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ');
+      const pdfParse = require('pdf-parse');
+      const parsed = await pdfParse(file.buffer);
+      text = parsed.text;
     } else {
       text = file.buffer.toString('utf-8');
     }
+    console.log('[analyzeSynopsis] extracted text length:', text.length, '| preview:', text.slice(0, 300));
     const results = await this.ai.analyzeSynopsis(text);
+    console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
     return results;
   }
 
@@ -182,7 +186,9 @@ export class ProjectsController {
   ) {
     const project = await this.projects.get(projectId);
     const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
-    const result = await this.ai.analyzeSection(body.sectionTitle, body.sectionContent, targetMarkets, body.requiredElements);
+    const deviceCategory = project?.data?.scope?.deviceCategory || '';
+    const intendedUse = project?.data?.scope?.intendedUse || '';
+    const result = await this.ai.analyzeSection(body.sectionTitle, body.sectionContent, targetMarkets, deviceCategory, intendedUse, body.requiredElements);
     return result;
   }
 }

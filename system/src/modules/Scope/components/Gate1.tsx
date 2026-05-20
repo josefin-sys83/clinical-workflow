@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useState, useEffect } from "react";
-import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle } from "lucide-react";
+import { postAudit } from '@/shared/api/audit';
+import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -234,7 +235,7 @@ export function Gate1() {
   const [deviceCategory, setDeviceCategory] = useState<string>("implantable");
   const [intendedUse, setIntendedUse] = useState<string>("cardiovascular-support");
   const [customIntendedUse, setCustomIntendedUse] = useState<string>("");
-  const apiBase = window.location.origin.replace('-5173.', '-3001.');
+  const apiBase = '';
 
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -242,37 +243,40 @@ export function Gate1() {
   const [generatingRequirements, setGeneratingRequirements] = useState(false);
 
   const handleConfirmScope = async () => {
-    const newConfirmed = !scopeConfirmed;
-    setScopeConfirmed(newConfirmed);
-    if (newConfirmed) {
-      setGeneratingRequirements(true);
-      try {
-        const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
-        const targetMarkets = project.data?.projectData?.targetMarkets?.join(', ') || '';
-        const synopsisText = project.data?.synopsis?.uploadedFileName ? 'Synopsis uploaded: ' + project.data.synopsis.uploadedFileName : '';
-        const prompt = `You are a MedTech regulatory expert. Based on the following study information, suggest 6-8 specific regulatory requirements.
+    setScopeConfirmed(true);
+    setGeneratingRequirements(true);
+    setRequirements([]);
+    await postAudit(projectId!, 'scope.confirmed', `Scope confirmed — Device: ${deviceCategory}, Intended use: ${intendedUse === 'other-custom' ? customIntendedUse : intendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: intendedUse === 'other-custom' ? customIntendedUse : intendedUse });
+    try {
+      const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
+      const targetMarkets = project.data?.projectData?.targetMarkets?.join(', ') || '';
+      const synopsisText = project.data?.synopsis?.uploadedFileName ? 'Synopsis uploaded: ' + project.data.synopsis.uploadedFileName : '';
+      const effectiveIntendedUse = intendedUse === 'other-custom' ? customIntendedUse : intendedUse;
+      const prompt = `You are a MedTech regulatory expert. Based on the following study information, suggest 6-8 specific regulatory requirements.
 
 Device Category: ${deviceCategory}
-Intended Use: ${intendedUse}
+Intended Use: ${effectiveIntendedUse}
 Target Markets: ${targetMarkets}
 ${synopsisText}
 
 Return ONLY a JSON array with objects having these exact fields:
-[{"id": "req-1", "title": "Requirement title", "description": "Detailed description", "status": "suggested"}]
+[{"id": "req-1", "title": "Requirement title", "description": "Detailed description", "status": "suggested", "source": "ai-suggested"}]
 No markdown, no explanation, just the JSON array.`;
 
-        const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt })
-        });
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) setRequirements(data);
-      } catch (e) {
-        console.error('Failed to generate requirements', e);
-      } finally {
-        setGeneratingRequirements(false);
+      const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        setRequirements(data);
+        await postAudit(projectId!, 'scope.ai.requirements.generated', `AI generated ${data.length} suggested requirements for ${deviceCategory} / ${effectiveIntendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: effectiveIntendedUse, requirementCount: data.length, targetMarkets });
       }
+    } catch (e) {
+      console.error('Failed to generate requirements', e);
+    } finally {
+      setGeneratingRequirements(false);
     }
   };
 
@@ -456,18 +460,19 @@ No markdown, no explanation, just the JSON array.`;
       source: "library"
     };
     setRequirements([...requirements, newRequirement]);
+    postAudit(projectId!, 'scope.requirement.added_from_library', `Requirement added from library: ${libraryReq.title}`, 'scope', 'unknown', { requirementId: libraryReq.id, requirementTitle: libraryReq.title, category: libraryReq.category });
   };
 
   const handleAcceptRequirement = (requirementId: string) => {
-    setRequirements(requirements.map(req => 
-      req.id === requirementId ? { ...req, status: "accepted" as const } : req
-    ));
+    const req = requirements.find(r => r.id === requirementId);
+    setRequirements(requirements.map(r => r.id === requirementId ? { ...r, status: "accepted" as const } : r));
+    if (req) postAudit(projectId!, 'scope.requirement.accepted', `Requirement accepted: ${req.title}`, 'scope', 'unknown', { requirementId, requirementTitle: req.title });
   };
 
   const handleRevertRequirement = (requirementId: string) => {
-    setRequirements(requirements.map(req => 
-      req.id === requirementId ? { ...req, status: "suggested" as const } : req
-    ));
+    const req = requirements.find(r => r.id === requirementId);
+    setRequirements(requirements.map(r => r.id === requirementId ? { ...r, status: "suggested" as const } : r));
+    if (req) postAudit(projectId!, 'scope.requirement.reverted', `Requirement reverted to suggested: ${req.title}`, 'scope', 'unknown', { requirementId, requirementTitle: req.title });
   };
 
   const handleMarkNotApplicable = (requirementId: string) => {
@@ -480,11 +485,13 @@ No markdown, no explanation, just the JSON array.`;
 
   const handleSubmitJustification = () => {
     if (justificationDialog.requirementId) {
-      setRequirements(requirements.map(req => 
-        req.id === justificationDialog.requirementId 
-          ? { ...req, status: "not-applicable" as const, justification: justificationDialog.justification }
-          : req
+      const req = requirements.find(r => r.id === justificationDialog.requirementId);
+      setRequirements(requirements.map(r =>
+        r.id === justificationDialog.requirementId
+          ? { ...r, status: "not-applicable" as const, justification: justificationDialog.justification }
+          : r
       ));
+      if (req) postAudit(projectId!, 'scope.requirement.not_applicable', `Requirement marked not applicable: ${req.title}`, 'scope', 'unknown', { requirementId: justificationDialog.requirementId, requirementTitle: req.title, justification: justificationDialog.justification });
     }
     setJustificationDialog({ open: false, requirementId: null, justification: "" });
   };
@@ -494,16 +501,18 @@ No markdown, no explanation, just the JSON array.`;
     const hasTitle = customRequirementDialog.title.trim();
     const hasDocument = customRequirementDialog.document !== null;
     const hasDescription = customRequirementDialog.description.trim();
-    
+
     if ((hasTitle || hasDocument) && hasDescription) {
+      const title = customRequirementDialog.title || customRequirementDialog.document?.name || "Uploaded Document";
       const newRequirement: Requirement = {
         id: `req-custom-${Date.now()}`,
-        title: customRequirementDialog.title || customRequirementDialog.document?.name || "Uploaded Document",
+        title,
         description: customRequirementDialog.description,
         status: "accepted",
         source: "user-defined"
       };
       setRequirements([...requirements, newRequirement]);
+      postAudit(projectId!, 'scope.requirement.custom_added', `Custom requirement added: ${title}`, 'scope', 'unknown', { requirementTitle: title, description: customRequirementDialog.description });
       setCustomRequirementDialog({ open: false, title: "", description: "", document: null });
     }
   };
@@ -737,12 +746,27 @@ No markdown, no explanation, just the JSON array.`;
           {/* Section 2: Suggested Requirements */}
           <Card>
             <CardHeader>
-              <CardTitle>Suggested Requirements</CardTitle>
-              <CardDescription>
-                AI-suggested requirement areas based on device type and target markets
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Suggested Requirements</CardTitle>
+                  <CardDescription>
+                    AI-suggested requirement areas based on device type and target markets
+                  </CardDescription>
+                </div>
+                {generatingRequirements && (
+                  <div className="flex items-center gap-2 text-blue-600 text-sm">
+                    <Sparkles className="w-4 h-4 animate-pulse" />
+                    Analyzing with AI...
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
+              {!generatingRequirements && !scopeConfirmed && requirements.length === 0 && (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  Confirm your scope and device type above to generate AI-suggested requirements.
+                </p>
+              )}
               <div className="space-y-2">
                 {requirements.map((req) => (
                   <div

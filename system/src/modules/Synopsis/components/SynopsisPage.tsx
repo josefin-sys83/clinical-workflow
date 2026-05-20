@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { CheckCircle2, Circle, FileText, Upload, Lock, Sparkles, AlertCircle } from 'lucide-react';
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate, useParams } from 'react-router-dom';
+import { postAudit } from '@/shared/api/audit';
 
 
 interface ReadinessItem {
@@ -104,11 +105,13 @@ export function SynopsisPage() {
         method: 'POST',
         body: formData,
       });
+      await postAudit(projectId!, 'synopsis.file.uploaded', `Synopsis document uploaded: ${file.name}`, 'synopsis', 'unknown', { fileName: file.name, fileSize: file.size, mimeType: file.type });
     } catch (e) {
       console.error('Failed to upload file', e);
     }
 
     // Analyze with AI
+    await postAudit(projectId!, 'synopsis.ai.analysis.started', `AI analysis started for synopsis document: ${file.name}`, 'synopsis', 'unknown', { fileName: file.name });
     try {
       const analyzeForm = new FormData();
       analyzeForm.append('file', file);
@@ -121,19 +124,24 @@ export function SynopsisPage() {
 
       const results = await response.json();
       const updatedChecklist = readinessChecklist.map(item => {
-        const result = results.find((r: any) => r.id === item.id);
-        return result
-          ? { ...item, status: result.status as 'complete' | 'missing', reason: result.reason }
-          : item;
+        const result = results.find((r: any) => String(r.id) === String(item.id));
+        if (!result) return item;
+        const status: 'complete' | 'needs-review' | 'missing' =
+          result.status === 'complete' ? 'complete' : 'missing';
+        return { ...item, status, reason: result.reason };
       });
       // Mark item 1 as complete since file is uploaded
       updatedChecklist[0] = { ...updatedChecklist[0], status: 'complete', reason: 'Document uploaded successfully' };
+
+      const passedCount = updatedChecklist.filter(i => i.status === 'complete').length;
+      await postAudit(projectId!, 'synopsis.ai.analysis.completed', `AI analysis completed: ${passedCount} of ${updatedChecklist.length} criteria passed`, 'synopsis', 'unknown', { fileName: file.name, passedCriteria: passedCount, totalCriteria: updatedChecklist.length });
 
       setReadinessChecklist(updatedChecklist);
       setAiReviewComplete(true);
       await saveToBackend({ uploadedFileName: file.name, readinessChecklist: updatedChecklist, aiReviewComplete: true, synopsisStatus });
     } catch (e) {
       setAnalysisError('AI analysis failed. Please try again.');
+      await postAudit(projectId!, 'synopsis.ai.analysis.failed', `AI analysis failed for synopsis document: ${file.name}`, 'synopsis', 'unknown', { fileName: file.name });
       console.error('Analysis error:', e);
     } finally {
       setIsAnalyzing(false);
@@ -147,6 +155,7 @@ export function SynopsisPage() {
       setSynopsisStatus('completed');
       if (maxStep < 3) localStorage.setItem(`maxStep_${projectId}`, '3');
       await saveToBackend({ uploadedFileName, readinessChecklist, aiReviewComplete, synopsisStatus: 'completed' });
+      await postAudit(projectId!, 'synopsis.step.completed', 'Synopsis step completed — all readiness criteria met', 'synopsis', 'unknown', { uploadedFileName, passedCriteria: readinessChecklist.filter(i => i.status === 'complete').length });
       navigate(`/projects/${projectId}/workflow/scope`);
     } else {
       alert('Please complete all readiness checklist items before proceeding.');
