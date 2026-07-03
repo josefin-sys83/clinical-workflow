@@ -64,7 +64,7 @@ export function CompletionChecklist({ sections }: CompletionChecklistProps) {
           >
             <div className="mt-0.5 flex-shrink-0">
               {item.status === 'complete' && (
-                <CheckCircle className="w-4 h-4 text-green-600" />
+                <CheckCircle className="w-4 h-4 text-indigo-600" />
               )}
               {item.status === 'missing' && (
                 <Circle className="w-4 h-4 text-slate-300" />
@@ -80,7 +80,7 @@ export function CompletionChecklist({ sections }: CompletionChecklistProps) {
                   <Sparkles className="w-3 h-3 text-purple-500" />
                 )}
                 <span className={`text-xs ${
-                  item.status === 'complete' ? 'text-green-600' :
+                  item.status === 'complete' ? 'text-indigo-600' :
                   'text-slate-500'
                 }`}>
                   {item.originalStatus}
@@ -96,7 +96,7 @@ export function CompletionChecklist({ sections }: CompletionChecklistProps) {
         <div className="text-xs text-slate-700 space-y-1">
           <div className="flex justify-between">
             <span>Locked/Approved:</span>
-            <span className="font-medium text-green-700">{checklistItems.filter(i => i.status === 'complete').length}</span>
+            <span className="font-medium text-blue-700">{checklistItems.filter(i => i.status === 'complete').length}</span>
           </div>
           <div className="flex justify-between">
             <span>Draft (AI):</span>

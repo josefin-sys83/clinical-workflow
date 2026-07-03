@@ -1,9 +1,12 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
+import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
+import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { postAudit } from '@/shared/api/audit';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -13,6 +16,8 @@ import { Label } from "./ui/label";
 import { Input } from "./ui/input";
 import { Alert, AlertDescription } from "./ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./ui/accordion";
+import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { theme } from '@/app/theme';
 
 interface Requirement {
   id: string;
@@ -231,37 +236,147 @@ interface Role {
 export function Gate1() {
   const navigate = useNavigate();
   const { projectId } = useParams();
+  const { snapshot: workflowSnapshot } = useWorkflowSnapshot({ projectId });
+  const isScopeLocked = (workflowSnapshot?.steps?.['protocol-pdf']?.state as string) === 'final';
+  const { latestAmendment } = useProtocolStatus(projectId);
+
+  // Track original scope values loaded from DB
+  const [originalDeviceCategory, setOriginalDeviceCategory] = useState<string | null>(null);
+  const [originalRequirements, setOriginalRequirements] = useState<any[]>([]);
+
   // Section 1: Scope & Device Type
-  const [deviceCategory, setDeviceCategory] = useState<string>("implantable");
-  const [intendedUse, setIntendedUse] = useState<string>("cardiovascular-support");
+  const [deviceCategory, setDeviceCategory] = useState<string>("");
+  const [intendedUse, setIntendedUse] = useState<string>("");
   const [customIntendedUse, setCustomIntendedUse] = useState<string>("");
   const apiBase = '';
 
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
 
+  // Derive consequences when scope changes
+  const consequences = useMemo(() => {
+    if (!originalDeviceCategory) return [];
+    const items: { severity: 'high' | 'medium'; message: string }[] = [];
+
+    if (deviceCategory !== originalDeviceCategory) {
+      const fromAIMD = originalDeviceCategory === 'AIMD';
+      const toAIMD = deviceCategory === 'AIMD';
+      const fromIVD = originalDeviceCategory === 'IVD';
+      const toIVD = deviceCategory === 'IVD';
+      const fromSaMD = originalDeviceCategory === 'Software' || originalDeviceCategory === 'SaMD';
+      const toSaMD = deviceCategory === 'Software' || deviceCategory === 'SaMD';
+
+      items.push({
+        severity: 'high',
+        message: `Device category changed from "${originalDeviceCategory}" to "${deviceCategory}". All protocol sections and report sections need to be regenerated with new regulatory standards.`
+      });
+
+      if (fromAIMD && !toAIMD) {
+        items.push({ severity: 'high', message: 'ISO 14708 and EN 45502-1 requirements will no longer apply. The Long-term Safety and Performance Assessment section in the report will be removed.' });
+      }
+      if (!fromAIMD && toAIMD) {
+        items.push({ severity: 'high', message: 'ISO 14708 and EN 45502-1 requirements now apply. A Long-term Safety and Performance Assessment section will be added to the report.' });
+      }
+      if (fromIVD && !toIVD) {
+        items.push({ severity: 'high', message: 'IVDR 2017/746 requirements will no longer apply. Report structure will change significantly.' });
+      }
+      if (!fromIVD && toIVD) {
+        items.push({ severity: 'high', message: 'IVDR 2017/746 now applies instead of MDR. Report structure will change significantly.' });
+      }
+      if (!fromSaMD && toSaMD) {
+        items.push({ severity: 'high', message: 'IMDRF SaMD N41 now applies. An Algorithm Performance and Validation section will be added to the report.' });
+      }
+      if (fromSaMD && !toSaMD) {
+        items.push({ severity: 'high', message: 'IMDRF SaMD N41 will no longer apply. Algorithm Performance section will be removed from the report.' });
+      }
+
+      items.push({ severity: 'medium', message: 'AI analysis of all existing protocol and report sections needs to be re-run to reflect new regulatory requirements.' });
+    }
+
+    const originalMarkets = new Set(
+      originalRequirements
+        .filter((r: any) => r.status === 'accepted')
+        .map((r: any) => r.title.includes('FDA') || r.title.includes('US') ? 'FDA' :
+                         r.title.includes('EU') || r.title.includes('MDR') ? 'EU' : null)
+        .filter(Boolean)
+    );
+    const currentMarkets = new Set(
+      requirements
+        .filter((r: any) => r.status === 'accepted')
+        .map((r: any) => r.title.includes('FDA') || r.title.includes('US') ? 'FDA' :
+                         r.title.includes('EU') || r.title.includes('MDR') ? 'EU' : null)
+        .filter(Boolean)
+    );
+
+    if (!originalMarkets.has('EU') && currentMarkets.has('EU')) {
+      items.push({ severity: 'high', message: 'EU market added. A Regulatory Compliance Statement (EU MDR 2017/745) section will be added to the report. Protocol must reference EU MDR 2017/745.' });
+    }
+    if (originalMarkets.has('EU') && !currentMarkets.has('EU')) {
+      items.push({ severity: 'high', message: 'EU market removed. The Regulatory Compliance Statement (EU MDR 2017/745) section will be removed from the report.' });
+    }
+    if (!originalMarkets.has('FDA') && currentMarkets.has('FDA')) {
+      items.push({ severity: 'high', message: 'FDA market added. An Investigational Device Exemption (IDE) Compliance Summary section will be added to the report. Protocol must reference 21 CFR Part 812.' });
+    }
+    if (originalMarkets.has('FDA') && !currentMarkets.has('FDA')) {
+      items.push({ severity: 'high', message: 'FDA market removed. The IDE Compliance Summary section will be removed from the report.' });
+    }
+
+    return items;
+  }, [deviceCategory, requirements, originalDeviceCategory, originalRequirements]);
+
   const [generatingRequirements, setGeneratingRequirements] = useState(false);
 
-  const handleConfirmScope = async () => {
-    setScopeConfirmed(true);
+  const generateRequirements = async () => {
     setGeneratingRequirements(true);
-    setRequirements([]);
-    await postAudit(projectId!, 'scope.confirmed', `Scope confirmed — Device: ${deviceCategory}, Intended use: ${intendedUse === 'other-custom' ? customIntendedUse : intendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: intendedUse === 'other-custom' ? customIntendedUse : intendedUse });
     try {
       const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
       const targetMarkets = project.data?.projectData?.targetMarkets?.join(', ') || '';
-      const synopsisText = project.data?.synopsis?.uploadedFileName ? 'Synopsis uploaded: ' + project.data.synopsis.uploadedFileName : '';
+      const synopsisText = project.data?.synopsis?.extractedText
+        ? project.data.synopsis.extractedText.slice(0, 3000)
+        : project.data?.synopsis?.uploadedFileName
+          ? 'Synopsis uploaded: ' + project.data.synopsis.uploadedFileName
+          : '';
       const effectiveIntendedUse = intendedUse === 'other-custom' ? customIntendedUse : intendedUse;
-      const prompt = `You are a MedTech regulatory expert. Based on the following study information, suggest 6-8 specific regulatory requirements.
 
-Device Category: ${deviceCategory}
-Intended Use: ${effectiveIntendedUse}
+      const deviceTypeContext = ['samd', 'simd', 'ai-ml'].includes(deviceCategory)
+        ? 'This is a Software as a Medical Device (SaMD) or AI/ML device. Apply IMDRF N41 SaMD framework. For EU: EU MDR Rule 11 classification. For US: FDA De Novo or PMA pathway (NOT 510k unless predicate exists). Required: algorithm validation, GMLP compliance, cybersecurity, IEC 62304 software lifecycle, real-world performance monitoring.'
+        : deviceCategory === 'aimd'
+        ? 'This is an Active Implantable Medical Device (AIMD). Apply ISO 14708 series. For EU: EU MDR Annex XV clinical investigation required. For US: PMA pathway. Required: long-term biocompatibility per ISO 10993, EMC testing per IEC 60601.'
+        : deviceCategory === 'ivd'
+        ? 'This is an In Vitro Diagnostic device. Apply EU IVDR 2017/746. For US: FDA 510(k) or PMA depending on risk class. Required: analytical validation, clinical validation, metrological traceability.'
+        : `This is a ${deviceCategory} medical device.`;
+
+      const prompt = `You are a senior MedTech regulatory affairs expert with deep knowledge of EU MDR 2017/745, FDA regulations, and ISO standards.
+
+STUDY INFORMATION:
+Device: ${deviceCategory} — ${effectiveIntendedUse}
 Target Markets: ${targetMarkets}
-${synopsisText}
+${synopsisText ? `\nSYNOPSIS CONTEXT:\n${synopsisText}` : ''}
 
-Return ONLY a JSON array with objects having these exact fields:
-[{"id": "req-1", "title": "Requirement title", "description": "Detailed description", "status": "suggested", "source": "ai-suggested"}]
-No markdown, no explanation, just the JSON array.`;
+DEVICE TYPE GUIDANCE:
+${deviceTypeContext}
+
+Generate 6-8 specific, actionable regulatory requirements for this clinical investigation. Each requirement must be:
+- Specific to the device type and target markets listed above
+- Referenced to the correct regulation/standard (e.g. EU MDR Article 61, ISO 14155:2020, IMDRF N41)
+- Clinically relevant for a pivotal study
+
+IMPORTANT:
+- For SaMD targeting US: use De Novo or PMA pathway, NOT 510(k) unless a specific predicate device is confirmed
+- For EU market: always include ISO 14155:2020 GCP compliance
+- For AI/ML devices: always include IMDRF N41 and GMLP requirements
+- Do not suggest generic requirements — be specific to this device and indication
+
+Return ONLY a JSON array, no markdown:
+[
+  {
+    "id": "req-1",
+    "title": "Specific requirement title",
+    "description": "Detailed description with specific regulation references",
+    "status": "suggested",
+    "source": "ai-suggested"
+  }
+]`;
 
       const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
         method: 'POST',
@@ -280,18 +395,55 @@ No markdown, no explanation, just the JSON array.`;
     }
   };
 
+  const handleConfirmScope = async () => {
+    setScopeConfirmed(true);
+    setRequirements([]);
+    await postAudit(projectId!, 'scope.confirmed', `Scope confirmed — Device: ${deviceCategory}, Intended use: ${intendedUse === 'other-custom' ? customIntendedUse : intendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: intendedUse === 'other-custom' ? customIntendedUse : intendedUse });
+    await generateRequirements();
+  };
+
   // Ladda scope-data från backend
   useEffect(() => {
     fetch(`${apiBase}/api/projects/${projectId}`)
       .then(r => r.json())
-      .then(project => {
-        if (project.data?.scope) {
-          const s = project.data.scope;
-          if (s.deviceCategory) setDeviceCategory(s.deviceCategory);
-          if (s.intendedUse) setIntendedUse(s.intendedUse);
-          if (s.customIntendedUse) setCustomIntendedUse(s.customIntendedUse);
-          if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
-          if (s.requirements) setRequirements(s.requirements);
+      .then(async project => {
+        const s = project.data?.scope ?? {};
+
+        const normalizedCategory = s.deviceCategory === 'SaMD' ? 'samd' : s.deviceCategory === 'AIMD' ? 'aimd' : s.deviceCategory === 'IVD' ? 'ivd' : s.deviceCategory;
+        if (normalizedCategory) setDeviceCategory(normalizedCategory);
+        if (s.intendedUse) setIntendedUse(s.intendedUse);
+        if (s.customIntendedUse) setCustomIntendedUse(s.customIntendedUse);
+        if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
+        if (s.requirements) setRequirements(s.requirements);
+        // Pre-populate from projectData if scope not yet saved
+        if (!s.deviceCategory && project.data?.projectData?.deviceCategory) {
+          setDeviceCategory(project.data.projectData.deviceCategory);
+        }
+        if (!s.intendedUse && project.data?.projectData?.intendedUse) {
+          setIntendedUse('other-custom');
+          setCustomIntendedUse(project.data.projectData.intendedUse);
+        }
+        // Seed originals once so consequence diff is against the DB state
+        setOriginalDeviceCategory(s.deviceCategory ?? null);
+        setOriginalRequirements(s.requirements ?? []);
+
+        // Auto-derive device category + intended use from synopsis when either is still missing.
+        // Note: a free-text intended use entered during project setup gets mapped to 'other-custom'
+        // above, which would otherwise permanently block this from ever running for those projects.
+        const hasCategory = normalizedCategory || project.data?.projectData?.deviceCategory;
+        const hasIntendedUse = s.intendedUse || project.data?.projectData?.intendedUse;
+        const hasSynopsis = !!project.data?.synopsis?.extractedText;
+        if ((!hasCategory || !hasIntendedUse) && hasSynopsis && !s.scopeConfirmed) {
+          setGeneratingRequirements(true);
+          try {
+            const res = await fetch(`${apiBase}/api/projects/${projectId}/derive-scope`, { method: 'POST' });
+            const derived = await res.json();
+            console.log('[derive-scope] response:', derived);
+            if (!hasCategory && derived.deviceCategory) setDeviceCategory(derived.deviceCategory);
+            if (!hasIntendedUse && derived.intendedUse) setIntendedUse(derived.intendedUse);
+          } catch { /* non-fatal */ } finally {
+            setGeneratingRequirements(false);
+          }
         }
       })
       .catch(() => {});
@@ -299,6 +451,7 @@ No markdown, no explanation, just the JSON array.`;
 
   // Spara scope-data till backend automatiskt
   useEffect(() => {
+    if (isScopeLocked) return;
     const timer = setTimeout(() => {
       fetch(`${apiBase}/api/projects/${projectId}`, {
         method: 'PATCH',
@@ -311,7 +464,7 @@ No markdown, no explanation, just the JSON array.`;
       }).catch(() => {});
     }, 1000);
     return () => clearTimeout(timer);
-  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements]);
+  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, isScopeLocked]);
 
   // Section 2: Requirements (default values loaded from backend or set below)
   // requirements useState moved above
@@ -523,8 +676,16 @@ No markdown, no explanation, just the JSON array.`;
     ));
   };
 
-  const handleConfirmGate = () => {
-    // Open Gate 2 in new window
+  const handleConfirmGate = async () => {
+    try {
+      await fetch(`/api/projects/${projectId}/workflow/scope/transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: 'approved' }),
+      });
+    } catch {
+      // non-blocking — navigate regardless
+    }
     navigate(`/projects/${projectId}/workflow/protocol/make`);
   };
 
@@ -542,6 +703,7 @@ No markdown, no explanation, just the JSON array.`;
           <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Project setup</div>
           <div className="space-y-1">
             {innerSteps.map((step, i) => (
+              // eslint-disable-next-line theme-colors/no-raw-colors -- nav step chrome, not a semantic status colour
               <div key={i} onClick={() => step.status !== 'locked' && navigate(step.path)} className={"flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors " + (step.status === 'active' ? 'bg-blue-50 border border-blue-200 font-medium text-blue-900' : 'text-slate-700 hover:bg-slate-50 cursor-pointer')}>
                 {step.status === 'completed' ? <CheckCircle2 className="w-4 h-4 text-blue-600 flex-shrink-0" /> : step.status === 'active' ? <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0"><span className="text-white text-xs">{i+1}</span></div> : <Lock className="w-4 h-4 text-slate-300 flex-shrink-0" />}
                 {step.label}
@@ -551,91 +713,96 @@ No markdown, no explanation, just the JSON array.`;
         </div>
       </aside>
       <div className="flex-1 overflow-auto">
+      <MilestoneBanner projectId={projectId!} currentStepId="scope" />
+      {isScopeLocked && (
+        <div className="mx-6 mt-4">
+          <ProtocolFinalizedBanner
+            projectId={projectId!}
+            latestAmendment={latestAmendment}
+          />
+        </div>
+      )}
       <div className="max-w-5xl mx-auto p-8">
         <div className="space-y-6">
+
+          {!isScopeLocked && consequences.length > 0 && (
+            <div className={`${theme.status.notice} border ${theme.border.notice} rounded-lg p-4 space-y-2`}>
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0" />
+                <p className={`font-medium ${theme.text.notice}`}>Unsaved changes have downstream consequences</p>
+              </div>
+              <p className="text-sm text-orange-700">The following parts of the project will be affected when you save:</p>
+              <ul className="space-y-1">
+                {consequences.map((c, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm">
+                    <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${c.severity === 'high' ? 'bg-rose-500' : 'bg-orange-400'}`} />
+                    <span className={theme.text.notice}>{c.message}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-orange-600 mt-2">These changes will be saved automatically. Generated content in protocol and report sections will not be automatically regenerated — you will need to regenerate affected sections manually.</p>
+            </div>
+          )}
+
           {/* Section 1: Study Scope & Device Type */}
           <Card>
             <CardHeader>
               <CardTitle>Study Scope & Device Type</CardTitle>
-              <CardDescription>
-                AI-derived recommendations based on approved synopsis
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Alert className="bg-muted/30 border-border">
-                <Info className="size-4 text-muted-foreground" />
-                <AlertDescription className="text-muted-foreground">
-                  The following information has been derived from your study synopsis using AI analysis.
-                </AlertDescription>
-              </Alert>
+              <div className="p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
+                <div className="flex items-start gap-3">
+                  <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
+                    AI
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-purple-900 mb-1">
+                      AI-derived recommendations
+                    </div>
+                    <p className="text-xs text-purple-700">
+                      Based on your approved synopsis document.
+                    </p>
+                  </div>
+                </div>
+              </div>
 
               <div className="space-y-4">
                 <div>
                   <Label htmlFor="device-category">Device Category</Label>
-                  <Select value={deviceCategory} onValueChange={setDeviceCategory}>
+                  <Select value={deviceCategory} onValueChange={setDeviceCategory} disabled={isScopeLocked}>
                     <SelectTrigger id="device-category" className="mt-1.5">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="non-implantable">
+                      <SelectItem value="non-implantable" description="(e.g. diagnostic equipment, surgical instruments, monitoring devices)">
                         Non-implantable medical device
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (e.g. diagnostic equipment, surgical instruments, monitoring devices)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="implantable">
+                      <SelectItem value="implantable" description="(e.g. orthopedic implants, cardiovascular implants)">
                         Implantable medical device
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (e.g. orthopedic implants, cardiovascular implants)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="active">
+                      <SelectItem value="active" description="(electrically powered medical devices)">
                         Active medical device
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (electrically powered medical devices)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="aimd">
+                      <SelectItem value="aimd" description="(e.g. pacemakers, neurostimulators)">
                         Active implantable medical device (AIMD)
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (e.g. pacemakers, neurostimulators)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="samd">
+                      <SelectItem value="samd" description="(standalone software, clinical decision support, algorithms)">
                         Software as a Medical Device (SaMD)
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (standalone software, clinical decision support, algorithms)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="simd">
+                      <SelectItem value="simd" description="(software embedded in a physical medical device)">
                         Software in a Medical Device (SiMD)
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (software embedded in a physical medical device)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="ai-ml">
+                      <SelectItem value="ai-ml" description="(AI/ML-based functionality influencing clinical decisions)">
                         AI-enabled / Machine Learning medical device
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (AI/ML-based functionality influencing clinical decisions)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="ivd">
+                      <SelectItem value="ivd" description="(laboratory tests, reagents, diagnostic analysis)">
                         In Vitro Diagnostic (IVD)
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (laboratory tests, reagents, diagnostic analysis)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="combination">
+                      <SelectItem value="combination" description="(medical device combined with pharmaceutical or biological component)">
                         Combination product (device + drug / biologic)
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (medical device combined with pharmaceutical or biological component)
-                        </span>
                       </SelectItem>
-                      <SelectItem value="accessory">
+                      <SelectItem value="accessory" description="(products intended to be used together with a medical device)">
                         Accessory to a medical device
-                        <span className="block text-xs text-muted-foreground mt-0.5">
-                          (products intended to be used together with a medical device)
-                        </span>
                       </SelectItem>
                     </SelectContent>
                   </Select>
@@ -648,7 +815,7 @@ No markdown, no explanation, just the JSON array.`;
                     if (value !== "other-custom") {
                       setCustomIntendedUse("");
                     }
-                  }}>
+                  }} disabled={isScopeLocked}>
                     <SelectTrigger id="intended-use" className="mt-1.5">
                       <SelectValue />
                     </SelectTrigger>
@@ -720,6 +887,7 @@ No markdown, no explanation, just the JSON array.`;
                       value={customIntendedUse}
                       onChange={(e) => setCustomIntendedUse(e.target.value)}
                       className="mt-1.5"
+                      disabled={isScopeLocked}
                       required
                     />
                   </div>
@@ -731,9 +899,10 @@ No markdown, no explanation, just the JSON array.`;
                   size="sm"
                   variant="outline"
                   onClick={handleConfirmScope}
+                  disabled={isScopeLocked}
                   className={
                     scopeConfirmed
-                      ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                      ? `${theme.status.active} ${theme.border.active} hover:bg-blue-100`
                       : "hover:bg-slate-50"
                   }
                 >
@@ -743,18 +912,25 @@ No markdown, no explanation, just the JSON array.`;
             </CardContent>
           </Card>
 
-          {/* Section 2: Suggested Requirements */}
-          <Card>
+          {/* Section 2: Suggested Requirements — only visible after scope is confirmed */}
+          {scopeConfirmed && <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Suggested Requirements</CardTitle>
-                  <CardDescription>
-                    AI-suggested requirement areas based on device type and target markets
-                  </CardDescription>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-start gap-3 p-3 bg-purple-50 border-l-4 border-purple-400 rounded flex-1">
+                  <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
+                    AI
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-purple-900 mb-1">
+                      Suggested Requirements
+                    </div>
+                    <p className="text-xs text-purple-700">
+                      AI-suggested requirement areas based on device type and target markets
+                    </p>
+                  </div>
                 </div>
                 {generatingRequirements && (
-                  <div className="flex items-center gap-2 text-blue-600 text-sm">
+                  <div className={`flex items-center gap-2 ${theme.text.ai} text-sm flex-shrink-0`}>
                     <Sparkles className="w-4 h-4 animate-pulse" />
                     Analyzing with AI...
                   </div>
@@ -794,6 +970,7 @@ No markdown, no explanation, just the JSON array.`;
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={isScopeLocked}
                         onClick={() => {
                           if (req.status === "accepted") {
                             handleRevertRequirement(req.id);
@@ -803,7 +980,7 @@ No markdown, no explanation, just the JSON array.`;
                         }}
                         className={
                           req.status === "accepted"
-                            ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                            ? `${theme.status.active} ${theme.border.active} hover:bg-blue-100`
                             : "hover:bg-slate-50"
                         }
                       >
@@ -812,6 +989,7 @@ No markdown, no explanation, just the JSON array.`;
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={isScopeLocked}
                         onClick={() => {
                           if (req.status === "not-applicable") {
                             handleRevertRequirement(req.id);
@@ -839,6 +1017,7 @@ No markdown, no explanation, just the JSON array.`;
                   <div className="flex-1">
                     <Select
                       value=""
+                      disabled={isScopeLocked}
                       onValueChange={(value) => {
                         const libraryReq = REQUIREMENTS_LIBRARY.find(req => req.id === value);
                         if (libraryReq) {
@@ -939,6 +1118,7 @@ No markdown, no explanation, just the JSON array.`;
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={isScopeLocked}
                     onClick={() => setCustomRequirementDialog({ open: true, title: "", description: "", document: null })}
                     className="shrink-0"
                   >
@@ -948,7 +1128,7 @@ No markdown, no explanation, just the JSON array.`;
                 </div>
               </div>
             </CardContent>
-          </Card>
+          </Card>}
 
           {/* Readiness & Dependencies */}
           <div className="bg-white border border-slate-200 rounded-lg p-6">
@@ -1006,7 +1186,7 @@ No markdown, no explanation, just the JSON array.`;
               onClick={handleConfirmGate}
               className={
                 allReadinessChecksPassed
-                  ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow px-6 py-3 rounded-lg font-medium transition-all" 
+                  ? `${theme.button.primary} shadow-sm hover:shadow px-6 py-3 rounded-lg font-medium transition-all`
                   : "bg-slate-200 text-slate-500 cursor-not-allowed px-6 py-3 rounded-lg font-medium"
               }
             >
@@ -1048,7 +1228,7 @@ No markdown, no explanation, just the JSON array.`;
             <Button
               onClick={handleSubmitJustification}
               disabled={!justificationDialog.justification.trim()}
-              className={!justificationDialog.justification.trim() ? "" : "bg-blue-600 hover:bg-blue-700 text-white"}
+              className={!justificationDialog.justification.trim() ? "" : theme.button.primary}
             >
               Submit
             </Button>
@@ -1172,7 +1352,7 @@ No markdown, no explanation, just the JSON array.`;
             <Button
               onClick={handleAddCustomRequirement}
               disabled={(!customRequirementDialog.title.trim() && !customRequirementDialog.document) || !customRequirementDialog.description.trim()}
-              className={(!customRequirementDialog.title.trim() && !customRequirementDialog.document) || !customRequirementDialog.description.trim() ? "" : "bg-blue-600 hover:bg-blue-700 text-white"}
+              className={(!customRequirementDialog.title.trim() && !customRequirementDialog.document) || !customRequirementDialog.description.trim() ? "" : theme.button.primary}
             >
               Add Requirement
             </Button>

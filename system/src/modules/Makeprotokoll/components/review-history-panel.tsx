@@ -65,7 +65,7 @@ export function ReviewHistoryPanel({ onViewDetails }: ReviewHistoryPanelProps) {
       case 'approved-with-comments':
         return <AlertCircle className="w-4 h-4 text-blue-600" />;
       case 'changes-required':
-        return <XCircle className="w-4 h-4 text-red-600" />;
+        return <XCircle className="w-4 h-4 text-rose-700" />;
       case 'pending':
         return <Clock className="w-4 h-4 text-slate-400" />;
       default:
@@ -80,7 +80,7 @@ export function ReviewHistoryPanel({ onViewDetails }: ReviewHistoryPanelProps) {
       case 'approved-with-comments':
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'changes-required':
-        return 'bg-red-100 text-red-800 border-red-200';
+        return 'bg-rose-50 text-rose-800 border-rose-200';
       case 'pending':
         return 'bg-slate-100 text-slate-600 border-slate-200';
       default:
@@ -91,7 +91,7 @@ export function ReviewHistoryPanel({ onViewDetails }: ReviewHistoryPanelProps) {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle className="w-5 h-5 text-green-600" />;
+        return <CheckCircle className="w-5 h-5 text-indigo-600" />;
       case 'in-progress':
         return <Clock className="w-5 h-5 text-blue-600" />;
       case 'issues-found':
@@ -195,7 +195,7 @@ export function ReviewHistoryPanel({ onViewDetails }: ReviewHistoryPanelProps) {
                 <div
                   className={`p-3 rounded-lg border ${
                     round.status === 'completed'
-                      ? 'bg-green-50 border-green-200'
+                      ? 'bg-blue-50 border-blue-200'
                       : round.status === 'issues-found'
                       ? 'bg-amber-50 border-amber-200'
                       : 'bg-blue-50 border-blue-200'
@@ -207,7 +207,7 @@ export function ReviewHistoryPanel({ onViewDetails }: ReviewHistoryPanelProps) {
                   <div
                     className={`text-sm font-medium ${
                       round.status === 'completed'
-                        ? 'text-green-900'
+                        ? 'text-blue-900'
                         : round.status === 'issues-found'
                         ? 'text-amber-900'
                         : 'text-blue-900'

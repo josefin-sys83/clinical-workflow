@@ -66,11 +66,11 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
                 placeholder="e.g., CardioFlow System"
               />
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-rose-700">{error}</p>}
           </div>
           <div className="flex items-center justify-end gap-3 mt-6 pt-6 border-t">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={loading} className="bg-blue-900 hover:bg-blue-950 text-white">
+            <Button type="submit" disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 text-white">
               {loading ? 'Creating...' : 'Create Project'}
             </Button>
           </div>

@@ -33,7 +33,7 @@ export function AuditHistoryModal({ sectionNumber, sectionTitle, entries, onClos
       case 'ai_check':
         return <Sparkles className="w-4 h-4 text-amber-600" />;
       case 'issue_resolved':
-        return <AlertCircle className="w-4 h-4 text-green-600" />;
+        return <AlertCircle className="w-4 h-4 text-indigo-600" />;
       default:
         return <FileText className="w-4 h-4 text-slate-600" />;
     }

@@ -39,8 +39,8 @@ export function WorkflowMenu({ steps, currentStep, phaseTitle = "PROJECT SETUP" 
             >
               <div className="shrink-0">
                 {step.status === "completed" && (
-                  <div className="flex items-center justify-center size-5 rounded-full border-2 border-green-500">
-                    <Check className="size-3 text-green-500" strokeWidth={3} />
+                  <div className="flex items-center justify-center size-5 rounded-full border-2 border-indigo-500">
+                    <Check className="size-3 text-purple-500" strokeWidth={3} />
                   </div>
                 )}
                 {step.status === "current" && step.number !== undefined && (

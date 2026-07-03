@@ -79,7 +79,7 @@ export function IssuesGapsPanel() {
   const getSeverityStyles = (severity: string) => {
     switch (severity) {
       case 'high':
-        return 'bg-red-50 border-red-200 text-red-700';
+        return 'bg-rose-50 border-rose-200 text-rose-700';
       case 'medium':
         return 'bg-amber-50 border-amber-200 text-amber-700';
       case 'low':
@@ -126,7 +126,7 @@ export function IssuesGapsPanel() {
         <h3 className="font-semibold text-slate-900">Issues & Gaps</h3>
         <div className="flex items-center gap-1.5">
           {highSeverity.length > 0 && (
-            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded">
+            <span className="px-2 py-0.5 bg-rose-50 text-rose-700 text-xs font-medium rounded">
               {highSeverity.length} high
             </span>
           )}
@@ -147,14 +147,14 @@ export function IssuesGapsPanel() {
 
       {/* Blocking Warning */}
       {blockingIssues.length > 0 && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+        <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-700 mt-0.5 flex-shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-rose-700 mt-0.5 flex-shrink-0" />
             <div>
-              <div className="text-xs font-medium text-red-900 mb-1">
+              <div className="text-xs font-medium text-rose-800 mb-1">
                 {blockingIssues.length} issue{blockingIssues.length > 1 ? 's' : ''} blocking approval
               </div>
-              <p className="text-xs text-red-700">
+              <p className="text-xs text-rose-700">
                 These must be resolved before sections can be locked.
               </p>
             </div>
@@ -177,7 +177,7 @@ export function IssuesGapsPanel() {
                     {getTypeLabel(issue.type)}
                   </span>
                   {issue.blocksApproval && (
-                    <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded border border-red-300">
+                    <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 text-xs rounded border border-rose-300">
                       Blocks approval
                     </span>
                   )}
@@ -234,11 +234,11 @@ export function IssuesGapsPanel() {
           </div>
           <div className="flex justify-between">
             <span>Blocking approval:</span>
-            <span className="font-medium text-red-700">{blockingIssues.length}</span>
+            <span className="font-medium text-rose-700">{blockingIssues.length}</span>
           </div>
           <div className="flex justify-between">
             <span>Last system check:</span>
-            <span className="font-medium text-green-700">✓ 2 min ago</span>
+            <span className="font-medium text-blue-700">✓ 2 min ago</span>
           </div>
         </div>
       </div>

@@ -154,7 +154,7 @@ function getActionIcon(action: string) {
     return <MessageSquare className="w-4 h-4 text-purple-600 flex-shrink-0 mt-0.5" />;
   }
   if (actionLower.includes('approved')) {
-    return <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />;
+    return <CheckCircle2 className="w-4 h-4 text-indigo-600 flex-shrink-0 mt-0.5" />;
   }
   if (actionLower.includes('locked')) {
     return <Lock className="w-4 h-4 text-slate-600 flex-shrink-0 mt-0.5" />;
@@ -163,7 +163,7 @@ function getActionIcon(action: string) {
     return <Unlock className="w-4 h-4 text-slate-600 flex-shrink-0 mt-0.5" />;
   }
   if (actionLower.includes('issue raised') || actionLower.includes('blocker')) {
-    return <Ban className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />;
+    return <Ban className="w-4 h-4 text-rose-700 flex-shrink-0 mt-0.5" />;
   }
   if (actionLower.includes('issue') || actionLower.includes('warning')) {
     return <XCircle className="w-4 h-4 text-orange-600 flex-shrink-0 mt-0.5" />;

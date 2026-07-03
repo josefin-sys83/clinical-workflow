@@ -1,5 +1,5 @@
-import { Ban, XCircle, AlertTriangle, ChevronRight, Download } from 'lucide-react';
-import { ReportSection, ValidationFinding, User } from '../types';
+import { AlertTriangle, ChevronRight, Download, CheckCircle2 } from 'lucide-react';
+import { ReportSection, User } from '../types';
 import { useState } from 'react';
 
 interface QualitySystemPanelProps {
@@ -8,6 +8,8 @@ interface QualitySystemPanelProps {
   onNavigateToSection: (sectionId: string) => void;
   currentUser: User;
   onVerifyElement: (elementId: string) => void;
+  sectionAiIssues: Record<string, any[]>;
+  crossConsistencyIssues?: any[];
 }
 
 export function QualitySystemPanel({
@@ -16,76 +18,70 @@ export function QualitySystemPanel({
   onNavigateToSection,
   currentUser,
   onVerifyElement,
+  sectionAiIssues,
+  crossConsistencyIssues,
 }: QualitySystemPanelProps) {
   const [activeTab, setActiveTab] = useState<'my-issues' | 'all-issues'>('my-issues');
 
-  // Collect all validation findings across all sections
-  const allFindings: (ValidationFinding & { sectionTitle: string; sectionId: string; sectionNumber: string })[] = [];
-  sections.forEach((sec, index) => {
-    if (sec.validationFindings) {
-      sec.validationFindings.forEach(finding => {
-        allFindings.push({
-          ...finding,
-          sectionTitle: sec.title,
-          sectionId: sec.id,
-          sectionNumber: (index + 1).toString(),
-        });
+  // Collect real AI-analyzed issues across all sections
+  interface FlatIssue {
+    id: string;
+    type: 'blocker' | 'warning';
+    title: string;
+    description: string;
+    sectionTitle: string;
+    sectionId: string;
+    sectionNumber: string;
+    sectionOwner: string;
+    raisedBy?: string;
+    dueDate?: string;
+    reference?: string;
+  }
+
+  const allFindings: FlatIssue[] = [];
+  const seenKeys = new Set<string>();
+  sections.forEach((sec) => {
+    const issues = sectionAiIssues[sec.id] || [];
+    const openIssues = issues.filter((i: any) => i.status === 'open' || !i.status);
+    openIssues.forEach((issue: any) => {
+      const dedupeKey = `${sec.id}:${issue.id || issue.description}`;
+      if (seenKeys.has(dedupeKey)) return;
+      seenKeys.add(dedupeKey);
+      allFindings.push({
+        id: `${sec.id}-${issue.id || Math.random()}`,
+        type: issue.severity === 'blocker' ? 'blocker' : 'warning',
+        title: issue.subsection || (issue.description?.substring(0, 60) ?? 'Issue'),
+        description: issue.description || '',
+        sectionTitle: sec.title,
+        sectionId: sec.id,
+        sectionNumber: sec.order?.toString() ?? '',
+        sectionOwner: sec.roles?.contentOwner?.[0]?.name || 'Unassigned',
+        raisedBy: issue.raisedBy,
+        dueDate: issue.dueDate,
+        reference: issue.reference,
       });
-    }
+    });
   });
 
-  // Filter based on active tab
-  const myIssues = allFindings.filter(f => !f.resolved); // In real app, filter by current user's responsibility
-  const displayedIssues = activeTab === 'my-issues' ? myIssues : allFindings.filter(f => !f.resolved);
+  (crossConsistencyIssues || []).forEach((issue: any, i: number) => {
+    allFindings.push({
+      id: `cross-consistency-${i}`,
+      type: issue.severity === 'blocker' ? 'blocker' : 'warning',
+      title: `${issue.section1} → ${issue.section2}`,
+      description: issue.description || '',
+      sectionTitle: issue.section1 || 'Cross-section',
+      sectionId: '',
+      sectionNumber: '',
+      sectionOwner: 'System',
+    });
+  });
 
-  const getSeverityConfig = (type: string) => {
-    switch (type) {
-      case 'blocker':
-        return {
-          label: 'Blocker',
-          bgColor: '#FEF2F2',
-          borderColor: '#DC2626',
-          labelColor: '#DC2626',
-          titleColor: '#1E1B4B',
-          descColor: '#4B5563',
-          navigateColor: '#DC2626',
-        };
-      case 'warning':
-        return {
-          label: 'Warning',
-          bgColor: '#FFFBEB',
-          borderColor: '#F59E0B',
-          labelColor: '#F59E0B',
-          titleColor: '#1E1B4B',
-          descColor: '#4B5563',
-          navigateColor: '#F59E0B',
-        };
-      default:
-        return {
-          label: 'Warning',
-          bgColor: '#FFFBEB',
-          borderColor: '#F59E0B',
-          labelColor: '#F59E0B',
-          titleColor: '#1E1B4B',
-          descColor: '#4B5563',
-          navigateColor: '#F59E0B',
-        };
-    }
-  };
-
-  const calculateDaysRemaining = (dueDate: string) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const due = new Date(dueDate);
-    due.setHours(0, 0, 0, 0);
-    const diffTime = due.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays < 0) return 'Overdue';
-    if (diffDays === 0) return 'Due today';
-    if (diffDays === 1) return '1 day';
-    return `${diffDays} days`;
-  };
+  const unresolvedFindings = allFindings;
+  const myIssues = unresolvedFindings.filter(f => {
+    const section = sections.find(s => s.id === f.sectionId);
+    return section?.roles.contentOwner.some(u => u.id === currentUser.id) ?? false;
+  });
+  const displayedIssues = activeTab === 'my-issues' ? myIssues : unresolvedFindings;
 
   return (
     <div className="p-4">
@@ -121,7 +117,7 @@ export function QualitySystemPanel({
           }`}
           style={{ fontSize: '12px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
         >
-          All issues ({allFindings.filter(f => !f.resolved).length})
+          All issues ({unresolvedFindings.length})
         </button>
       </div>
 
@@ -129,66 +125,81 @@ export function QualitySystemPanel({
       <div className="space-y-3">
         {displayedIssues.length > 0 ? (
           displayedIssues.map((finding) => {
-            const config = getSeverityConfig(finding.type);
-            
+            const isBlocker = finding.type === 'blocker';
+            const bgColor = isBlocker ? 'bg-rose-50' : 'bg-amber-50';
+            const borderColor = isBlocker ? 'border-rose-200' : 'border-amber-200';
+            const hoverColor = isBlocker ? 'hover:bg-rose-50' : 'hover:bg-amber-100';
+            const badgeBg = isBlocker ? 'bg-rose-50' : 'bg-amber-100';
+            const badgeText = isBlocker ? 'text-rose-700' : 'text-amber-700';
+            const linkColor = isBlocker ? 'text-rose-700 hover:text-rose-800' : 'text-amber-700 hover:text-amber-900';
+            const capitalizedTitle = finding.title
+              ? finding.title.charAt(0).toUpperCase() + finding.title.slice(1)
+              : 'Issue';
+
             return (
-              <button
+              <div
                 key={finding.id}
                 onClick={() => onNavigateToSection(finding.sectionId)}
-                className="w-full text-left p-4 rounded transition-colors cursor-pointer"
-                style={{
-                  backgroundColor: config.bgColor,
-                  borderLeft: `4px solid ${config.borderColor}`,
-                  border: `1px solid ${config.borderColor}`,
-                  borderLeftWidth: '4px',
-                }}
+                className={`p-3 rounded border ${bgColor} ${borderColor} cursor-pointer ${hoverColor} transition-colors`}
               >
-                {/* Severity Label */}
-                <div className="mb-2" style={{ color: config.labelColor, fontSize: '12px', fontWeight: 600, fontFamily: 'system-ui, sans-serif' }}>
-                  {config.label}
-                </div>
-
-                {/* Title */}
-                <div className="mb-2" style={{ color: config.titleColor, fontSize: '14px', fontWeight: 500, fontFamily: 'system-ui, sans-serif', lineHeight: '1.4' }}>
-                  {finding.title}
-                </div>
-
-                {/* Description */}
-                <div className="mb-3" style={{ color: config.descColor, fontSize: '13px', fontWeight: 400, fontFamily: 'system-ui, sans-serif', lineHeight: '1.5' }}>
-                  {finding.description}
-                </div>
-
-                {/* Metadata Section */}
-                <div className="space-y-1.5 mb-3">
-                  <div className="flex justify-between items-center">
-                    <span style={{ color: '#6B7280', fontSize: '12px', fontFamily: 'system-ui, sans-serif' }}>Affected section</span>
-                    <span style={{ color: '#111827', fontSize: '12px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}>{finding.sectionNumber}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span style={{ color: '#6B7280', fontSize: '12px', fontFamily: 'system-ui, sans-serif' }}>Section owner</span>
-                    <span style={{ color: '#111827', fontSize: '12px', fontFamily: 'system-ui, sans-serif' }}>{finding.sectionOwner || 'Dr. Marcus Rivera'}</span>
-                  </div>
-                  {finding.dueDate && (
-                    <div className="flex justify-between items-center">
-                      <span style={{ color: '#6B7280', fontSize: '12px', fontFamily: 'system-ui, sans-serif' }}>Due in</span>
-                      <span style={{ color: '#111827', fontSize: '12px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}>
-                        {calculateDaysRemaining(finding.dueDate)}
+                <div className="flex items-start gap-2 mb-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${badgeBg} ${badgeText}`}>
+                        {isBlocker ? 'Blocker' : 'Warning'}
                       </span>
+                      {finding.raisedBy?.toLowerCase().includes('system') && (
+                        <span className="text-xs text-slate-500">AI Regulatory Review</span>
+                      )}
                     </div>
-                  )}
+                    <div className="text-xs text-slate-900 mb-1">{capitalizedTitle}</div>
+                    <p className="text-xs text-slate-600 leading-relaxed mb-2">
+                      {finding.description}
+                    </p>
+                    <div className={`pt-2 border-t ${borderColor} space-y-1.5`}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-slate-500">Affected section</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onNavigateToSection(finding.sectionId); }}
+                          className={`text-xs ${linkColor} hover:underline`}
+                        >
+                          {finding.sectionNumber}
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-slate-500">Section owner</span>
+                        <span className="text-xs text-slate-700">{finding.sectionOwner}</span>
+                      </div>
+                      {finding.dueDate && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-slate-500">Due in</span>
+                          <span className="text-xs text-slate-700 font-medium">{finding.dueDate}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-
-                {/* Navigate Link */}
-                <div className="flex items-center gap-1" style={{ color: config.navigateColor, fontSize: '13px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}>
-                  Navigate to Section {finding.sectionNumber}
-                  <ChevronRight className="w-3.5 h-3.5" />
+                <div className="flex items-center justify-between mt-2">
+                  <div
+                    onClick={(e) => { e.stopPropagation(); onNavigateToSection(finding.sectionId); }}
+                    className={`text-xs ${linkColor} flex items-center gap-1 font-medium cursor-pointer`}
+                  >
+                    <span>Navigate to Section {finding.sectionNumber}</span>
+                    <ChevronRight className="w-3 h-3" />
+                  </div>
                 </div>
-              </button>
+              </div>
             );
           })
         ) : (
-          <div className="text-center py-6 text-[#9CA3AF]" style={{ fontSize: '12px', fontFamily: 'system-ui, sans-serif' }}>
-            No issues detected
+          <div className="p-6 text-center">
+            <CheckCircle2 className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+            <p className="text-sm text-slate-700 mb-1">No issues found</p>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              {activeTab === 'my-issues'
+                ? 'You have no open issues assigned to your sections.'
+                : 'Generate report or edit sections to see AI analysis.'}
+            </p>
           </div>
         )}
       </div>

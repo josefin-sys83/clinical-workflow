@@ -3,6 +3,12 @@ import { CheckCircle2, Circle, FileText, Upload, Lock, Sparkles, AlertCircle } f
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate, useParams } from 'react-router-dom';
 import { postAudit } from '@/shared/api/audit';
+import { transitionWorkflow } from '@/shared/services/workflowService';
+import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { theme } from '@/app/theme';
+import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
+import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+import { AIInsightBadge } from '@/shared/components/AIInsightBadge';
 
 
 interface ReadinessItem {
@@ -30,6 +36,7 @@ export function SynopsisPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [synopsisStatus, setSynopsisStatus] = useState<SynopsisStatus>('not-started');
+  const { protocolFinalized, isLocked, latestAmendment } = useProtocolStatus(projectId);
 
   const [readinessChecklist, setReadinessChecklist] = useState<ReadinessItem[]>([
     { id: '1', label: 'Synopsis document uploaded', status: 'missing' },
@@ -156,6 +163,7 @@ export function SynopsisPage() {
       if (maxStep < 3) localStorage.setItem(`maxStep_${projectId}`, '3');
       await saveToBackend({ uploadedFileName, readinessChecklist, aiReviewComplete, synopsisStatus: 'completed' });
       await postAudit(projectId!, 'synopsis.step.completed', 'Synopsis step completed — all readiness criteria met', 'synopsis', 'unknown', { uploadedFileName, passedCriteria: readinessChecklist.filter(i => i.status === 'complete').length });
+      transitionWorkflow({ projectId: projectId!, stepId: 'synopsis', to: 'approved' }).catch(() => {});
       navigate(`/projects/${projectId}/workflow/scope`);
     } else {
       alert('Please complete all readiness checklist items before proceeding.');
@@ -188,6 +196,7 @@ export function SynopsisPage() {
                     <div className="flex-shrink-0">
                       {step.status === 'completed' && <CheckCircle2 className="w-5 h-5 text-blue-600" />}
                       {step.status === 'active' && (
+                        // eslint-disable-next-line theme-colors/no-raw-colors -- nav step number badge, not semantic status
                         <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-medium">
                           {index + 1}
                         </div>
@@ -213,6 +222,15 @@ export function SynopsisPage() {
       </aside>
 
       <div className="flex-1 flex flex-col">
+        <MilestoneBanner projectId={projectId!} currentStepId="synopsis" />
+        {protocolFinalized && (
+          <div className="mx-6 mt-4">
+            <ProtocolFinalizedBanner
+              projectId={projectId!}
+              latestAmendment={latestAmendment}
+            />
+          </div>
+        )}
         <header className="bg-white border-b border-slate-200">
           <div className="max-w-7xl mx-auto px-6 py-3">
             <div className="flex items-center justify-between">
@@ -223,17 +241,23 @@ export function SynopsisPage() {
         </header>
 
         <main className="flex-1 overflow-auto">
+          <div className={isLocked ? 'pointer-events-none opacity-50 select-none' : ''}>
           <div className="max-w-7xl mx-auto px-6 py-8">
             <div className="space-y-6">
               <section className="bg-white rounded-lg border border-slate-200 p-6">
                 <h2 className="text-lg font-semibold text-slate-900 mb-2">Synopsis Document</h2>
-                <p className="text-sm text-slate-500 mb-6">Upload your synopsis document. Our AI will analyze it and check each readiness criterion automatically.</p>
+                <p className="text-sm text-slate-500 mb-4">Upload your synopsis document.</p>
+                <AIInsightBadge
+                  className="mb-6"
+                  title="AI-Powered Analysis"
+                  description="Our AI will analyze it and check each readiness criterion automatically."
+                />
                 {!uploadedFile && !uploadedFileName ? (
                   <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center">
                     <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
                     <p className="text-sm font-medium text-slate-700 mb-1">Upload Synopsis Document</p>
                     <p className="text-xs text-slate-500 mb-4">PDF or DOCX format • Max 10 MB</p>
-                    <label className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer transition-colors">
+                    <label className={`inline-flex items-center px-4 py-2 ${theme.button.primary} rounded-md cursor-pointer transition-colors`}>
                       <Upload className="w-4 h-4 mr-2" />
                       Choose File
                       <input type="file" accept=".pdf,.docx,.doc" onChange={handleFileUpload} className="hidden" />
@@ -253,16 +277,16 @@ export function SynopsisPage() {
                         <p className="text-xs text-slate-500">Click to open file</p>
                       </div>
                       {isAnalyzing ? (
-                        <div className="flex items-center gap-2 text-blue-600">
+                        <div className="flex items-center gap-2 text-purple-600 text-sm font-medium">
                           <Sparkles className="w-4 h-4 animate-pulse" />
-                          <span className="text-xs font-medium">AI analyzing...</span>
+                          AI analyzing...
                         </div>
                       ) : aiReviewComplete ? (
                         <CheckCircle2 className="w-5 h-5 text-blue-600" />
                       ) : null}
                     </div>
                     {analysisError && (
-                      <div className="flex items-center gap-2 p-3 bg-red-50 rounded-md text-red-600 text-sm">
+                      <div className={`flex items-center gap-2 p-3 ${theme.status.error} rounded-md text-sm`}>
                         <AlertCircle className="w-4 h-4" />
                         {analysisError}
                       </div>
@@ -277,20 +301,26 @@ export function SynopsisPage() {
               </section>
 
               <section className="bg-white rounded-lg border border-slate-200 p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
+                <div className="mb-6">
+                  <div className="flex items-center justify-between">
                     <h3 className="text-lg font-semibold text-slate-900">Readiness & Dependencies</h3>
-                    <p className="text-sm text-slate-500 mt-1">
-                      {aiReviewComplete
-                        ? `${readinessChecklist.filter(i => i.status === 'complete').length} of ${readinessChecklist.length} criteria met`
-                        : 'Upload a document to start AI analysis'}
-                    </p>
+                    {isAnalyzing && (
+                      <div className="flex items-center gap-2 text-purple-600 text-sm font-medium">
+                        <Sparkles className="w-4 h-4 animate-pulse" />
+                        AI analyzing...
+                      </div>
+                    )}
                   </div>
-                  {isAnalyzing && (
-                    <div className="flex items-center gap-2 text-blue-600 text-sm">
-                      <Sparkles className="w-4 h-4 animate-pulse" />
-                      Analyzing with AI...
-                    </div>
+                  {aiReviewComplete ? (
+                    <p className="text-sm text-slate-500 mt-1">
+                      {`${readinessChecklist.filter(i => i.status === 'complete').length} of ${readinessChecklist.length} criteria met`}
+                    </p>
+                  ) : (
+                    <AIInsightBadge
+                      className="mt-3"
+                      title="AI Analysis"
+                      description="Upload a document to start AI analysis"
+                    />
                   )}
                 </div>
                 <div className="space-y-3 mb-4">
@@ -328,7 +358,7 @@ export function SynopsisPage() {
                     onClick={handleCompleteSynopsis}
                     disabled={!allChecked}
                     className={`px-6 py-3 rounded-lg font-medium transition-all whitespace-nowrap ml-4 ${
-                      allChecked ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      allChecked ? theme.button.primary : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                     }`}
                   >
                     Complete Synopsis
@@ -337,6 +367,7 @@ export function SynopsisPage() {
               </section>
             </div>
           </div>
+          </div>{/* end protocolFinalized overlay */}
         </main>
       </div>
     </div>

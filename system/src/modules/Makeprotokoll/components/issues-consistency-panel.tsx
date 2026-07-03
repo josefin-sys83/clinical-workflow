@@ -162,7 +162,7 @@ export function IssuesConsistencyPanel({ onReviewDetailsClick, onOpenSection, fi
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'blocker':
-        return 'border-red-300 bg-red-50';
+        return 'border-rose-300 bg-rose-50';
       case 'high':
         return 'border-orange-200 bg-orange-50';
       case 'medium':

@@ -54,10 +54,10 @@ export function AuditTrail({ entries, title = "Audit log" }: AuditTrailProps) {
   const getDomainColor = (domain: AuditEntry["domain"]) => {
     const colors = {
       'Project': 'bg-blue-50 text-blue-700 border-blue-200',
-      'Role': 'bg-green-50 text-green-700 border-green-200',
+      'Role': 'bg-blue-50 text-blue-700 border-blue-200',
       'Scope': 'bg-purple-50 text-purple-700 border-purple-200',
       'Requirement': 'bg-orange-50 text-orange-700 border-orange-200',
-      'Content': 'bg-teal-50 text-teal-700 border-teal-200',
+      'Content': 'bg-orange-50 text-orange-800 border-orange-200',
       'Review': 'bg-yellow-50 text-yellow-700 border-yellow-200',
       'Approval': 'bg-emerald-50 text-emerald-700 border-emerald-200'
     };

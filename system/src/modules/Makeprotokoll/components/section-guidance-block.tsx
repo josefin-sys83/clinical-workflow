@@ -196,12 +196,12 @@ export function SectionGuidanceBlock({
 
       {/* AI Notice - Only for Draft - More subtle */}
       {status === 'Draft' && (
-        <div className="px-4 py-2 bg-blue-50/50 border-t border-blue-100/50">
+        <div className="p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
           <div className="flex items-center gap-2">
-            <div className="w-3.5 h-3.5 bg-blue-600 text-white rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+            <div className="w-3.5 h-3.5 bg-purple-600 text-white rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0">
               AI
             </div>
-            <span className="text-xs text-blue-800">
+            <span className="text-xs text-purple-800">
               AI-generated draft • Editable until approved • All edits logged
             </span>
           </div>

@@ -21,7 +21,7 @@ export function DocumentScrollIndicator({ issues, onIssueClick }: DocumentScroll
       case 'conflict':
         return 'bg-amber-600';
       case 'regulatory':
-        return 'bg-red-500';
+        return 'bg-rose-500';
       default:
         return 'bg-slate-400';
     }

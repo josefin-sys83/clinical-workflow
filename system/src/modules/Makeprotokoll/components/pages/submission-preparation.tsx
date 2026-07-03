@@ -39,14 +39,14 @@ export function SubmissionPreparation({ onBackToProtocol, projectData }: Submiss
       case 'Ready':
       case 'Filed':
       case 'Pass':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'Warn':
         return <AlertCircle className="w-4 h-4 text-amber-600" />;
       case 'Missing':
       case 'Block':
-        return <AlertCircle className="w-4 h-4 text-red-600" />;
+        return <AlertCircle className="w-4 h-4 text-rose-700" />;
       case 'Signed':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'Pending':
         return <Clock className="w-4 h-4 text-slate-400" />;
       default:
@@ -101,7 +101,7 @@ export function SubmissionPreparation({ onBackToProtocol, projectData }: Submiss
                     <h2 className="text-sm font-semibold text-slate-900">eTMF Package</h2>
                   </div>
                   {hasMissingItems && (
-                    <span className="text-xs text-red-600 font-medium">Action Required</span>
+                    <span className="text-xs text-rose-700 font-medium">Action Required</span>
                   )}
                 </div>
                 <div className="p-6">
@@ -117,9 +117,9 @@ export function SubmissionPreparation({ onBackToProtocol, projectData }: Submiss
                         </div>
                         <span className={`text-xs font-medium ${
                           item.status === 'Ready' || item.status === 'Filed' 
-                            ? 'text-green-700' 
+                            ? 'text-blue-700' 
                             : item.status === 'Missing'
-                            ? 'text-red-700'
+                            ? 'text-rose-700'
                             : 'text-slate-600'
                         }`}>
                           {item.status}
@@ -196,7 +196,7 @@ export function SubmissionPreparation({ onBackToProtocol, projectData }: Submiss
                           {getStatusIcon(profile.validation)}
                           <span className={`text-xs font-medium ${
                             profile.validation === 'Pass' 
-                              ? 'text-green-700' 
+                              ? 'text-blue-700' 
                               : 'text-amber-700'
                           }`}>
                             {profile.validation}

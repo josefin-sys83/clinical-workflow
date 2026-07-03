@@ -16,7 +16,10 @@ export function SectionCompletenessStatus({ elements, sectionTitle }: SectionCom
 
   const verifiedCount = elements.filter(el => el.status === 'verified').length;
   const totalCount = elements.length;
-  const isComplete = verifiedCount === totalCount;
+  const allVerified = verifiedCount === totalCount;
+
+  const statusLabel = allVerified ? 'Complete' : `${verifiedCount}/${totalCount}`;
+  const statusColor = allVerified ? '#2563EB' : '#111827';
 
   const getStatusIcon = (status: 'verified' | 'partially-covered' | 'not-yet-verified') => {
     switch (status) {
@@ -32,9 +35,10 @@ export function SectionCompletenessStatus({ elements, sectionTitle }: SectionCom
   const getStatusText = (status: 'verified' | 'partially-covered' | 'not-yet-verified', element: CompletenessElement) => {
     switch (status) {
       case 'verified':
+        if (!element.verifiedBy?.name) return null;
         return (
           <div className="text-[#6B7280]" style={{ fontSize: '11px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}>
-            Verified by {element.verifiedBy?.name || 'Unknown'} on {element.verificationDate || 'Unknown date'}
+            Verified by {element.verifiedBy.name}{element.verificationDate ? ` on ${new Date(element.verificationDate).toLocaleDateString()}` : ''}
           </div>
         );
       case 'partially-covered':
@@ -64,11 +68,10 @@ export function SectionCompletenessStatus({ elements, sectionTitle }: SectionCom
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span 
-            className={isComplete ? "text-[#2563EB]" : "text-[#111827]"}
-            style={{ fontSize: '12px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
+          <span
+            style={{ fontSize: '12px', fontWeight: 500, fontFamily: 'system-ui, sans-serif', color: statusColor }}
           >
-            {isComplete ? 'Complete' : `${verifiedCount}/${totalCount}`}
+            {statusLabel}
           </span>
           {isExpanded ? (
             <ChevronDown className="w-4 h-4 text-[#6B7280]" />

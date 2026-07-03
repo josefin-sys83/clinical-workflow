@@ -35,7 +35,7 @@ export function CommentThread({ comment, onResolve, onReply, isNested = false }:
     if (role.includes('Clinical')) return 'text-blue-700 bg-blue-50';
     if (role.includes('Regulatory')) return 'text-purple-700 bg-purple-50';
     if (role.includes('Writer')) return 'text-slate-700 bg-slate-100';
-    if (role.includes('QA') || role.includes('Compliance')) return 'text-green-700 bg-green-50';
+    if (role.includes('QA') || role.includes('Compliance')) return 'text-blue-700 bg-blue-50';
     if (role.includes('Biostatistician')) return 'text-amber-700 bg-amber-50';
     return 'text-slate-700 bg-slate-100';
   };
@@ -56,7 +56,7 @@ export function CommentThread({ comment, onResolve, onReply, isNested = false }:
               </span>
               <span className="text-xs text-slate-500">{comment.timestamp}</span>
               {comment.status === 'resolved' && (
-                <span className="flex items-center gap-1 text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+                <span className="flex items-center gap-1 text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full">
                   <CheckCircle className="w-3 h-3" />
                   Resolved
                 </span>
@@ -79,7 +79,7 @@ export function CommentThread({ comment, onResolve, onReply, isNested = false }:
             </button>
             {onResolve && (
               <button 
-                className="text-green-700 hover:text-green-800 font-medium"
+                className="text-blue-700 hover:text-blue-700 font-medium"
                 onClick={() => onResolve(comment.id)}
               >
                 Mark Resolved

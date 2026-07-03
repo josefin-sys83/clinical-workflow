@@ -92,7 +92,7 @@ export function RolesResponsibilities({ onContinue, onBack }: RolesResponsibilit
   const getInviteStatusBadge = (status: string) => {
     switch (status) {
       case 'Accepted':
-        return <span className="flex items-center gap-1 text-green-700"><Check className="w-3 h-3" /> Accepted</span>;
+        return <span className="flex items-center gap-1 text-blue-700"><Check className="w-3 h-3" /> Accepted</span>;
       case 'Sent':
         return <span className="flex items-center gap-1 text-blue-700"><Mail className="w-3 h-3" /> Sent</span>;
       case 'Pending':
@@ -166,7 +166,7 @@ export function RolesResponsibilities({ onContinue, onBack }: RolesResponsibilit
                         <td className="px-4 py-3 text-slate-600">{member.email}</td>
                         <td className="px-4 py-3">
                           {member.mandatory ? (
-                            <span className="text-red-600 font-medium">Yes</span>
+                            <span className="text-rose-700 font-medium">Yes</span>
                           ) : (
                             <span className="text-slate-500">No</span>
                           )}

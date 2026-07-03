@@ -116,7 +116,7 @@ export function NextActionIndicator({
       case 'action':
         return 'bg-blue-50 border-blue-200';
       case 'ready':
-        return 'bg-green-50 border-green-200';
+        return 'bg-blue-50 border-blue-200';
       case 'waiting':
         return 'bg-slate-50 border-slate-200';
       case 'info':
@@ -131,7 +131,7 @@ export function NextActionIndicator({
       case 'action':
         return 'text-blue-900';
       case 'ready':
-        return 'text-green-900';
+        return 'text-blue-900';
       case 'waiting':
         return 'text-slate-700';
       case 'info':
@@ -146,7 +146,7 @@ export function NextActionIndicator({
       case 'action':
         return 'text-blue-600';
       case 'ready':
-        return 'text-green-600';
+        return 'text-indigo-600';
       case 'waiting':
         return 'text-slate-400';
       case 'info':

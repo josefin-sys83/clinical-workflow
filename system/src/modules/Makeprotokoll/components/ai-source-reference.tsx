@@ -26,7 +26,7 @@ export function AISourceReference({ sources, generatedDate, aiVersion }: AISourc
       case 'intended-use':
         return 'text-purple-700 bg-purple-50 border-purple-200';
       case 'objectives':
-        return 'text-green-700 bg-green-50 border-green-200';
+        return 'text-blue-700 bg-blue-50 border-blue-200';
       case 'regulatory':
         return 'text-slate-700 bg-slate-50 border-slate-200';
       case 'metadata':
@@ -37,34 +37,34 @@ export function AISourceReference({ sources, generatedDate, aiVersion }: AISourc
   };
 
   return (
-    <div className="border border-blue-200 rounded bg-blue-50/50">
+    <div className="bg-purple-50 border-l-4 border-purple-400 rounded">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full p-3 text-left hover:bg-blue-100/50 transition-colors"
+        className="w-full p-3 text-left hover:bg-purple-100/50 transition-colors"
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 bg-blue-600 text-white rounded flex items-center justify-center text-xs font-bold">
+            <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold">
               AI
             </div>
             <div>
-              <div className="text-xs font-medium text-blue-900">
+              <div className="text-xs font-medium text-purple-900">
                 AI-generated initial draft
               </div>
-              <div className="text-xs text-blue-700">
+              <div className="text-xs text-purple-700">
                 Based on {sources.length} approved source{sources.length > 1 ? 's' : ''} • {generatedDate}
               </div>
             </div>
           </div>
-          <ChevronDown 
-            className={`w-4 h-4 text-blue-600 transition-transform ${expanded ? '' : '-rotate-90'}`}
+          <ChevronDown
+            className={`w-4 h-4 text-purple-600 transition-transform ${expanded ? '' : '-rotate-90'}`}
           />
         </div>
       </button>
 
       {expanded && (
         <div className="px-3 pb-3 space-y-3">
-          <div className="p-3 bg-white border border-blue-200 rounded">
+          <div className="p-3 bg-white border border-purple-200 rounded">
             <div className="text-xs font-medium text-slate-900 mb-2">Source Documents</div>
             <div className="space-y-2">
               {sources.map((source, idx) => (
@@ -95,7 +95,7 @@ export function AISourceReference({ sources, generatedDate, aiVersion }: AISourc
             </div>
           </div>
 
-          <div className="p-3 bg-white border border-blue-200 rounded">
+          <div className="p-3 bg-white border border-purple-200 rounded">
             <div className="text-xs font-medium text-slate-900 mb-2">Generation Details</div>
             <div className="space-y-1 text-xs text-slate-600">
               <div className="flex justify-between">

@@ -39,7 +39,7 @@ export function RoleSuggestions({ suggestions, onSelect, currentAssignment }: Ro
               disabled={isCurrentlyAssigned}
               className={`group relative flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg transition-all ${
                 isCurrentlyAssigned
-                  ? 'bg-green-100 border-2 border-green-300 text-green-800 cursor-default'
+                  ? 'bg-blue-50 border-2 border-indigo-300 text-blue-700 cursor-default'
                   : 'bg-white border border-blue-300 text-blue-900 hover:bg-blue-100 hover:border-blue-400'
               }`}
             >
@@ -63,7 +63,7 @@ export function RoleSuggestions({ suggestions, onSelect, currentAssignment }: Ro
               )}
               
               {isCurrentlyAssigned && (
-                <span className="text-xs text-green-700 font-medium">✓ Assigned</span>
+                <span className="text-xs text-blue-700 font-medium">✓ Assigned</span>
               )}
             </button>
           );

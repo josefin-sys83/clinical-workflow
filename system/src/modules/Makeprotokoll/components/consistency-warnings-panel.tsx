@@ -45,7 +45,7 @@ export function ConsistencyWarningsPanel() {
   const getSeverityStyles = (severity: string) => {
     switch (severity) {
       case 'critical':
-        return 'bg-red-100 text-red-700 border-red-200';
+        return 'bg-rose-50 text-rose-700 border-rose-200';
       case 'warning':
         return 'bg-amber-100 text-amber-700 border-amber-200';
       case 'info':
@@ -64,7 +64,7 @@ export function ConsistencyWarningsPanel() {
         <h3 className="font-semibold text-slate-900">Consistency Checks</h3>
         <div className="flex items-center gap-2">
           {criticalCount > 0 && (
-            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded">
+            <span className="px-2 py-0.5 bg-rose-50 text-rose-700 text-xs font-medium rounded">
               {criticalCount} critical
             </span>
           )}
@@ -92,7 +92,7 @@ export function ConsistencyWarningsPanel() {
           >
             <div className="flex items-start gap-2 mb-2">
               <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                warning.severity === 'critical' ? 'text-red-700' :
+                warning.severity === 'critical' ? 'text-rose-700' :
                 warning.severity === 'warning' ? 'text-amber-700' :
                 'text-blue-700'
               }`} />
@@ -144,7 +144,7 @@ export function ConsistencyWarningsPanel() {
           </div>
           <div className="flex justify-between">
             <span>Must resolve before lock:</span>
-            <span className="font-medium text-red-700">{warnings.filter(w => w.actionRequired).length}</span>
+            <span className="font-medium text-rose-700">{warnings.filter(w => w.actionRequired).length}</span>
           </div>
         </div>
       </div>

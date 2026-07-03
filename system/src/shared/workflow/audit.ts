@@ -22,10 +22,12 @@ export interface AuditEvent {
   actor: {
     name: string;
     email: string;
+    role?: string;
   };
   summary: string;
   details?: string;
   reason?: string;
+  sectionTitle?: string;
   severity?: IssueSeverity;
   fromState?: DocumentLifecycleState;
   toState?: DocumentLifecycleState;

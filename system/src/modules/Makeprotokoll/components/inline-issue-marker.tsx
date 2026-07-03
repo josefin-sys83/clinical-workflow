@@ -43,10 +43,10 @@ export function InlineIssueMarker({ issue, onNavigateToIssuePanel }: InlineIssue
     switch (issue.severity) {
       case 'blocker':
         return {
-          marker: 'border-b-2 border-red-500 bg-red-50/30 hover:bg-red-50/60 cursor-pointer',
-          icon: 'text-red-600',
-          popover: 'border-red-500 bg-red-50',
-          badge: 'bg-red-100 text-red-700',
+          marker: 'border-b-2 border-rose-500 bg-rose-50/30 hover:bg-rose-50/60 cursor-pointer',
+          icon: 'text-rose-700',
+          popover: 'border-rose-500 bg-rose-50',
+          badge: 'bg-rose-50 text-rose-700',
           IconComponent: AlertCircle,
         };
       case 'warning':

@@ -92,9 +92,9 @@ export function eTMFPackagePanel({ protocolName, versionId, lastActivity }: eTMF
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'Ready':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'Missing':
-        return <AlertCircle className="w-4 h-4 text-red-600" />;
+        return <AlertCircle className="w-4 h-4 text-rose-700" />;
       case 'Filed':
         return <CheckCircle className="w-4 h-4 text-blue-600" />;
       default:
@@ -105,9 +105,9 @@ export function eTMFPackagePanel({ protocolName, versionId, lastActivity }: eTMF
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Ready':
-        return 'text-green-700 bg-green-50 border-green-200';
+        return 'text-blue-700 bg-blue-50 border-blue-200';
       case 'Missing':
-        return 'text-red-700 bg-red-50 border-red-200';
+        return 'text-rose-700 bg-rose-50 border-rose-200';
       case 'Filed':
         return 'text-blue-700 bg-blue-50 border-blue-200';
       default:
@@ -159,11 +159,11 @@ export function eTMFPackagePanel({ protocolName, versionId, lastActivity }: eTMF
         {/* Status Summary */}
         <div className="flex items-center gap-4 text-sm">
           <div className="flex items-center gap-1.5">
-            <CheckCircle className="w-4 h-4 text-green-600" />
+            <CheckCircle className="w-4 h-4 text-indigo-600" />
             <span className="text-slate-700">{readyCount} Ready</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <AlertCircle className="w-4 h-4 text-red-600" />
+            <AlertCircle className="w-4 h-4 text-rose-700" />
             <span className="text-slate-700">{missingCount} Missing</span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -242,14 +242,14 @@ export function eTMFPackagePanel({ protocolName, versionId, lastActivity }: eTMF
       {/* Actions */}
       <div className="px-5 py-4 bg-slate-50 border-t border-slate-200">
         {hasBlockers && (
-          <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-lg">
             <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-red-700 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="w-4 h-4 text-rose-700 mt-0.5 flex-shrink-0" />
               <div className="flex-1">
-                <div className="text-sm font-medium text-red-900 mb-0.5">
+                <div className="text-sm font-medium text-rose-800 mb-0.5">
                   Cannot generate filing pack
                 </div>
-                <p className="text-xs text-red-800">
+                <p className="text-xs text-rose-800">
                   {missingCount} required {missingCount === 1 ? 'document is' : 'documents are'} missing. Complete all items before generating eTMF pack.
                 </p>
               </div>

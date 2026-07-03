@@ -72,16 +72,16 @@ export function ReviewStateBanner({
 
   if (mode === 'Locked') {
     return (
-      <div className="bg-green-50 border-b border-green-200 px-6 py-4">
+      <div className="bg-blue-50 border-b border-blue-200 px-6 py-4">
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <Lock className="w-4 h-4 text-green-700" />
-              <span className="text-sm font-semibold text-green-900">
+              <Lock className="w-4 h-4 text-blue-700" />
+              <span className="text-sm font-semibold text-blue-900">
                 Protocol Approved & Locked
               </span>
             </div>
-            <div className="text-xs text-green-800 space-x-3">
+            <div className="text-xs text-blue-700 space-x-3">
               <span>Approved by {approvedBy} on {approvedAt}</span>
               <span>•</span>
               <span>Locked by {lockedBy} on {lockedAt}</span>
@@ -92,13 +92,13 @@ export function ReviewStateBanner({
                 </>
               )}
             </div>
-            <div className="mt-2 text-xs text-green-700 font-medium">
+            <div className="mt-2 text-xs text-blue-700 font-medium">
               This protocol is locked. Further changes require a formal amendment.
             </div>
           </div>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-green-100 border border-green-300 rounded-md">
-            <CheckCircle className="w-3.5 h-3.5 text-green-700" />
-            <span className="text-xs font-medium text-green-900">Locked</span>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 border border-blue-200 rounded-md">
+            <CheckCircle className="w-3.5 h-3.5 text-blue-700" />
+            <span className="text-xs font-medium text-blue-900">Locked</span>
           </div>
         </div>
       </div>

@@ -205,11 +205,11 @@ export function AuthorityExportsPanel({
   const getValidationIcon = (status: string) => {
     switch (status) {
       case 'Pass':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'Warning':
         return <AlertTriangle className="w-4 h-4 text-amber-600" />;
       case 'Blocker':
-        return <AlertCircle className="w-4 h-4 text-red-600" />;
+        return <AlertCircle className="w-4 h-4 text-rose-700" />;
       default:
         return null;
     }
@@ -218,11 +218,11 @@ export function AuthorityExportsPanel({
   const getValidationColor = (status: string) => {
     switch (status) {
       case 'Pass':
-        return 'text-green-700 bg-green-50 border-green-200';
+        return 'text-blue-700 bg-blue-50 border-blue-200';
       case 'Warning':
         return 'text-amber-700 bg-amber-50 border-amber-200';
       case 'Blocker':
-        return 'text-red-700 bg-red-50 border-red-200';
+        return 'text-rose-700 bg-rose-50 border-rose-200';
       default:
         return 'text-slate-700 bg-slate-50 border-slate-200';
     }
@@ -244,8 +244,8 @@ export function AuthorityExportsPanel({
       <div className="px-5 py-4 bg-slate-50 border-b border-slate-200">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded bg-green-100 flex items-center justify-center">
-              <FileDown className="w-4 h-4 text-green-700" />
+            <div className="w-8 h-8 rounded bg-blue-50 flex items-center justify-center">
+              <FileDown className="w-4 h-4 text-blue-700" />
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-900">Exports</h3>
@@ -308,7 +308,7 @@ export function AuthorityExportsPanel({
                   key={index}
                   className="flex items-center gap-2 text-sm py-1.5"
                 >
-                  <CheckCircle className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+                  <CheckCircle className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
                   <span className="text-slate-700">{doc.name}</span>
                 </div>
               ))}
@@ -323,7 +323,7 @@ export function AuthorityExportsPanel({
               </div>
               <div className="flex items-center gap-3 text-xs">
                 <div className="flex items-center gap-1">
-                  <CheckCircle className="w-3.5 h-3.5 text-green-600" />
+                  <CheckCircle className="w-3.5 h-3.5 text-indigo-600" />
                   <span className="text-slate-700">{passCount} Pass</span>
                 </div>
                 {warningCount > 0 && (
@@ -344,9 +344,9 @@ export function AuthorityExportsPanel({
                 <div
                   key={index}
                   className={`flex items-start gap-3 p-3 border rounded-lg ${
-                    result.status === 'Pass' ? 'bg-green-50/30' :
+                    result.status === 'Pass' ? 'bg-blue-50/30' :
                     result.status === 'Warning' ? 'bg-amber-50/30' :
-                    'bg-red-50/30'
+                    'bg-rose-50/30'
                   }`}
                 >
                   <div className="mt-0.5">{getValidationIcon(result.status)}</div>
@@ -378,14 +378,14 @@ export function AuthorityExportsPanel({
           {/* Actions */}
           <div className="px-5 py-4 bg-white">
             {hasBlockers && (
-              <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-lg">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-700 mt-0.5 flex-shrink-0" />
+                  <AlertCircle className="w-4 h-4 text-rose-700 mt-0.5 flex-shrink-0" />
                   <div className="flex-1">
-                    <div className="text-sm font-medium text-red-900 mb-0.5">
+                    <div className="text-sm font-medium text-rose-800 mb-0.5">
                       Cannot generate submission export
                     </div>
-                    <p className="text-xs text-red-800">
+                    <p className="text-xs text-rose-800">
                       {blockerCount} critical validation {blockerCount === 1 ? 'Issue' : 'Issues'} must be resolved before export.
                     </p>
                   </div>
@@ -429,7 +429,7 @@ export function AuthorityExportsPanel({
                   className={`px-5 py-2.5 text-sm rounded-md font-medium transition-colors flex items-center gap-2 ${
                     hasBlockers
                       ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                      : 'bg-green-600 text-white hover:bg-green-700'
+                      : 'bg-indigo-600 text-white hover:bg-indigo-700'
                   }`}
                 >
                   <FileDown className="w-4 h-4" />

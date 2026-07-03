@@ -32,7 +32,7 @@ function ensureWorkflow(projectId: string): Record<WorkflowStepId, StepState> {
 
       // Give the demo sensible defaults so UI actions map to valid transitions.
       if (s.id === 'protocol-review' || s.id === 'report-review') state = 'in_review';
-      if (s.id === 'protocol-pdf' || s.id === 'report-pdf') state = 'signed';
+      if (s.id === 'protocol-pdf') state = 'signed';
 
       steps[s.id] = { state, updatedAt: now };
     }
@@ -89,6 +89,43 @@ export function enableMockApi() {
     // Routes
     if (method === 'GET' && path === 'me') {
       return jsonResponse(currentUser);
+    }
+
+    // Settings
+    if (method === 'GET' && path === 'settings/me') {
+      return jsonResponse({
+        id: currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email,
+        system_role: 'admin',
+        timezone: 'Europe/Stockholm',
+        company_name: 'Demo Company',
+        company_id: 'company-001',
+      });
+    }
+
+    if (method === 'PATCH' && path === 'settings/me') {
+      return jsonResponse({ ok: true });
+    }
+
+    if (method === 'PATCH' && path === 'settings/password') {
+      return jsonResponse({ ok: true });
+    }
+
+    if (method === 'GET' && path === 'settings/company') {
+      return jsonResponse({ users: [], projects: [] });
+    }
+
+    if (method === 'POST' && path === 'settings/company/users') {
+      return jsonResponse({ id: 'user-new', name: '', email: '', system_role: 'author', is_active: true, created_at: new Date().toISOString() }, { status: 201 });
+    }
+
+    if (path.startsWith('settings/company/users/')) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (method === 'POST' && path === 'settings/support') {
+      return jsonResponse({ ok: true }, { status: 201 });
     }
 
     // Context
@@ -287,7 +324,7 @@ export function enableMockApi() {
       return jsonResponse(openItems);
     }
 
-    return notFound();
+    return originalFetch(input as any, init);
   };
 
   return () => {

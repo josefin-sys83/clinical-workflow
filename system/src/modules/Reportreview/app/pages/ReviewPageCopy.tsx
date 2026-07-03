@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { ReviewHeader } from '../components/ReviewHeader';
-import { SectionOverview } from '../components/SectionOverview';
 import { ReportContent } from '../components/ReportContent';
 import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
@@ -117,12 +116,6 @@ export default function ReviewPageCopy() {
 
   return (
     <div className="h-screen flex bg-neutral-50">
-      <SectionOverview
-        sections={reportSections}
-        activeSection={activeSection}
-        onSectionClick={handleSectionClick}
-      />
-
       <div className="flex-1 flex flex-col overflow-hidden">
         <ReviewHeader
           onViewAuditTrail={() => setShowAuditTrail(true)}

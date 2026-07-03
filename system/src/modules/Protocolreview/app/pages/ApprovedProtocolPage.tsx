@@ -20,8 +20,8 @@ export default function ApprovedProtocolPage() {
           <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-green-100">
-                  <CheckCircle2 className="w-5 h-5 text-green-700" />
+                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-blue-50">
+                  <CheckCircle2 className="w-5 h-5 text-blue-700" />
                 </div>
                 <div>
                   <h1 className="text-2xl font-semibold text-neutral-900">Protocol Approved</h1>
@@ -34,7 +34,7 @@ export default function ApprovedProtocolPage() {
                 <FileText className="w-4 h-4" />
                 Download PDF
               </button>
-              <button className="flex items-center gap-2 px-5 py-2.5 bg-blue-900 text-white text-sm font-medium rounded-md hover:bg-blue-950">
+              <button className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700">
                 Share Protocol
               </button>
             </div>
@@ -43,26 +43,26 @@ export default function ApprovedProtocolPage() {
       </header>
 
       {/* Approval Banner */}
-      <div className="bg-green-50 border-y border-green-200 px-12 py-4">
+      <div className="bg-blue-50 border-y border-blue-200 px-12 py-4">
         <div className="max-w-5xl mx-auto">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-2">
-                <User className="w-4 h-4 text-green-700" />
+                <User className="w-4 h-4 text-blue-700" />
                 <div>
-                  <p className="text-xs text-green-700 font-medium">Approved by</p>
-                  <p className="text-sm text-green-900">Dr. Emma Nilsson</p>
+                  <p className="text-xs text-blue-700 font-medium">Approved by</p>
+                  <p className="text-sm text-blue-900">Dr. Emma Nilsson</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-green-700" />
+                <Calendar className="w-4 h-4 text-blue-700" />
                 <div>
-                  <p className="text-xs text-green-700 font-medium">Approval date</p>
-                  <p className="text-sm text-green-900">{approvalDate} at {approvalTime}</p>
+                  <p className="text-xs text-blue-700 font-medium">Approval date</p>
+                  <p className="text-sm text-blue-900">{approvalDate} at {approvalTime}</p>
                 </div>
               </div>
             </div>
-            <div className="px-3 py-1.5 bg-green-200 text-green-900 text-xs font-medium rounded-full">
+            <div className="px-3 py-1.5 bg-blue-100 text-blue-900 text-xs font-medium rounded-full">
               APPROVED
             </div>
           </div>
@@ -132,8 +132,8 @@ export default function ApprovedProtocolPage() {
             </h3>
             <div className="bg-neutral-50 border border-neutral-200 rounded-lg p-6">
               <div className="flex items-start gap-4 mb-4">
-                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-green-100">
-                  <CheckCircle2 className="w-6 h-6 text-green-700" />
+                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-50">
+                  <CheckCircle2 className="w-6 h-6 text-blue-700" />
                 </div>
                 <div className="flex-1">
                   <p className="font-medium text-neutral-900">Dr. Emma Nilsson</p>

@@ -61,7 +61,7 @@ export function Review({ onRequestChanges, onApprove, projectData }: ReviewProps
   const getSeverityBadge = (severity: string) => {
     switch (severity) {
       case 'Blocker':
-        return 'bg-red-100 text-red-700 border-red-300';
+        return 'bg-rose-50 text-rose-700 border-rose-300';
       case 'High':
         return 'bg-amber-100 text-amber-700 border-amber-300';
       case 'Info':
@@ -78,7 +78,7 @@ export function Review({ onRequestChanges, onApprove, projectData }: ReviewProps
       case 'Needs Changes':
         return 'text-amber-700 bg-amber-50';
       case 'Blocked':
-        return 'text-red-700 bg-red-50';
+        return 'text-rose-700 bg-rose-50';
       case 'Info Only':
         return 'text-blue-700 bg-blue-50';
       default:
@@ -123,14 +123,14 @@ export function Review({ onRequestChanges, onApprove, projectData }: ReviewProps
 
             {/* Blocker Warning */}
             {hasBlockers && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-300 rounded-lg">
+              <div className="mb-6 p-4 bg-rose-50 border border-rose-300 rounded-lg">
                 <div className="flex items-start gap-3">
-                  <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <AlertTriangle className="w-5 h-5 text-rose-700 flex-shrink-0 mt-0.5" />
                   <div>
-                    <div className="text-sm font-medium text-red-900 mb-1">
+                    <div className="text-sm font-medium text-rose-800 mb-1">
                       Blocker Issues Detected
                     </div>
-                    <div className="text-xs text-red-800">
+                    <div className="text-xs text-rose-800">
                       Protocol cannot be approved until all blocker issues are resolved.
                     </div>
                   </div>
@@ -225,7 +225,7 @@ export function Review({ onRequestChanges, onApprove, projectData }: ReviewProps
               <button
                 onClick={onApprove}
                 disabled={hasBlockers}
-                className="px-5 py-2.5 text-sm font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 text-white hover:bg-green-700"
+                className="px-5 py-2.5 text-sm font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-600 text-white hover:bg-indigo-700"
               >
                 Approve Review Round
               </button>

@@ -1,59 +1,40 @@
-import { Clock } from 'lucide-react';
-
-type WorkflowStep = 
-  | 'project-setup'
-  | 'protocol-authoring'
-  | 'protocol-review'
-  | 'protocol-approval'
-  | 'report-authoring'
-  | 'report-review'
-  | 'report-approval';
-
 interface WorkflowProgressIndicatorProps {
-  currentStep: WorkflowStep;
+  currentStep: 'project-setup' | 'protocol-authoring' | 'protocol-review' | 'protocol-approval' | 'report-authoring' | 'report-review' | 'report-approval';
 }
 
-const WORKFLOW_STEPS: { id: WorkflowStep; label: string }[] = [
-  { id: 'project-setup', label: 'Project setup' },
-  { id: 'protocol-authoring', label: 'Protocol authoring' },
-  { id: 'protocol-review', label: 'Protocol review' },
-  { id: 'protocol-approval', label: 'Protocol approval' },
-  { id: 'report-authoring', label: 'Report authoring' },
-  { id: 'report-review', label: 'Report review' },
-  { id: 'report-approval', label: 'Report approval' },
-];
+export function WorkflowProgressIndicator({ currentStep }: WorkflowProgressIndicatorProps) {
+  const steps = [
+    { id: 'project-setup', label: 'Project setup' },
+    { id: 'protocol-authoring', label: 'Protocol authoring' },
+    { id: 'protocol-review', label: 'Protocol review' },
+    { id: 'protocol-approval', label: 'Protocol approval' },
+    { id: 'report-authoring', label: 'Report authoring' },
+    { id: 'report-review', label: 'Report review' },
+    { id: 'report-approval', label: 'Report approval' },
+  ];
 
-export function WorkflowProgressIndicator({
-  currentStep,
-          const isLast = index === WORKFLOW_STEPS.length - 1;
-
-          return (
-            <div key={step.id} className="flex items-center gap-2">
+  return (
+    <div className="bg-white border-b border-slate-200 px-6 py-3.5 relative">
+      <div className="flex items-center justify-center">
+        <div className="flex items-center gap-3 text-[13px]">
+          {steps.map((step, index) => (
+            <span key={step.id} className="contents">
               <span
-                className={`transition-all ${
-                  isActive
-                    ? 'font-semibold'
-                    : 'font-normal'
-                }`}
-                style={{
-                  fontSize: isActive ? '130%' : '100%',
-                  fontFamily: 'system-ui, sans-serif',
-                  color: isActive ? '#0F172A' : '#94A3B8',
-                }}
+                className={
+                  step.id === currentStep
+                    ? 'text-slate-900 font-semibold text-[17px]'
+                    : 'text-slate-400'
+                }
               >
                 {step.label}
               </span>
-              {!isLast && (
-                <span style={{ fontFamily: 'system-ui, sans-serif', color: '#94A3B8' }}>
-                  →
-                </span>
+              {index < steps.length - 1 && (
+                <span className="text-slate-400 mx-1">›</span>
               )}
-            </div>
-          );
-        })}
+            </span>
+          ))}
+        </div>
       </div>
-
-
     </div>
   );
 }

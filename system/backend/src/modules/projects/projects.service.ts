@@ -71,10 +71,26 @@ export class ProjectsService {
   async update(id: string, patch: { name?: string; description?: string; data?: any }): Promise<Project> {
     const now = new Date().toISOString();
 
-    // If data is provided, merge with existing data instead of overwriting
+    // If data is provided, merge with existing data instead of overwriting.
+    // Deep-merge one level so nested keys like `synopsis` are merged rather than replaced.
     if (patch.data) {
       const existing = await this.get(id);
-      const mergedData = { ...(existing.data || {}), ...patch.data };
+      const existingData = existing.data || {};
+      const mergedData: any = { ...existingData };
+      for (const key of Object.keys(patch.data)) {
+        if (
+          patch.data[key] !== null &&
+          typeof patch.data[key] === 'object' &&
+          !Array.isArray(patch.data[key]) &&
+          existingData[key] !== null &&
+          typeof existingData[key] === 'object' &&
+          !Array.isArray(existingData[key])
+        ) {
+          mergedData[key] = { ...existingData[key], ...patch.data[key] };
+        } else {
+          mergedData[key] = patch.data[key];
+        }
+      }
       await getPool().query(
         `update projects set 
           name=coalesce($2,name), 

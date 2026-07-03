@@ -44,8 +44,8 @@ export function ProtocolCompletionModal({
         {/* Header */}
         <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-              <CheckCircle className="w-6 h-6 text-green-600" />
+            <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center flex-shrink-0">
+              <CheckCircle className="w-6 h-6 text-indigo-600" />
             </div>
             <div className="flex-1">
               <h2 className="text-lg font-semibold text-slate-900 mb-1">
@@ -82,7 +82,7 @@ export function ProtocolCompletionModal({
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-600">Status:</span>
-                <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded border border-green-200">
+                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-xs font-medium rounded border border-blue-200">
                   All Sections Approved
                 </span>
               </div>

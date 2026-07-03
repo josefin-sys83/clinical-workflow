@@ -165,7 +165,7 @@ export function PersonAutocomplete({
                 </div>
                 {suggestion.projectCount && suggestion.projectCount > 1 && (
                   <div className="flex-shrink-0">
-                    <span className="inline-block px-2 py-0.5 text-xs font-medium text-green-700 bg-green-50 rounded">
+                    <span className="inline-block px-2 py-0.5 text-xs font-medium text-blue-700 bg-blue-50 rounded">
                       Used {suggestion.projectCount}x
                     </span>
                   </div>

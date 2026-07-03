@@ -59,8 +59,8 @@ export function ActionItemCard({ item, isBlocker, onItemClick }: ActionItemCardP
   };
 
   const getPriorityColor = () => {
-    if (isBlocker) return 'text-red-600 bg-red-50 border-red-200';
-    if (isOverdue) return 'text-red-600 bg-red-50 border-red-200';
+    if (isBlocker) return 'text-rose-700 bg-rose-50 border-rose-200';
+    if (isOverdue) return 'text-rose-700 bg-rose-50 border-rose-200';
     if (isDueSoon) return 'text-orange-600 bg-orange-50 border-orange-200';
     
     switch (item.priority) {
@@ -82,9 +82,9 @@ export function ActionItemCard({ item, isBlocker, onItemClick }: ActionItemCardP
       case 'Review':
         return 'bg-gray-50 text-gray-700 border border-gray-300';
       case 'Input needed':
-        return 'bg-teal-50 text-teal-700 border border-teal-200';
+        return 'bg-orange-50 text-orange-800 border border-orange-200';
       case 'Blocker':
-        return 'bg-red-50 text-red-700 border border-red-200';
+        return 'bg-rose-50 text-rose-700 border border-rose-200';
       default:
         return 'bg-gray-50 text-gray-700 border border-gray-200';
     }
@@ -96,7 +96,7 @@ export function ActionItemCard({ item, isBlocker, onItemClick }: ActionItemCardP
     if (isOverdue) {
       const daysOverdue = Math.abs(daysUntilDue!);
       return (
-        <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+        <div className="flex items-center gap-1.5 text-xs text-rose-700 font-medium">
           <AlertCircle className="h-3.5 w-3.5" />
           <span>{daysOverdue === 1 ? '1 day overdue' : `${daysOverdue} days overdue`}</span>
         </div>
@@ -105,7 +105,7 @@ export function ActionItemCard({ item, isBlocker, onItemClick }: ActionItemCardP
     
     if (daysUntilDue === 0) {
       return (
-        <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+        <div className="flex items-center gap-1.5 text-xs text-rose-700 font-medium">
           <Clock className="h-3.5 w-3.5" />
           <span>Due today</span>
         </div>
@@ -114,7 +114,7 @@ export function ActionItemCard({ item, isBlocker, onItemClick }: ActionItemCardP
     
     if (daysUntilDue === 1) {
       return (
-        <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+        <div className="flex items-center gap-1.5 text-xs text-rose-700 font-medium">
           <Clock className="h-3.5 w-3.5" />
           <span>Due tomorrow</span>
         </div>

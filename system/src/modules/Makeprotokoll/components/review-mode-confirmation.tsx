@@ -24,7 +24,7 @@ export function ReviewModeConfirmation({ isOpen, onClose, onConfirm, blockerCoun
         <div className="p-6">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
-              {hasIssues ? <AlertTriangle className="w-6 h-6 text-amber-600" /> : <CheckCircle2 className="w-6 h-6 text-green-600" />}
+              {hasIssues ? <AlertTriangle className="w-6 h-6 text-amber-600" /> : <CheckCircle2 className="w-6 h-6 text-blue-600" />}
               <h3 className="text-lg text-slate-900">{hasIssues ? 'Enter Review with Outstanding Issues?' : 'Enter Review Mode'}</h3>
             </div>
             <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded transition-colors">
@@ -37,9 +37,9 @@ export function ReviewModeConfirmation({ isOpen, onClose, onConfirm, blockerCoun
                 <p className="text-sm text-slate-700 leading-relaxed">You can proceed to Review Mode, but reviewers will be notified of the following:</p>
                 <div className="space-y-2">
                   {blockerCount > 0 && (
-                    <div className="p-3 bg-red-50 border border-red-200 rounded">
-                      <p className="text-xs font-medium text-red-900 mb-0.5">{blockerCount} Critical Blocker{blockerCount > 1 ? 's' : ''}</p>
-                      <p className="text-xs text-red-800">These issues may prevent approval and should be resolved during review.</p>
+                    <div className="p-3 bg-rose-50 border border-rose-200 rounded">
+                      <p className="text-xs font-medium text-rose-800 mb-0.5">{blockerCount} Critical Blocker{blockerCount > 1 ? 's' : ''}</p>
+                      <p className="text-xs text-rose-800">These issues may prevent approval and should be resolved during review.</p>
                     </div>
                   )}
                   {warningCount > 0 && (

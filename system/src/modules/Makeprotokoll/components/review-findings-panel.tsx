@@ -44,7 +44,7 @@ export function ReviewFindingsPanel({
   const getSeverityStyles = (severity: string) => {
     switch (severity) {
       case 'Blocker':
-        return 'bg-red-100 text-red-800 border-red-300';
+        return 'bg-rose-50 text-rose-800 border-rose-300';
       case 'High':
         return 'bg-orange-100 text-orange-800 border-orange-300';
       case 'Medium':
@@ -111,7 +111,7 @@ export function ReviewFindingsPanel({
             <button
               className={`px-2 py-1 text-xs rounded transition-colors ${
                 filter === 'resolved'
-                  ? 'bg-green-600 text-white'
+                  ? 'bg-indigo-600 text-white'
                   : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
               }`}
               onClick={() => setFilter('resolved')}
@@ -124,10 +124,10 @@ export function ReviewFindingsPanel({
 
       {/* Ready for Re-Review Banner */}
       {allResolved && (
-        <div className="px-4 py-3 bg-green-50 border-b border-green-200">
+        <div className="px-4 py-3 bg-blue-50 border-b border-blue-200">
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-green-700" />
-            <span className="text-sm font-medium text-green-800">
+            <CheckCircle2 className="w-4 h-4 text-blue-700" />
+            <span className="text-sm font-medium text-blue-700">
               All findings resolved – Ready for Re-Review
             </span>
           </div>
@@ -165,7 +165,7 @@ export function ReviewFindingsPanel({
                           {finding.severity}
                         </span>
                         {finding.status === 'Resolved' && (
-                          <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 border border-green-300 rounded">
+                          <span className="px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 rounded">
                             Resolved
                           </span>
                         )}
@@ -222,7 +222,7 @@ export function ReviewFindingsPanel({
                         )}
                         {finding.status === 'Open' && onResolveFinding && (
                           <button
-                            className="px-3 py-1 text-xs text-green-700 bg-green-50 rounded hover:bg-green-100 transition-colors"
+                            className="px-3 py-1 text-xs text-blue-700 bg-blue-50 rounded hover:bg-blue-50 transition-colors"
                             onClick={() => onResolveFinding(finding.id)}
                           >
                             Mark Resolved

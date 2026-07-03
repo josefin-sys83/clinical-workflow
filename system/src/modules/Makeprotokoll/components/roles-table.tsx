@@ -29,7 +29,7 @@ const roles: Role[] = [
     name: 'Dr. Michael Zhang',
     responsibility: 'Statistical validation',
     hasApprovalRights: true,
-    color: 'bg-green-600'
+    color: 'bg-indigo-600'
   },
   {
     role: 'Regulatory Affairs',
@@ -43,7 +43,7 @@ const roles: Role[] = [
     name: 'James Miller',
     responsibility: 'Procedures & feasibility',
     hasApprovalRights: false,
-    color: 'bg-teal-600'
+    color: 'bg-indigo-600'
   },
   {
     role: 'Safety Officer',

@@ -1,21 +1,34 @@
 import { useState, useEffect } from 'react';
-import { Lock, CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
 import { ReportSection, DataAsset, UploadedFile, User, AuditLogEntry, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus } from '../types';
 import { ReportNavigation } from '../components/ReportNavigation';
+import { WorkflowProgressIndicator } from '../components/WorkflowProgressIndicator';
 import { ReportContent } from '../components/ReportContent';
 import { RightSidebar } from '../components/RightSidebar';
-import { WorkflowProgressIndicator } from '../components/WorkflowProgressIndicator';
-import { AuditLogModal } from '../components/AuditLogModal';
+import { Button } from '@/shared/ui/button';
 import { DeviationsModal } from '../components/DeviationsModal';
 import { ProtocolAmendmentModal } from '../components/ProtocolAmendmentModal';
 import { ProtocolAmendmentsList } from '../components/ProtocolAmendmentsList';
-import { initialReportSections, mockDataAssets, mockProtocolSections, mockUploadedFiles, mockUsers, mockAuditLog, mockCompletenessStatus } from '../data/mockData';
+import { AmendmentModal } from '../../Makeprotokoll/components/AmendmentModal';
+
+import { initialReportSections, mockProtocolSections, mockUsers, mockAuditLog, mockCompletenessStatus } from '../data/mockData';
 import { generateSectionDraft } from '../services/aiService';
 import { validateReportContent } from '../services/validationService';
 import { generateAssetNarrative } from '../services/narrativeService';
 import { InsertedAsset } from '../types';
 import { Clock } from 'lucide-react';
+import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
+import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 
+function userFromRole(rawRoles: any[], roleTitle: string): User {
+  const role = rawRoles.find((r: any) => r.title === roleTitle);
+  const person = role?.assignedTo?.[0];
+  if (!person) return { id: roleTitle, name: 'Unassigned', email: '', role: roleTitle };
+  return { id: person.email || person.name, name: person.name, email: person.email || '', role: roleTitle };
+}
+ 
 // Helper function to create audit log entries
 function createAuditEntry(
   domain: AuditLogEntry['domain'],
@@ -40,17 +53,231 @@ function createAuditEntry(
 }
 
 export function ReportWorkspace() {
+  const { projectId } = useParams();
+  const { protocolFinalized, latestAmendment: statusLatestAmendment } = useProtocolStatus(projectId);
+  const apiBase = '';
+
+  const [projectData, setProjectData] = useState<any>(null);
+  const [scope, setScope] = useState<any>(null);
+  const [rawRoles, setRawRoles] = useState<any[]>([]);
+  const [apiSectionDefs, setApiSectionDefs] = useState<Array<{ id: string; title: string; number: number }>>([]);
+  const [targetMarkets, setTargetMarkets] = useState<string[]>([]);
+
   const [sections, setSections] = useState<ReportSection[]>(initialReportSections);
-  const [dataAssets, setDataAssets] = useState<DataAsset[]>(mockDataAssets);
-  const [uploadedFiles] = useState<UploadedFile[]>(mockUploadedFiles);
-  const [currentSection, setCurrentSection] = useState<string>(sections[0].id);
+  const [dataAssets, setDataAssets] = useState<DataAsset[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [currentSection, setCurrentSection] = useState<string>(sections[0]?.id ?? '');
+  const [scrollTrigger, setScrollTrigger] = useState(0);
+
+  const navigateToSection = (sectionId: string) => {
+    setCurrentSection(sectionId);
+    setScrollTrigger(n => n + 1);
+  };
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>(mockAuditLog);
-  const [showAuditLog, setShowAuditLog] = useState(false);
   const [showDeviations, setShowDeviations] = useState(false);
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
   const [showAmendmentsList, setShowAmendmentsList] = useState(false);
   const [amendments, setAmendments] = useState<ProtocolAmendment[]>([]);
   const [completenessStatus, setCompletenessStatus] = useState<ReportCompletenessStatus>(mockCompletenessStatus);
+  const [sectionAiIssues, setSectionAiIssues] = useState<Record<string, any[]>>({});
+  const [analysisVersion, setAnalysisVersion] = useState(0);
+  const [savedWontFixIssues, setSavedWontFixIssues] = useState<Record<string, string[]>>({});
+
+  // Protocol amendments fetched from the backend (distinct from the local `amendments`
+  // mock state above, which tracks a separate UI-only amendment flow).
+  const [protocolAmendments, setProtocolAmendments] = useState<any[]>([]);
+  const [protocolSectionsForAmendment, setProtocolSectionsForAmendment] = useState<{ id: string; title: string }[]>([]);
+  const [crossConsistencyIssues, setCrossConsistencyIssues] = useState<any[]>([]);
+  const [checkingConsistency, setCheckingConsistency] = useState(false);
+
+  const runCrossConsistencyCheck = async () => {
+    if (!projectId || checkingConsistency) return;
+    setCheckingConsistency(true);
+    try {
+      const res = await fetch(apiBase + '/api/projects/' + projectId + '/check-cross-consistency', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      setCrossConsistencyIssues(data.issues || []);
+    } catch (e) {
+      console.error('Cross-consistency check failed', e);
+    } finally {
+      setCheckingConsistency(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!projectId) return;
+    fetch(apiBase + '/api/projects/' + projectId + '/amendments')
+      .then(r => r.json())
+      .then(data => setProtocolAmendments(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [projectId]);
+
+  const pendingProtocolAmendments = protocolAmendments.filter((a: any) => a.status === 'draft');
+  const isReportBlocked = pendingProtocolAmendments.length > 0;
+
+  useEffect(() => {
+    if (!projectId) return;
+    Promise.all([
+      fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()),
+      fetch(apiBase + '/api/projects/' + projectId + '/report-sections').then(r => r.json()).catch(() => null),
+    ]).then(([p, sectionMeta]) => {
+      if (p.data?.projectData) setProjectData(p.data.projectData);
+      if (p.data?.scope) setScope(p.data.scope);
+      const newRoles: any[] = p.data?.roles || [];
+      if (newRoles.length > 0) setRawRoles(newRoles);
+
+      const owner = userFromRole(newRoles, 'Medical Writer');
+      const reviewer = userFromRole(newRoles, 'Protocol Lead');
+      const approver = userFromRole(newRoles, 'Clinical Affairs VP');
+
+      const projectUploadedFiles: UploadedFile[] = p.data?.report?.uploadedFiles || p.data?.uploadedFiles || [];
+      setUploadedFiles(projectUploadedFiles);
+
+      const projectDataAssets: DataAsset[] = p.data?.report?.dataAssets || p.data?.dataAssets || [];
+      if (projectDataAssets.length > 0) setDataAssets(projectDataAssets);
+
+      // Store API section defs and target markets for sidebar badges
+      const apiDefs: Array<{ id: string; title: string; number: number }> =
+        sectionMeta?.sections || p.data?.report?.sectionDefs || [];
+      if (apiDefs.length > 0) setApiSectionDefs(apiDefs);
+      if (sectionMeta?.targetMarkets) setTargetMarkets(sectionMeta.targetMarkets);
+
+      if (p.data?.protocol?.sections) {
+        setProtocolSectionsForAmendment(p.data.protocol.sections.map((s: any) => ({ id: s.id, title: s.title })));
+      }
+
+      const savedSections = p.data?.report?.sections;
+
+      // Collect wont-fix suppressions from any saved section
+      const wontFixMap: Record<string, string[]> = {};
+      if (savedSections && typeof savedSections === 'object' && !Array.isArray(savedSections)) {
+        Object.entries(savedSections as Record<string, any>).forEach(([id, data]) => {
+          if (Array.isArray((data as any)?.wontFixIssues)) wontFixMap[id] = (data as any).wontFixIssues;
+        });
+      }
+      if (Array.isArray(savedSections)) {
+        savedSections.forEach((sec: any) => {
+          if (sec.id && sec.wontFixIssues) {
+            wontFixMap[sec.id] = sec.wontFixIssues;
+          }
+        });
+      }
+      if (Object.keys(wontFixMap).length > 0) setSavedWontFixIssues(wontFixMap);
+
+      // Determine the ordered section list to render
+      const templateList = apiDefs.length > 0 ? apiDefs : initialReportSections.map(s => ({ id: s.id, title: s.title, number: s.order }));
+      const templateIds = new Set(templateList.map(t => t.id));
+
+      const roles = { contentOwner: [owner], reviewer: [reviewer], requiredApprover: [approver] };
+
+      const buildSection = (def: { id: string; title: string; number: number }): ReportSection => {
+        const scaffold = initialReportSections.find(s => s.id === def.id);
+        const saved = savedSections && !Array.isArray(savedSections)
+          ? (savedSections as Record<string, any>)[def.id]
+          : null;
+        // Use scaffold only when it corresponds to this section (title match guards against repurposed IDs)
+        if (scaffold && scaffold.title === def.title) {
+          return { ...scaffold, ...(saved ?? {}), title: def.title, order: def.number, roles };
+        }
+        // Dynamic section with no scaffold — build minimal object
+        return {
+          id: def.id,
+          title: def.title,
+          helperText: '',
+          content: saved?.content || '',
+          order: def.number,
+          state: (saved?.state as any) || 'draft',
+          roles,
+          comments: [],
+          validationFindings: [],
+          aiDraftGenerated: false,
+          userEdited: false,
+          insertedAssets: [],
+          approvals: [],
+          completenessElements: [],
+          linkedSAPSections: [],
+          linkedProtocolSections: [],
+          guidance: {
+            requiredElements: { reference: '', items: [], mustAlignWith: '' },
+            commonPitfalls: [],
+            referencedDocuments: [],
+          },
+        } as any;
+      };
+
+      if (Array.isArray(savedSections) && savedSections.length > 0) {
+        // Full section array already in DB — filter to templateList IDs to drop stale/repurposed sections
+        setSections(
+          savedSections
+            .filter((section: ReportSection) => templateIds.has(section.id))
+            .map((section: ReportSection) => {
+              const scaffold = initialReportSections.find((s: any) => s.id === section.id);
+              return {
+                ...(scaffold ?? {}),
+                ...section,
+                roles,
+                comments: section.comments ?? [],
+                approvals: section.approvals ?? [],
+                insertedAssets: section.insertedAssets ?? [],
+                validationFindings: section.validationFindings ?? [],
+                completenessElements: section.completenessElements?.length ? section.completenessElements : (scaffold?.completenessElements ?? []),
+                guidance: section.guidance ?? getGuidanceForSection(section.id),
+              };
+            })
+        );
+      } else {
+        setSections(templateList.map(buildSection));
+      }
+
+      runCrossConsistencyCheck();
+    }).catch(() => {});
+  }, [projectId]);
+
+  // Re-run AI analysis on all sections when the Shell Refresh button is clicked
+  useEffect(() => {
+    const handler = () => setAnalysisVersion(v => v + 1);
+    window.addEventListener('report:refresh-analysis', handler);
+    return () => window.removeEventListener('report:refresh-analysis', handler);
+  }, []);
+
+  // Persist section state fields to the backend so they survive page reload.
+  // Merges `partialData` into the existing section object for the given sectionId.
+  const saveReportSectionState = async (sectionId: string, partialData: Record<string, any>) => {
+    if (!projectId) return;
+    try {
+      const projectRes = await fetch(apiBase + '/api/projects/' + projectId).then(r => r.json());
+      const existingReport = projectRes.data?.report || {};
+      const raw = existingReport.sections || {};
+      const existingSections = Array.isArray(raw)
+        ? Object.fromEntries(raw.map((s: any) => [s.id, s]))
+        : raw;
+      await fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: {
+            ...projectRes.data,
+            report: {
+              ...existingReport,
+              sections: {
+                ...existingSections,
+                [sectionId]: { ...(existingSections[sectionId] || {}), ...partialData },
+              },
+            },
+          },
+        }),
+      });
+    } catch {
+      // silently fail — state already applied in memory
+    }
+  };
+
+  // Persist won't-fix suppressions to the backend so they survive page reload
+  const handleWontFixSave = async (sectionId: string, descriptions: string[]) => {
+    await saveReportSectionState(sectionId, { wontFixIssues: descriptions });
+  };
 
   // Mock protocol deviations
   const [deviations, setDeviations] = useState<ProtocolDeviation[]>([
@@ -82,8 +309,7 @@ export function ReportWorkspace() {
     },
   ]);
 
-  // Simulate current user - in real app this would come from auth context
-  const currentUser: User = mockUsers[0];
+  const currentUser: User = userFromRole(rawRoles, 'Medical Writer');
 
   // Auto-generate AI draft when section is opened for the first time
   useEffect(() => {
@@ -151,16 +377,19 @@ export function ReportWorkspace() {
         : 'Updated section content'
     );
     setAuditLog([...auditLog, newEntry]);
+    saveReportSectionState(sectionId, { content, userEdited: true });
   };
 
   const handleAcceptAIDraft = (sectionId: string) => {
     const section = sections.find(s => s.id === sectionId);
     if (section?.aiDraft) {
-      setSections(sections.map(s => 
-        s.id === sectionId 
+      const acceptedContent = section.aiDraft;
+      setSections(sections.map(s =>
+        s.id === sectionId
           ? { ...s, content: s.aiDraft || '', aiDraft: undefined, userEdited: true }
           : s
       ));
+      saveReportSectionState(sectionId, { content: acceptedContent, userEdited: true });
 
       // Add to audit log
       const newEntry: AuditLogEntry = createAuditEntry(
@@ -433,18 +662,25 @@ export function ReportWorkspace() {
   const hasIssues = !allSectionsComplete || hasUnresolvedBlockers || hasPendingDeviations;
 
   const handleApproveSection = (sectionId: string, approvalId: string, comment?: string) => {
+    const section = sections.find(s => s.id === sectionId);
+    if (!section) return;
+    const updatedApprovals = section.approvals.map(a =>
+      a.id === approvalId
+        ? { ...a, status: 'approved' as const, comment, timestamp: new Date().toISOString() }
+        : a
+    );
+    // Transition state to 'approved' once every required approval slot is approved
+    const allApproved = updatedApprovals.length > 0 && updatedApprovals.every(a => a.status === 'approved');
+    const newState = allApproved ? 'approved' as const : section.state;
+
     setSections(sections.map(s =>
       s.id === sectionId
-        ? {
-            ...s,
-            approvals: s.approvals.map(a =>
-              a.id === approvalId
-                ? { ...a, status: 'approved' as const, comment, timestamp: new Date().toISOString() }
-                : a
-            ),
-          }
+        ? { ...s, approvals: updatedApprovals, state: newState }
         : s
     ));
+
+    // Persist so approval survives page reload
+    saveReportSectionState(sectionId, { approvals: updatedApprovals, state: newState });
 
     // Add to audit log
     const newEntry: AuditLogEntry = createAuditEntry(
@@ -457,19 +693,22 @@ export function ReportWorkspace() {
   };
 
   const handleRejectSection = (sectionId: string, approvalId: string, comment: string) => {
+    const section = sections.find(s => s.id === sectionId);
+    if (!section) return;
+    const updatedApprovals = section.approvals.map(a =>
+      a.id === approvalId
+        ? { ...a, status: 'rejected' as const, comment, timestamp: new Date().toISOString() }
+        : a
+    );
+
     setSections(sections.map(s =>
       s.id === sectionId
-        ? {
-            ...s,
-            approvals: s.approvals.map(a =>
-              a.id === approvalId
-                ? { ...a, status: 'rejected' as const, comment, timestamp: new Date().toISOString() }
-                : a
-            ),
-            state: 'draft' as const, // Reset to draft when rejected
-          }
+        ? { ...s, approvals: updatedApprovals, state: 'draft' as const }
         : s
     ));
+
+    // Persist so rejection survives page reload
+    saveReportSectionState(sectionId, { approvals: updatedApprovals, state: 'draft' });
 
     // Add to audit log
     const newEntry: AuditLogEntry = createAuditEntry(
@@ -509,6 +748,9 @@ export function ReportWorkspace() {
         : s
     ));
 
+    // Persist so ready-state survives page reload
+    saveReportSectionState(sectionId, { state: 'under-review' });
+
     // Add to audit log
     const newEntry: AuditLogEntry = createAuditEntry(
       'report',
@@ -529,6 +771,9 @@ export function ReportWorkspace() {
         ? { ...s, state: 'draft' as const }
         : s
     ));
+
+    // Persist so draft-state survives page reload
+    saveReportSectionState(sectionId, { state: 'draft' });
 
     // Add to audit log
     const newEntry: AuditLogEntry = createAuditEntry(
@@ -555,6 +800,9 @@ export function ReportWorkspace() {
         ? { ...s, state: 'draft' as const }
         : s
     ));
+
+    // Persist so unlocked-state survives page reload
+    saveReportSectionState(sectionId, { state: 'draft' });
 
     // Add to audit log
     const newEntry: AuditLogEntry = createAuditEntry(
@@ -614,73 +862,101 @@ export function ReportWorkspace() {
     }
   };
 
-  const WORKFLOW_STEPS = [
-    { id: 'project-setup', label: 'Project setup' },
-    { id: 'protocol-authoring', label: 'Protocol authoring' },
-    { id: 'protocol-review', label: 'Protocol review' },
-    { id: 'protocol-approval', label: 'Protocol approval' },
-    { id: 'report-authoring', label: 'Report authoring' },
-    { id: 'report-review', label: 'Report review' },
-    { id: 'report-approval', label: 'Report approval' },
-  ];
+  const getGuidanceForSection = (sectionId: string) => {
+    const isEU = targetMarkets.includes('EU');
+    const isUS = targetMarkets.includes('US');
+    const isSaMD = ['samd', 'SaMD', 'ai-ml', 'simd'].includes(projectData?.deviceCategory || scope?.deviceCategory || '');
+
+    const isUK = targetMarkets.includes('UK');
+    const isJapan = targetMarkets.includes('Japan');
+    const isChina = targetMarkets.includes('China');
+    const isCanada = targetMarkets.includes('Canada');
+    const isAustralia = targetMarkets.includes('Australia');
+
+    const marketRefs: string[] = [];
+    if (isEU) marketRefs.push('EU MDR 2017/745');
+    if (isUS) marketRefs.push('FDA 21 CFR Part 812');
+    if (isUK) marketRefs.push('UK MDR 2002 (MHRA)');
+    if (isJapan) marketRefs.push('PMDA MHLW');
+    if (isChina) marketRefs.push('NMPA');
+    if (isCanada) marketRefs.push('Health Canada MDR');
+    if (isAustralia) marketRefs.push('TGA');
+    const marketNote = marketRefs.length > 0 ? marketRefs.join(' + ') : 'Applicable regulations';
+
+    const samdNote = isSaMD ? ' IMDRF SaMD N41 and IEC 62304 apply.' : '';
+
+    const scaffold = initialReportSections.find(s => s.id === sectionId);
+    if (scaffold?.guidance) return scaffold.guidance;
+
+    if (sectionId === 'section-eu-compliance') {
+      return {
+        requiredElements: {
+          reference: 'EU MDR 2017/745 Annex XV',
+          items: ['Compliance with EU MDR Annex XV', 'Notified Body details', 'EUDAMED registration', 'Ethics committee approvals', 'Data protection per GDPR', ...(isUK ? ['UK CA notification per UK MDR 2002', 'UKCA marking requirements'] : [])],
+          mustAlignWith: 'EU MDR 2017/745 Article 61 and Annex XV',
+        },
+        commonPitfalls: ['Missing Notified Body identification', 'No GDPR Article 32 reference', 'Missing CIV notification reference'],
+        referencedDocuments: [{ name: 'EU MDR 2017/745', version: 'Current', date: '' }],
+      };
+    }
+    if (sectionId === 'section-us-ide') {
+      return {
+        requiredElements: {
+          reference: 'FDA 21 CFR Part 812',
+          items: ['IDE classification (NSR/SR)', 'IRB approvals at all US sites', '21 CFR Part 812 compliance statement', 'De Novo pathway description', 'FDA reporting compliance', ...(isCanada ? ['Health Canada device licence application'] : []), ...(isAustralia ? ['TGA conformity assessment'] : []), ...(isJapan ? ['PMDA shonin application requirements'] : []), ...(isChina ? ['NMPA registration requirements'] : [])],
+          mustAlignWith: 'FDA 21 CFR Part 812 and De Novo guidance',
+        },
+        commonPitfalls: ['Missing NSR/SR determination', 'No IRB approval reference', 'Missing 21 CFR Part 812.150 reporting'],
+        referencedDocuments: [{ name: '21 CFR Part 812', version: 'Current', date: '' }],
+      };
+    }
+    return scaffold?.guidance ?? { requiredElements: { reference: marketNote + samdNote, items: [], mustAlignWith: '' }, commonPitfalls: [], referencedDocuments: [] };
+  };
 
   return (
-    <div className="h-screen flex bg-white">
-      {/* Left: Section Navigation - Full Height */}
-      <ReportNavigation
-        sections={sections}
-        currentSection={currentSection}
-        onSectionChange={setCurrentSection}
-        getSectionStatus={getSectionStatus}
-      />
+    <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
+      <MilestoneBanner projectId={projectId!} currentStepId="report-make" />
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Panel - Report Sections */}
+        <ReportNavigation
+          sections={sections}
+          currentSection={currentSection}
+          onSectionChange={setCurrentSection}
+          getSectionStatus={getSectionStatus}
+          apiSectionDefs={apiSectionDefs}
+        />
 
-      {/* Right: Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        {/* Workflow Progress Indicator - Positioned absolutely to center across entire page */}
-        <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
-          <div className="relative bg-white border-b border-slate-200 px-6 py-3 flex items-center pointer-events-auto">
-            {/* Workflow Steps - Centered to entire page width */}
-            <div 
-              className="flex items-center gap-2"
-              style={{
-                position: 'absolute',
-                left: '50%',
-                transform: 'translateX(calc(-50% - 140px))', // Offset to account for left sidebar (~280px / 2)
-              }}
-            >
-              {WORKFLOW_STEPS.map((step, index) => {
-                const isActive = step.id === 'report-authoring';
-                const isLast = index === WORKFLOW_STEPS.length - 1;
-
-                return (
-                  <div key={step.id} className="flex items-center gap-2">
-                    <span
-                      className={`transition-all whitespace-nowrap ${
-                        isActive
-                          ? 'text-slate-500 font-medium'
-                          : 'text-slate-500'
-                      }`}
-                      style={{
-                        fontSize: isActive ? '17px' : '13px',
-                        fontFamily: 'system-ui, sans-serif',
-                      }}
-                    >
-                      {step.label}
-                    </span>
-                    {!isLast && (
-                      <span className="text-slate-400" style={{ fontFamily: 'system-ui, sans-serif', fontSize: '13px' }}>
-                        ›
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {isReportBlocked && (
+            <div className="mx-8 mt-6 p-4 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-3">
+              <div className="w-5 h-5 text-rose-700 flex-shrink-0 mt-0.5">⚠</div>
+              <div>
+                <p className="font-medium text-rose-800">Report authoring is blocked</p>
+                <p className="text-sm text-rose-700 mt-1">
+                  {pendingProtocolAmendments.length} protocol amendment{pendingProtocolAmendments.length > 1 ? 's are' : ' is'} pending approval or rejection before report authoring can continue.
+                </p>
+                <p className="text-sm text-rose-700 mt-1 font-medium">
+                  Go to Make Protocol to approve or reject: {pendingProtocolAmendments.map((a: any) => `Amendment ${a.number}: ${a.title}`).join(', ')}
+                </p>
+              </div>
             </div>
-          </div>
-        </div>
+          )}
 
-        {/* Content Area - Two Columns with padding for fixed header */}
-        <div className="flex-1 flex overflow-hidden" style={{ marginTop: '57px' }}>{/* Center: Document Content */}
+
+          {protocolFinalized && (
+            <div className="mx-6 mt-4">
+              <ProtocolFinalizedBanner
+                projectId={projectId!}
+                latestAmendment={statusLatestAmendment}
+              />
+            </div>
+          )}
+
+          {/* Workflow Progress Indicator */}
+          <WorkflowProgressIndicator currentStep="report-authoring" />
+
+          <div className="flex-1 flex overflow-hidden">
           <ReportContent
             sections={sections}
             currentSection={currentSection}
@@ -688,6 +964,7 @@ export function ReportWorkspace() {
             dataAssets={dataAssets}
             onAssetToggle={handleAssetToggle}
             currentUser={currentUser}
+            projectData={projectData}
             onAddComment={handleAddComment}
             onAcceptAIDraft={handleAcceptAIDraft}
             onDismissAIDraft={handleDismissAIDraft}
@@ -695,7 +972,6 @@ export function ReportWorkspace() {
             onRemoveAsset={handleRemoveAsset}
             onAcceptNarrative={handleAcceptNarrative}
             onEditNarrative={handleEditNarrative}
-            auditLog={auditLog}
             onResolveComment={(sectionId, commentId) => {
               setSections(sections.map(s =>
                 s.id === sectionId
@@ -726,20 +1002,54 @@ export function ReportWorkspace() {
             assemblyBlockers={assemblyBlockers}
             completenessStatus={completenessStatus}
             onVerifyCompletenessElement={handleVerifyCompletenessElement}
+            sectionAiIssues={sectionAiIssues}
+            onSectionAiIssuesChange={(id, issues) => setSectionAiIssues(prev => ({ ...prev, [id]: issues }))}
+            forceAnalyzeVersion={analysisVersion}
+            savedWontFixIssues={savedWontFixIssues}
+            onWontFixSave={handleWontFixSave}
+            isReportBlocked={isReportBlocked}
+            onInitiateAmendment={() => setShowAmendmentModal(true)}
+            scrollTrigger={scrollTrigger}
           />
 
           {/* Right: Stacked Panels - Quality System + Data Assets */}
           <RightSidebar
             currentSection={currentSection}
             sections={sections}
-            onNavigateToSection={setCurrentSection}
+            onNavigateToSection={navigateToSection}
             currentUser={currentUser}
             onVerifyElement={handleVerifyCompletenessElement}
             dataAssets={dataAssets}
             uploadedFiles={uploadedFiles}
+            sectionAiIssues={sectionAiIssues}
+            crossConsistencyIssues={crossConsistencyIssues}
           />
+          </div>
         </div>
       </div>
+
+      <AmendmentModal
+        open={showAmendmentModal}
+        onClose={() => setShowAmendmentModal(false)}
+        onSubmit={async (data) => {
+          const base = '';
+          await fetch(base + '/api/projects/' + projectId + '/amendments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...data, createdBy: 'Report Author' }),
+          });
+          setShowAmendmentModal(false);
+          // Refresh amendments
+          fetch(base + '/api/projects/' + projectId + '/amendments')
+            .then(r => r.json())
+            .then(d => setProtocolAmendments(Array.isArray(d) ? d : []))
+            .catch(() => {});
+        }}
+        protocolSections={protocolSectionsForAmendment}
+        createdBy="Report Author"
+      />
+
+
     </div>
   );
 }

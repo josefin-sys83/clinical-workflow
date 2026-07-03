@@ -37,12 +37,12 @@ export function RequiredElementsChecker({ sectionId, sectionTitle, elements }: R
   const getCoverageIcon = (coverage: string) => {
     switch (coverage) {
       case 'complete':
-        return <CheckCircle2 className="w-4 h-4 text-green-600" />;
+        return <CheckCircle2 className="w-4 h-4 text-indigo-600" />;
       case 'partial':
         return <Circle className="w-4 h-4 text-amber-600 fill-amber-600/30" />;
       case 'missing':
       case 'placeholder':
-        return <AlertCircle className="w-4 h-4 text-red-600" />;
+        return <AlertCircle className="w-4 h-4 text-rose-700" />;
       default:
         return <Circle className="w-4 h-4 text-slate-400" />;
     }
@@ -66,12 +66,12 @@ export function RequiredElementsChecker({ sectionId, sectionTitle, elements }: R
   const getCoverageColor = (coverage: string) => {
     switch (coverage) {
       case 'complete':
-        return 'text-green-700';
+        return 'text-blue-700';
       case 'partial':
         return 'text-amber-700';
       case 'missing':
       case 'placeholder':
-        return 'text-red-700';
+        return 'text-rose-700';
       default:
         return 'text-slate-700';
     }
@@ -109,7 +109,7 @@ export function RequiredElementsChecker({ sectionId, sectionTitle, elements }: R
         {/* Progress bar */}
         <div className="mt-2 h-1.5 bg-slate-200 rounded-full overflow-hidden">
           <div 
-            className="h-full bg-green-600 transition-all duration-300"
+            className="h-full bg-indigo-600 transition-all duration-300"
             style={{ width: `${completionPercentage}%` }}
           />
         </div>
@@ -134,7 +134,7 @@ export function RequiredElementsChecker({ sectionId, sectionTitle, elements }: R
                       {element.name}
                     </span>
                     {element.required && (
-                      <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded">
+                      <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 text-xs rounded">
                         Required
                       </span>
                     )}
@@ -156,7 +156,7 @@ export function RequiredElementsChecker({ sectionId, sectionTitle, elements }: R
                     </div>
                   )}
                   {element.coverage === 'missing' && (
-                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-800">
+                    <div className="mt-2 p-2 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800">
                       <strong>Action required:</strong> This element must be added to meet regulatory requirements.
                     </div>
                   )}

@@ -1,10 +1,9 @@
-import React, { useState, useRef } from 'react';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Paperclip } from 'lucide-react';
 import { AuditTrailModal } from './audit-trail-modal';
 import { InlineIssueMarker } from './inline-issue-marker';
 import { CommentsModal } from './comments-modal';
 import { SectionCompletenessIndicator } from './section-completeness-indicator';
-import { ReferencedDocumentsPanel } from './referenced-documents-panel';
 import { AmendmentWarning } from './amendment-warning';
 import { ProtocolTextSeparator, MetadataSeparator } from './protocol-text-separator';
 import { AIRoleClarityBanner } from './ai-role-clarity-banner';
@@ -74,7 +73,15 @@ interface ProtocolSectionProps {
     issues?: ProtocolIssue[];
     requiredElements?: RequiredElement[];
     content?: string;
+    approvalStatus?: string;
+    approvedBy?: string;
+    approvedAt?: string;
+    amended?: boolean;
+    amendmentId?: string;
+    amendmentNumber?: number;
   };
+  targetMarkets?: string[];
+  deviceCategory?: string;
   isExpanded: boolean;
   onToggle: () => void;
   isHighlighted?: boolean;
@@ -84,10 +91,119 @@ interface ProtocolSectionProps {
   onAddComment?: (content: string, type: string) => void;
   onResolveComment?: (commentId: string) => void;
   onNavigate?: () => void;
+  onApprove?: (comment: string) => Promise<void>;
+  onUnlock?: (reason: string) => Promise<void>;
+  deadline?: { date: string; status: string } | null;
+}
+
+/** Apply only inline markdown (bold, italic, underline, images) — safe inside table cells. */
+function applyInlineMarkdown(text: string): string {
+  console.log('applyInlineMarkdown input:', text.substring(0, 100));
+  return text
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;height:auto;margin:0.5rem 0;border-radius:4px;display:block;" />')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/<u>(.*?)<\/u>/g, '<u>$1</u>');
+}
+
+/** Parse a table row string "| a | b | c |" into trimmed cell strings. */
+function parseTableRow(row: string): string[] {
+  return row.split('|').slice(1, -1).map(c => c.trim());
+}
+
+/** Return true if the line looks like a markdown table separator: |---|---| */
+function isTableSeparator(line: string): boolean {
+  return /^\|[\s\-:|]+(\|[\s\-:|]+)+\|$/.test(line.trim());
+}
+
+function renderMarkdown(content: string): string {
+  if (!content) return '';
+
+  // Handle images before line splitting — data URLs can be very long, may
+  // span multiple lines, and can contain ) characters that break [^)]+ patterns.
+  // Using /gs (dotAll) with a lazy [^"]+? so the match is anchored by the
+  // closing ) without being confused by any ) characters inside the URL itself.
+  content = content.replace(
+    /!\[([^\]]*)\]\((data:[^"]+?)\)/gs,
+    '<img src="$2" alt="$1" style="max-width:100%;height:auto;margin:0.5rem 0;border-radius:4px;display:block;" />\n'
+  );
+  // Also handle plain https?:// image URLs (these are safe with [^)]+)
+  content = content.replace(
+    /!\[([^\]]*)\]\((https?:[^)]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width:100%;height:auto;margin:0.5rem 0;border-radius:4px;display:block;" />\n'
+  );
+
+  const lines = content.split('\n');
+  const output: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // ── Markdown table block ────────────────────────────────────────────────
+    // A table block is a consecutive run of lines that start AND end with '|'
+    if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.split('|').length > 2) {
+      const tableLines: string[] = [];
+      while (i < lines.length) {
+        const t = lines[i].trim();
+        if (t.startsWith('|') && t.endsWith('|') && t.split('|').length > 2) {
+          tableLines.push(lines[i]);
+          i++;
+        } else {
+          break;
+        }
+      }
+
+      if (tableLines.length >= 1) {
+        const headers = parseTableRow(tableLines[0]);
+        const hasSep = tableLines.length > 1 && isTableSeparator(tableLines[1]);
+        const dataRows = tableLines.slice(hasSep ? 2 : 1);
+
+        let html = '<table class="w-full border-collapse text-sm my-3"><thead><tr>';
+        headers.forEach(h => {
+          html += `<th class="border border-slate-300 bg-slate-50 px-3 py-2 text-left font-semibold">${applyInlineMarkdown(h)}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+
+        dataRows.forEach((row, idx) => {
+          const cells = parseTableRow(row);
+          const rowClass = idx % 2 === 1 ? ' class="bg-slate-50"' : '';
+          html += `<tr${rowClass}>`;
+          cells.forEach(cell => {
+            html += `<td class="border border-slate-300 px-3 py-2">${applyInlineMarkdown(cell)}</td>`;
+          });
+          html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+        output.push(html);
+      }
+      continue;
+    }
+
+    // ── Block-level headings ────────────────────────────────────────────────
+    if (trimmed.startsWith('# ')) {
+      output.push(`<h1 class="text-xl font-bold mb-2">${applyInlineMarkdown(trimmed.slice(2))}</h1>`);
+      i++;
+      continue;
+    }
+    if (trimmed.startsWith('## ')) {
+      output.push(`<h2 class="text-lg font-semibold mb-2">${applyInlineMarkdown(trimmed.slice(3))}</h2>`);
+      i++;
+      continue;
+    }
+
+    // ── Regular line ────────────────────────────────────────────────────────
+    output.push(applyInlineMarkdown(line) + '<br/>');
+    i++;
+  }
+
+  return output.join('');
 }
 
 function ProtocolSectionComponent(
-  { section, isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -99,15 +215,25 @@ function ProtocolSectionComponent(
   const [showAmendmentWarning, setShowAmendmentWarning] = useState(false);
   const [completenessExpanded, setCompletenessExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState(section.content || '');
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [changeReason, setChangeReason] = useState('');
   const [wontFixModal, setWontFixModal] = useState<string | null>(null); // issueId or null
   const [wontFixComment, setWontFixComment] = useState('');
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string }>>([]);
+  const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set(['normal']));
+  const editorRef = useRef<HTMLDivElement>(null);
 
-  const isApproved = section.status === 'complete';
+  // Approval / unlock modal state
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [approveComment, setApproveComment] = useState('');
+  const [approveLoading, setApproveLoading] = useState(false);
+  const [showUnlockConfirm, setShowUnlockConfirm] = useState(false);
+  const [unlockReason, setUnlockReason] = useState('');
+  const [unlockLoading, setUnlockLoading] = useState(false);
+
+  const isApproved = section.approvalStatus === 'approved';
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
   // Count open issues by severity
@@ -116,6 +242,169 @@ function ProtocolSectionComponent(
   const warningCount = openIssues.filter(i => i.severity === 'warning').length;
   const totalIssues = openIssues.length;
   const isBlocked = blockerCount > 0;
+
+  // ─── contentEditable rich text editor ───────────────────────────────────
+
+  // Populate editor HTML when entering edit mode
+  useEffect(() => {
+    if (isEditing && editorRef.current) {
+      editorRef.current.innerHTML = section.content || '<p><br></p>';
+      editorRef.current.focus();
+    }
+  }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── WYSIWYG contentEditable toolbar helpers ────────────────────────────────
+
+  /** Read current selection state and highlight the matching toolbar buttons. */
+  const updateActiveFormats = () => {
+    const active = new Set<string>();
+    try {
+      if (document.queryCommandState('bold'))      active.add('bold');
+      if (document.queryCommandState('italic'))    active.add('italic');
+      if (document.queryCommandState('underline')) active.add('underline');
+      const block = document.queryCommandValue('formatBlock').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if      (block === 'h1') active.add('h1');
+      else if (block === 'h2') active.add('h2');
+      else                     active.add('normal');
+    } catch { active.add('normal'); }
+    setActiveFormats(active);
+  };
+
+  /** Focus the editor, run an execCommand, then resync toolbar state. */
+  const execFmt = (cmd: string, value?: string) => {
+    editorRef.current?.focus();
+    document.execCommand(cmd, false, value);
+    updateActiveFormats();
+  };
+
+  const handleBold      = () => execFmt('bold');
+  const handleItalic    = () => execFmt('italic');
+  const handleUnderline = () => execFmt('underline');
+  const handleH1        = () => execFmt('formatBlock', 'h1');
+  const handleH2        = () => execFmt('formatBlock', 'h2');
+  const handleNormal    = () => execFmt('formatBlock', 'p');
+
+  const handleInsertTable = () => {
+    const th = (n: number) =>
+      `<th style="border:1px solid #d1d5db;padding:6px 12px;background:#f8fafc;font-weight:600;text-align:left;">Column ${n}</th>`;
+    const td = () =>
+      `<td style="border:1px solid #d1d5db;padding:6px 12px;min-width:80px;">Cell</td>`;
+    const html =
+      `<table style="border-collapse:collapse;width:100%;margin:0.75rem 0;table-layout:fixed;">` +
+      `<thead><tr>${[1, 2, 3].map(th).join('')}</tr></thead>` +
+      `<tbody>` +
+      `<tr>${[1, 2, 3].map(td).join('')}</tr>` +
+      `<tr style="background:#f8fafc">${[1, 2, 3].map(td).join('')}</tr>` +
+      `</tbody></table><p><br></p>`;
+    editorRef.current?.focus();
+    document.execCommand('insertHTML', false, html);
+    updateActiveFormats();
+  };
+
+  const handleImageInsert = () => {
+    const MAX_BYTES = 200 * 1024; // 200 KB limit
+    const MAX_DIM   = 1200;       // max pixel dimension before downscaling
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e: any) => {
+      const file: File = e.target.files[0];
+      if (!file) return;
+
+      const objectUrl = URL.createObjectURL(file);
+      const img = new window.Image();
+
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+
+        let { naturalWidth: w, naturalHeight: h } = img;
+        if (w > MAX_DIM || h > MAX_DIM) {
+          const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width  = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0, w, h);
+
+        let quality = 0.85;
+        let base64  = canvas.toDataURL('image/jpeg', quality);
+        while (base64.length > MAX_BYTES && quality > 0.15) {
+          quality = Math.round((quality - 0.1) * 100) / 100;
+          base64  = canvas.toDataURL('image/jpeg', quality);
+        }
+
+        if (base64.length > MAX_BYTES) {
+          alert(
+            `Image is too large (${Math.round(base64.length / 1024)} KB after compression). ` +
+            `Please use a smaller image (max 200 KB).`
+          );
+          return;
+        }
+
+        const imgHTML = `<img src="${base64}" alt="${file.name}" style="max-width:100%;height:auto;margin:0.5rem 0;border-radius:4px;display:block;" />`;
+        editorRef.current?.focus();
+        document.execCommand('insertHTML', false, imgHTML);
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        alert('Could not load image. Please try a different file.');
+      };
+
+      img.src = objectUrl;
+    };
+    input.click();
+  };
+
+  const handleFileAttach = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.doc,.docx';
+    input.onchange = (e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setAttachedFiles(prev => [...prev, { name: file.name }]);
+    };
+    input.click();
+  };
+
+  /**
+   * Render content for read mode.
+   * HTML content (new) is rendered directly; legacy markdown is converted.
+   */
+  const renderContent = (content: string): string => {
+    if (!content) return '';
+    if (/<[a-z][\s\S]*>/i.test(content)) return content;
+    // Legacy markdown fallback
+    let h = content
+      .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
+        const lines = block.split('\n').filter(l => l.trim().startsWith('|'));
+        if (lines.length < 3) return block;
+        const cols = (line: string) =>
+          line.split('|').filter((_, i, a) => i > 0 && i < a.length - 1).map(c => c.trim());
+        const headers = cols(lines[0]);
+        const rows = lines.slice(2).map(cols);
+        const hRow = `<tr>${headers.map(c => `<th style="border:1px solid #d1d5db;padding:5px 10px;background:#f8fafc;font-weight:600;text-align:left">${c}</th>`).join('')}</tr>`;
+        const dRows = rows.map((r, i) =>
+          `<tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">${r.map(c => `<td style="border:1px solid #d1d5db;padding:5px 10px;">${c}</td>`).join('')}</tr>`
+        ).join('');
+        return `<table style="border-collapse:collapse;width:100%;margin:0.75rem 0;">${hRow}${dRows}</table>`;
+      })
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;height:auto;margin:0.5rem 0;border-radius:4px;" />')
+      .replace(/^## (.+)$/gm, '<h2 style="font-size:1.1rem;font-weight:600;margin:0.625rem 0 0.375rem;color:#0f172a;">$1</h2>')
+      .replace(/^# (.+)$/gm,  '<h1 style="font-size:1.25rem;font-weight:700;margin:0.75rem 0 0.5rem;color:#0f172a;">$1</h1>')
+      .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
+      .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/gs, '<em>$1</em>');
+    h = h.split('\n').map(line =>
+      /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
+    ).join('\n');
+    return h;
+  };
 
   return (
     <div 
@@ -142,13 +431,18 @@ function ProtocolSectionComponent(
                 </span>
               )}
               {isApproved && !section.locked && (
-                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200">
+                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded border border-blue-200 font-medium">
                   Approved
                 </span>
               )}
               {!isApproved && !section.locked && (
                 <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded border border-slate-200">
                   Draft
+                </span>
+              )}
+              {section.amended && (
+                <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded border border-orange-200 font-medium">
+                  Amended{section.amendmentNumber ? ` (#${section.amendmentNumber})` : ''}
                 </span>
               )}
               {/* Issue Count Badges - clickable, expand issues list */}
@@ -162,7 +456,7 @@ function ProtocolSectionComponent(
                         setIssuesExpanded(true);
                         setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
                       }}
-                      className="px-2 py-0.5 bg-red-100 text-xs rounded border border-red-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer" style={{color: '#991b1b'}}
+                      className="px-2 py-0.5 bg-rose-50 text-xs rounded border border-rose-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer" style={{color: '#991b1b'}}
                       title="Click to view blockers"
                     >
                       {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
@@ -194,6 +488,11 @@ function ProtocolSectionComponent(
               {!!section.reviewCycle && (
                 <div className="flex items-center gap-1">
                   <span>Review Cycle {section.reviewCycle}</span>
+                </div>
+              )}
+              {deadline && (
+                <div className={`flex items-center gap-1 ${deadline.status === 'overdue' ? 'text-rose-700' : ''}`}>
+                  <span>Deadline: {deadline.date}</span>
                 </div>
               )}
               <button 
@@ -241,11 +540,11 @@ function ProtocolSectionComponent(
                 </div>
                 <div>
                   <span className="text-slate-500">Required Approver:</span>
-                  <span className="ml-2 text-slate-900">{section.approver || 'Dr. Helena Schmidt'}</span>
+                  <span className="ml-2 text-slate-900">{section.approver || ''}</span>
                 </div>
                 <div>
                   <span className="text-slate-500">Reviewer(s):</span>
-                  <span className="ml-2 text-slate-900">{section.reviewer || 'Dr. Thomas Weber'}</span>
+                  <span className="ml-2 text-slate-900">{section.reviewer || ''}</span>
                 </div>
                 <div>
                   <span className="text-slate-500">Approval Status:</span>
@@ -282,7 +581,7 @@ function ProtocolSectionComponent(
                     <User className="w-4 h-4 text-slate-400" />
                     <div>
                       <div className="text-sm text-slate-900">{section.owner}</div>
-                      <div className="text-xs text-slate-500">{section.ownerRole || 'Principal Investigator'}</div>
+                      <div className="text-xs text-slate-500">{section.ownerRole || ''}</div>
                     </div>
                   </div>
                 </div>
@@ -292,8 +591,8 @@ function ProtocolSectionComponent(
                   <div className="flex items-center gap-2">
                     <UserCheck className="w-4 h-4 text-slate-400" />
                     <div>
-                      <div className="text-sm text-slate-900">{section.approver || 'Dr. Helena Schmidt'}</div>
-                      <div className="text-xs text-slate-500">{section.approverRole || 'VP Clinical Affairs'}</div>
+                      <div className="text-sm text-slate-900">{section.approver || ''}</div>
+                      <div className="text-xs text-slate-500">{section.approverRole || ''}</div>
                     </div>
                   </div>
                 </div>
@@ -326,6 +625,25 @@ function ProtocolSectionComponent(
                 lastHumanReviewer={section.approver}
                 lastReviewDate={section.updated}
               />
+            )}
+
+            {/* AMENDMENT NEEDS-REVIEW WARNING */}
+            {section.approvalStatus === 'needs-review' && (
+              <div className="p-4 bg-orange-50 border-2 border-orange-200 rounded">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-orange-900 mb-1">
+                      Section Needs Review After Amendment
+                    </div>
+                    <p className="text-xs text-orange-800 leading-relaxed">
+                      This section was affected by an approved protocol amendment
+                      {section.amendmentNumber ? ` (#${section.amendmentNumber})` : ''} and its prior approval no longer
+                      applies. Review the content and re-approve before proceeding.
+                    </p>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* 5. LOCKED SECTION BANNER - AMENDMENT REQUIRED */}
@@ -368,7 +686,7 @@ function ProtocolSectionComponent(
                   <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${guidanceExpanded ? 'text-slate-600' : 'text-slate-500'}`} />
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <div className={`text-sm font-medium ${guidanceExpanded ? 'text-slate-900' : 'text-slate-900'}`}>
+                      <div className="text-sm font-medium text-slate-900">
                         What this section must include
                       </div>
                       <ChevronDown 
@@ -387,23 +705,17 @@ function ProtocolSectionComponent(
               {guidanceExpanded && (
                 <div className="px-4 pb-4 space-y-4">
                   <div className="p-3 bg-white border border-slate-200 rounded">
-                    {getSectionGuidance(section.id)}
+                    {getSectionGuidance(section.id, targetMarkets, deviceCategory)}
                   </div>
-                  
+
                   {/* Common Pitfalls */}
                   <div className="p-3 bg-white border border-slate-200 rounded">
                     <div className="flex items-start gap-2 mb-2">
                       <AlertTriangle className="w-4 h-4 text-slate-600 flex-shrink-0 mt-0.5" />
                       <div className="text-xs font-medium text-slate-900">Common pitfalls</div>
                     </div>
-                    {getSectionPitfalls(section.id)}
+                    {getSectionPitfalls(section.id, targetMarkets, deviceCategory)}
                   </div>
-
-                  {/* Referenced Documents */}
-                  <ReferencedDocumentsPanel 
-                    documents={getReferencedDocuments(section.id)}
-                    sectionId={section.id}
-                  />
 
                   {/* Amendment Info - Only shown if section is approved or locked */}
                   {(isApproved || section.locked) && (
@@ -464,12 +776,15 @@ function ProtocolSectionComponent(
                   return (
                     <div
                       key={issue.id}
-                      className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-red-50 border-red-500' : 'bg-amber-50 border-amber-500'}`}
+                      className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-rose-50 border-rose-500' : 'bg-amber-50 border-amber-500'}`}
                     >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${isBlockerIssue ? 'bg-red-100' : 'bg-amber-100 text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${isBlockerIssue ? 'bg-rose-50' : 'bg-amber-100 text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
                           {issue.severity}
                         </span>
+                        {issue.raisedBy?.toLowerCase().includes('system') && (
+                          <span className="text-xs text-slate-500">AI Regulatory Review</span>
+                        )}
                         <span className="text-xs font-medium text-slate-900">{issue.subsection}</span>
                       </div>
                       <p className={`text-xs leading-relaxed mb-1 ${isBlockerIssue ? '' : 'text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
@@ -508,65 +823,113 @@ function ProtocolSectionComponent(
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
               {section.content ? (() => {
-                if (isEditing) return (
-                  <div>
-                    <textarea
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      style={{width: '100%', minHeight: '300px', fontSize: '0.9rem', lineHeight: '1.7', padding: '0.75rem', border: '2px solid #3b82f6', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit'}}
-                    />
-                    <div style={{display: 'flex', gap: '0.5rem', marginTop: '0.5rem'}}>
-                      <button
-                        onClick={() => { setChangeReason(''); setShowReasonModal(true); }}
-                        style={{padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
-                      >
-                        Save
-                      </button>
-                      <button
-                        onClick={() => { setIsEditing(false); setEditContent(section.content || ''); }}
-                        style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
-                      >
-                        Cancel
-                      </button>
+                if (isEditing) {
+                  const btnBase: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 4, border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', flexShrink: 0 };
+                  const btnActive: React.CSSProperties = { ...btnBase, backgroundColor: '#e2e8f0' };
+                  const divider = <div style={{ width: 1, height: 20, backgroundColor: '#d1d5db', margin: '0 4px', flexShrink: 0 }} />;
+                  return (
+                    <div>
+                      {/* ── Toolbar ── */}
+                      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, padding: '4px 6px', backgroundColor: '#f8fafc', borderRadius: '0.375rem 0.375rem 0 0', border: '2px solid #3b82f6', borderBottom: '1px solid #e2e8f0' }}>
+                        {/* Text formatting group */}
+                        <button title="Bold" style={activeFormats.has('bold') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('bold')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleBold}><Bold size={13} /></button>
+                        <button title="Italic" style={activeFormats.has('italic') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('italic')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleItalic}><Italic size={13} /></button>
+                        <button title="Underline" style={activeFormats.has('underline') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('underline')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleUnderline}><Underline size={13} /></button>
+                        {divider}
+                        {/* Heading group */}
+                        <button title="Heading 1" style={activeFormats.has('h1') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('h1')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleH1}><Heading1 size={13} /></button>
+                        <button title="Heading 2" style={activeFormats.has('h2') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('h2')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleH2}><Heading2 size={13} /></button>
+                        <button title="Normal text" style={activeFormats.has('normal') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('normal')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleNormal}><Type size={13} /></button>
+                        {divider}
+                        {/* Insert group */}
+                        <button title="Insert table" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleInsertTable}><Table2 size={13} /></button>
+                        <button title="Insert image" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleImageInsert}><Image size={13} /></button>
+                        <button title="Attach file (.pdf, .doc, .docx)" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleFileAttach}><Paperclip size={13} /></button>
+                      </div>
+                      {/* ── WYSIWYG contentEditable editor ── */}
+                      <div
+                        ref={editorRef}
+                        contentEditable
+                        suppressContentEditableWarning
+                        onKeyUp={updateActiveFormats}
+                        onMouseUp={updateActiveFormats}
+                        onSelect={updateActiveFormats}
+                        style={{ width: '100%', minHeight: '200px', fontSize: '0.9rem', lineHeight: '1.7', padding: '0.75rem', border: '2px solid #3b82f6', borderTop: 'none', borderRadius: '0 0 0.375rem 0.375rem', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', overflowY: 'auto' }}
+                      />
+                      {/* ── Attached files list ── */}
+                      {attachedFiles.length > 0 && (
+                        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                          {attachedFiles.map((f, i) => (
+                            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '0.25rem', fontSize: '0.75rem', color: '#475569' }}>
+                              <Paperclip size={11} />
+                              {f.name}
+                              <button onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0, lineHeight: 1 }}>×</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {/* ── Save / Cancel ── */}
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button onClick={() => { setChangeReason(''); setShowReasonModal(true); }} style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Save</button>
+                        <button onClick={() => { setIsEditing(false); setAttachedFiles([]); }} style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
+                      </div>
                     </div>
+                  );
+                }
+                const issues = section.issues || [];
+                const quotes = issues.filter((iss: any) => iss.textQuote);
+                const editButton = (
+                  <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
+                    <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
                   </div>
                 );
-                const issues = section.issues || [];
-                const quotes = issues.filter((iss) => iss.textQuote);
-                const displayContent = editContent || section.content;
                 if (quotes.length === 0) return (
                   <div>
-                    <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
-                      <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>✏️ Edit</button>
-                    </div>
-                    <div style={{whiteSpace: 'pre-wrap', lineHeight: '1.7', fontSize: '0.9rem'}}>{displayContent}</div>
+                    {editButton}
+                    <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
+                    {attachedFiles.length > 0 && (
+                      <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                        {attachedFiles.map((f, i) => (
+                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '0.25rem', fontSize: '0.75rem', color: '#475569' }}>
+                            <Paperclip size={11} />
+                            {f.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
-                const editBtn = React.createElement('div', {style: {display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}},
-                  React.createElement('button', {onClick: () => { setEditContent(section.content || ''); setIsEditing(true); }, style: {padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}, 'Edit')
-                );
-                let parts = [editBtn];
-                let remaining = section.content;
-                quotes.forEach((iss) => {
+                // Quotes path: render markdown in plain text segments, highlight quoted spans
+                const quoteParts: React.ReactNode[] = [editButton];
+                console.log('quotes path - section content first 300:', (section.content || '').substring(0, 300));
+                let remaining = section.content || '';
+                quotes.forEach((iss: any) => {
                   const idx = remaining.indexOf(iss.textQuote);
                   if (idx === -1) return;
-                  if (idx > 0) parts.push(remaining.slice(0, idx));
-                  parts.push(React.createElement('span', {
-                    key: iss.id,
-                    id: 'quote-' + iss.id,
-                    style: {
-                      backgroundColor: iss.severity === 'blocker' ? '#fee2e2' : '#fef9c3',
-                      borderBottom: iss.severity === 'blocker' ? '2px solid #ef4444' : '2px solid #f59e0b',
-                      cursor: 'pointer',
-                      borderRadius: '2px',
-                      padding: '0 2px'
-                    },
-                    title: iss.description
-                  }, iss.textQuote));
+                  if (idx > 0) quoteParts.push(
+                    <span key={`pre-${iss.id}`} dangerouslySetInnerHTML={{__html: renderContent(remaining.slice(0, idx))}} />
+                  );
+                  quoteParts.push(
+                    <span
+                      key={iss.id}
+                      id={'quote-' + iss.id}
+                      style={{
+                        backgroundColor: iss.severity === 'blocker' ? '#fee2e2' : '#fef9c3',
+                        borderBottom: iss.severity === 'blocker' ? '2px solid #ef4444' : '2px solid #f59e0b',
+                        cursor: 'pointer',
+                        borderRadius: '2px',
+                        padding: '0 2px'
+                      }}
+                      title={iss.description}
+                    >{iss.textQuote}</span>
+                  );
                   remaining = remaining.slice(idx + iss.textQuote.length);
                 });
-                if (remaining) parts.push(remaining);
-                return React.createElement('div', {style: {whiteSpace: 'pre-wrap', lineHeight: '1.7', fontSize: '0.9rem'}}, ...parts);
+                if (remaining) quoteParts.push(
+                  <span key="post" dangerouslySetInnerHTML={{__html: renderContent(remaining)}} />
+                );
+                console.log('quotes path rendering, quoteParts count:', quoteParts.length);
+                return <div style={{lineHeight: '1.7', fontSize: '0.9rem'}}>{quoteParts}</div>;
               })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
             </ProtocolTextSeparator>
 
@@ -587,8 +950,20 @@ function ProtocolSectionComponent(
                         Request Changes
                       </button>
                     )}
-                    {!isApproved && (
-                      <button className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors font-medium">
+                    {isApproved ? (
+                      <button
+                        onClick={() => setShowUnlockConfirm(true)}
+                        className="px-4 py-2 border border-slate-300 text-slate-600 text-sm rounded hover:bg-slate-50 transition-colors font-medium flex items-center gap-1.5"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        Unlock Section
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setShowApproveModal(true)}
+                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors font-medium flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
                         Approve Section
                       </button>
                     )}
@@ -600,8 +975,20 @@ function ProtocolSectionComponent(
                         Request Changes
                       </button>
                     )}
-                    {!isApproved && (
-                      <button className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors">
+                    {isApproved ? (
+                      <button
+                        onClick={() => setShowUnlockConfirm(true)}
+                        className="px-4 py-2 border border-slate-300 text-slate-600 text-sm rounded hover:bg-slate-50 transition-colors flex items-center gap-1.5"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        Unlock Section
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setShowApproveModal(true)}
+                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
                         Approve Section
                       </button>
                     )}
@@ -638,23 +1025,15 @@ function ProtocolSectionComponent(
               <button
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
-                  setIsSaving(true);
                   const prevContent = section.content || '';
-                  const newContent = editContent;
+                  const newContent = editorRef.current?.innerHTML || '';
                   const reason = changeReason.trim();
-                  try {
-                    const apiBase = window.location.origin.replace('-5173.', '-3001.');
-                    const parts = window.location.pathname.split('/');
-                    const projectId = parts[2];
-                    await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + section.id, {
-                      method: 'PATCH',
-                      headers: {'Content-Type': 'application/json'},
-                      body: JSON.stringify({content: newContent, previousContent: prevContent, reason})
-                    });
-                  } catch(e) { console.error(e); }
-                  setIsSaving(false);
+                  // Close the modal and editing state immediately for responsive UX
+                  setIsSaving(true);
                   setShowReasonModal(false);
                   setIsEditing(false);
+                  // Delegate persist + audit to the parent — it owns user context and
+                  // is the single source of truth for every content-change audit entry.
                   if (onSaved) {
                     setIsAnalyzing(true);
                     try {
@@ -663,10 +1042,102 @@ function ProtocolSectionComponent(
                       setIsAnalyzing(false);
                     }
                   }
+                  setIsSaving(false);
                 }}
                 style={{padding: '0.5rem 1rem', backgroundColor: changeReason.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: changeReason.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
               >
                 {isSaving ? 'Saving…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Approve Section Modal ─────────────────────────────────────────────── */}
+      {showApproveModal && (
+        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
+          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem'}}>
+              <div style={{width: '1.25rem', height: '1.25rem', borderRadius: '50%', backgroundColor: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <h2 style={{margin: 0, fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Approve Section</h2>
+            </div>
+            <p style={{margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#64748b'}}>
+              Section {section.number}: <strong>{section.title}</strong>
+            </p>
+            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
+              Approving marks this section as reviewed and compliant. Add an optional comment.
+            </p>
+            <textarea
+              autoFocus
+              value={approveComment}
+              onChange={(e) => setApproveComment(e.target.value)}
+              placeholder="Optional approval comment (e.g. Reviewed against ISO 14155:2020 §6.3, content verified)"
+              style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+            />
+            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
+              <button
+                disabled={approveLoading}
+                onClick={() => { setShowApproveModal(false); setApproveComment(''); }}
+                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={approveLoading}
+                onClick={async () => {
+                  if (!onApprove) return;
+                  setApproveLoading(true);
+                  try { await onApprove(approveComment.trim()); }
+                  finally { setApproveLoading(false); setShowApproveModal(false); setApproveComment(''); }
+                }}
+                style={{padding: '0.5rem 1rem', backgroundColor: approveLoading ? '#93c5fd' : '#2563eb', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: approveLoading ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 500}}
+              >
+                {approveLoading ? 'Approving…' : 'Approve Section'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Unlock Section Confirmation ────────────────────────────────────── */}
+      {showUnlockConfirm && (
+        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
+          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
+            <h2 style={{margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Unlock Section</h2>
+            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
+              Unlocking <strong>Section {section.number}: {section.title}</strong> will clear the approval and require re-approval after editing. This action is logged in the audit trail.
+            </p>
+            <label style={{display: 'block', fontSize: '0.75rem', fontWeight: 500, color: '#374151', marginBottom: '0.375rem'}}>
+              Reason for unlocking <span style={{color: '#ef4444'}}>*</span>
+            </label>
+            <textarea
+              autoFocus
+              value={unlockReason}
+              onChange={(e) => setUnlockReason(e.target.value)}
+              placeholder="e.g. Updated regulatory guidance requires revision to inclusion criteria"
+              style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+            />
+            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
+              <button
+                disabled={unlockLoading}
+                onClick={() => { setShowUnlockConfirm(false); setUnlockReason(''); }}
+                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!unlockReason.trim() || unlockLoading}
+                onClick={async () => {
+                  if (!onUnlock || !unlockReason.trim()) return;
+                  setUnlockLoading(true);
+                  try { await onUnlock(unlockReason.trim()); }
+                  finally { setUnlockLoading(false); setShowUnlockConfirm(false); setUnlockReason(''); }
+                }}
+                style={{padding: '0.5rem 1rem', backgroundColor: unlockReason.trim() && !unlockLoading ? '#dc2626' : '#fca5a5', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: unlockReason.trim() && !unlockLoading ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
+              >
+                {unlockLoading ? 'Unlocking…' : 'Unlock Section'}
               </button>
             </div>
           </div>
@@ -898,7 +1369,7 @@ function getSectionComments(sectionId: string) {
         author: 'Dr. Helena Schmidt',
         authorRole: 'VP Clinical Affairs',
         timestamp: '2026-02-08 11:20 CET',
-        content: 'Critical concern: The inclusion/exclusion criteria appear too restrictive for the target sample size of N=120. Based on typical TAVR patient populations, we may struggle to enroll within the proposed 6-month timeline. Recommend either relaxing STS-PROM range to 3-9% or extending enrollment period to 9 months.',
+        content: 'Critical concern: The inclusion/exclusion criteria appear too restrictive for the target sample size of N=120. Based on typical patient populations for this indication, we may struggle to enroll within the proposed 6-month timeline. Recommend either relaxing the eligibility criteria or extending the enrollment period to 9 months.',
         type: 'issue',
         subsection: 'Inclusion Criteria',
         status: 'open'
@@ -1024,7 +1495,7 @@ function getSectionComments(sectionId: string) {
         author: 'Dr. Helena Schmidt',
         authorRole: 'VP Clinical Affairs',
         timestamp: '2026-02-08 13:45 CET',
-        content: 'Echocardiography assessment protocol should reference specific VARC-3 criteria for standardization. Please add citation and core lab requirements.',
+        content: 'Imaging assessment protocol should reference specific standardized endpoint definitions for consistency. Please add citation and independent imaging review requirements.',
         type: 'approval-request',
         subsection: 'Imaging Assessments',
         status: 'open'
@@ -1106,7 +1577,7 @@ function getSectionCompleteness(sectionId: string) {
   return completenessData[sectionId] || { complete: 0, partial: 0, missing: 0, total: 0 };
 }
 
-function getReferencedDocuments(sectionId: string) {
+function getReferencedDocuments(sectionId: string, targetMarkets: string[] = [], deviceCategory: string = '') {
   // Example referenced documents - in production, this would come from API
   const allDocuments = [
     {
@@ -1168,7 +1639,18 @@ function getReferencedDocuments(sectionId: string) {
   return allDocuments;
 }
 
-function getSectionGuidance(sectionId: string) {
+function getSectionGuidance(sectionId: string, targetMarkets: string[] = [], deviceCategory: string = '') {
+  const isEU = targetMarkets.includes('EU');
+  const isUS = targetMarkets.includes('US');
+  const isUK = targetMarkets.includes('UK');
+  const isJapan = targetMarkets.includes('Japan');
+  const isChina = targetMarkets.includes('China');
+  const isCanada = targetMarkets.includes('Canada');
+  const isAustralia = targetMarkets.includes('Australia');
+  const isSaMD = ['samd', 'SaMD', 'ai-ml', 'simd'].includes(deviceCategory);
+  const isAIMD = ['aimd', 'AIMD'].includes(deviceCategory);
+  const isIVD = ['ivd', 'IVD'].includes(deviceCategory);
+
   const guidance: Record<string, JSX.Element> = {
     '1': (
       <>
@@ -1181,6 +1663,11 @@ function getSectionGuidance(sectionId: string) {
           <li>Coordinating investigator (name, credentials, site affiliation)</li>
           <li>Study phase designation per EU MDR classification</li>
           <li>EudraCT or equivalent registry number</li>
+          {isUS && <li>FDA 21 CFR 812.25(a) — Protocol identification requirements</li>}
+          {isUK && <li>UK MDR 2002 — MHRA notification requirements</li>}
+          {isJapan && <li>PMDA clinical trial notification (CTN) requirements</li>}
+          {isEU && <li>EUDAMED registration required prior to study start per EU MDR Article 70</li>}
+          {isUS && <li>ClinicalTrials.gov NCT number registration required per FDA Modernization Act</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: ClinicalTrials.gov registration, sponsor organization records, investigator site agreement
@@ -1197,6 +1684,9 @@ function getSectionGuidance(sectionId: string) {
           <li>Clear statement of primary objective (singular, measurable)</li>
           <li>Secondary objectives (exploratory, supporting)</li>
           <li>Alignment with device intended use and indications</li>
+          {isUS && <li>FDA IDE success criteria and primary endpoint definition per 21 CFR 812.25(b)</li>}
+          {isSaMD && <li>IMDRF SaMD N41 clinical evidence framework — intended use, clinical association, analytical validation</li>}
+          {isJapan && <li>PMDA clinical rationale requirements for device clinical trials</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Synopsis objectives, endpoint definitions (Section 4.6), statistical analysis plan
@@ -1213,6 +1703,10 @@ function getSectionGuidance(sectionId: string) {
           <li>Instructions for use and clinical administration</li>
           <li>Known or foreseeable risks</li>
           <li>Preclinical and prior clinical experience summary</li>
+          {isSaMD && <li>SaMD definition per IMDRF N41 and software lifecycle per IEC 62304</li>}
+          {isAIMD && <li>AIMD-specific requirements per ISO 14708 series</li>}
+          {isIVD && <li>IVD performance evaluation per IVDR 2017/746</li>}
+          {isUS && <li>FDA device classification and predicate device identification</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Instructions for Use (IFU), Clinical Evaluation Report, Investigator's Brochure
@@ -1230,6 +1724,10 @@ function getSectionGuidance(sectionId: string) {
           <li>Randomization and stratification (if applicable)</li>
           <li>Blinding approach (subject, investigator, assessor)</li>
           <li>Study duration and follow-up schedule</li>
+          {isUS && <li>Non-significant risk (NSR) or significant risk (SR) determination per 21 CFR 812.3(m)</li>}
+          {isSaMD && <li>Algorithm lock date and version control per IEC 62304 and IMDRF N41</li>}
+          {isJapan && <li>PMDA-specific study design requirements for medical device clinical trials</li>}
+          {isChina && <li>NMPA clinical trial design — domestic data requirements</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Primary objective, endpoint timing, sample size justification
@@ -1246,6 +1744,10 @@ function getSectionGuidance(sectionId: string) {
           <li>Special population considerations (vulnerable subjects)</li>
           <li>Subject withdrawal and discontinuation rules</li>
           <li>Recruitment feasibility assessment</li>
+          {isUS && <li>Vulnerable subject protection per 21 CFR 50 Subpart B and 21 CFR 56</li>}
+          {isChina && <li>NMPA requirement for Chinese patient population representation</li>}
+          {isJapan && <li>PMDA ethnic sensitivity — Japanese population subgroup requirements</li>}
+          {isCanada && <li>Health Canada ICH E6(R2) GCP compliance for subject protection</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Device intended use, sample size target (Section 4.8), enrollment feasibility
@@ -1263,6 +1765,9 @@ function getSectionGuidance(sectionId: string) {
           <li>Clinical assessments, imaging, laboratory tests</li>
           <li>Endpoint measurement methods</li>
           <li>Source documentation and data collection forms</li>
+          {isUS && <li>Visit schedule and assessment windows per 21 CFR 812.25(c)</li>}
+          {isJapan && <li>PMDA GCP (MHLW Ordinance No. 169) procedure documentation</li>}
+          {isAustralia && <li>TGA GCP requirements per TGA GCP guidance</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Endpoint definitions, assessment timing, statistical analysis windows
@@ -1279,6 +1784,11 @@ function getSectionGuidance(sectionId: string) {
           <li>Reporting timelines (sponsor, competent authority, ethics)</li>
           <li>Stopping rules and safety signals</li>
           <li>Post-market vigilance linkage</li>
+          {isUS && <li>UADE reporting within 10 working days per 21 CFR 812.150(b)</li>}
+          {isUS && <li>MDR (Medical Device Reporting) obligations per 21 CFR 803</li>}
+          {isJapan && <li>PMDA safety reporting per MHLW Ministerial Ordinance</li>}
+          {isChina && <li>NMPA adverse event reporting per Chinese medical device regulations</li>}
+          {isUK && <li>MHRA vigilance reporting per UK MDR 2002 Schedule 8</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: EU MDR vigilance requirements, Sponsor SOPs, regulatory reporting obligations
@@ -1296,6 +1806,9 @@ function getSectionGuidance(sectionId: string) {
           <li>Handling of missing data and dropouts</li>
           <li>Interim analysis plan (if applicable)</li>
           <li>Reference to detailed Statistical Analysis Plan (SAP)</li>
+          {isUS && <li>FDA-compliant SAP per 21 CFR 812.25(h) — pre-specified before database lock</li>}
+          {isJapan && <li>PMDA statistical requirements — Japanese regulatory SAP expectations</li>}
+          {isSaMD && <li>Algorithm performance metrics — AUC, sensitivity/specificity, confidence intervals per IMDRF N41</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Primary objective, endpoint definitions, study design, enrollment target
@@ -1313,6 +1826,12 @@ function getSectionGuidance(sectionId: string) {
           <li>Data protection and confidentiality (GDPR)</li>
           <li>Subject compensation for injury</li>
           <li>Protocol amendments and deviation management</li>
+          {isUS && <li>FDA IDE application or NSR determination per 21 CFR 812.2</li>}
+          {isUK && <li>MHRA notification and UK ethics committee approval</li>}
+          {isJapan && <li>PMDA pre-submission meeting and ethics review</li>}
+          {isChina && <li>NMPA clinical trial approval</li>}
+          {isCanada && <li>Health Canada clinical trial application (CTA)</li>}
+          {isAustralia && <li>TGA clinical trial notification (CTN) or approval (CTA)</li>}
         </ul>
         <p className="text-xs text-slate-500 mt-3 italic">
           Must align with: Local regulatory requirements, institutional policies, data management plan
@@ -1324,7 +1843,7 @@ function getSectionGuidance(sectionId: string) {
   return guidance[sectionId] || null;
 }
 
-function getSectionPitfalls(sectionId: string) {
+function getSectionPitfalls(sectionId: string, targetMarkets: string[] = [], deviceCategory: string = '') {
   const pitfalls: Record<string, JSX.Element> = {
     '1': (
       <ul className="text-xs text-slate-700 space-y-1 list-disc list-inside">
@@ -1403,432 +1922,11 @@ function getSectionPitfalls(sectionId: string) {
 }
 
 function getSectionContent(sectionId: string, aiGenerated: boolean, issues: ProtocolIssue[]) {
-  const contents: Record<string, JSX.Element> = {
-    '1': (
-      <div className="space-y-4">
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Administrative Identifiers</div>
-          <div className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-2.5 text-xs">
-            <div className="text-slate-500">Protocol Title (Full)</div>
-            <textarea 
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2 min-h-[60px] resize-none"
-              defaultValue="A Prospective, Multi-Center, Randomized Controlled Study Evaluating the Safety and Performance of the CardiaFlow Transcatheter Aortic Valve System in Patients with Severe Symptomatic Aortic Stenosis"
-            />
-            
-            <div className="text-slate-500">Short Title</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="CARDIA-FLOW-2026"
-            />
-            
-            <div className="text-slate-500">Protocol ID</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="CF-EU-2026-001"
-            />
-            
-            <div className="text-slate-500">Version & Date</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="Version 1.3 (Draft) — 08 February 2026"
-            />
-            
-            <div className="text-slate-500">EudraCT Number</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="2026-000547-19 (pending)"
-            />
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Sponsor Organization</div>
-          <div className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-2.5 text-xs">
-            <div className="text-slate-500">Legal Entity</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="CardiaFlow Medical Technologies GmbH"
-            />
-            
-            <div className="text-slate-500">Address</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="Technologiepark 15, 80992 München, Germany"
-            />
-            
-            <div className="text-slate-500">Regulatory Contact</div>
-            <textarea 
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2 min-h-[50px] resize-none"
-              defaultValue="Dr. Helena Schmidt, VP Clinical Affairs&#10;regulatory@cardiaflow-med.eu"
-            />
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Coordinating Investigator</div>
-          <div className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-2.5 text-xs">
-            <div className="text-slate-500">Name & Credentials</div>
-            <input 
-              type="text"
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2"
-              defaultValue="Prof. Dr. Andreas Müller, MD, PhD"
-            />
-            
-            <div className="text-slate-500">Affiliation</div>
-            <textarea 
-              className="text-sm text-slate-900 border border-slate-200 rounded p-2 min-h-[50px] resize-none"
-              defaultValue="University Heart Center Hamburg, Department of Interventional Cardiology&#10;Martinistraße 52, 20246 Hamburg, Germany"
-            />
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Study Phase</div>
-          <input 
-            type="text"
-            className="text-sm text-slate-900 border border-slate-200 rounded p-2 w-full"
-            defaultValue="Pivotal Clinical Investigation (EU MDR Article 62)"
-          />
-        </div>
-      </div>
-    ),
-    '2': (() => {
-      const primaryObjectiveIssue = issues.find(i => i.subsection.includes('Primary Objective'));
-      
-      return (
-        <div className="space-y-4">
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Clinical Background</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>Severe aortic stenosis affects 2-7% of individuals over 65 years and carries a grave prognosis without intervention. Transcatheter aortic valve replacement (TAVR) is established as standard of care for high-risk patients and increasingly adopted for intermediate-risk cohorts. Current devices face persistent challenges including paravalvular leak (5-15% moderate or greater), conduction disturbances requiring pacemaker implantation (10-20%), and subclinical leaflet thrombosis.</p>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Scientific Rationale</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>The CardiaFlow system incorporates three design innovations: an adaptive external sealing skirt to minimize paravalvular regurgitation, a fully repositionable deployment mechanism, and modified frame geometry to reduce conduction system interference. Preclinical data (porcine model, n=24) demonstrated significant reduction in paravalvular leak and 100% successful repositioning. This investigation evaluates whether these design features translate to clinical benefit in the target population.</p>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide flex items-center gap-2">
-              Primary Objective
-              {primaryObjectiveIssue && <InlineIssueMarker issue={primaryObjectiveIssue} />}
-            </div>
-            <div className={`text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed ${primaryObjectiveIssue ? 'bg-amber-50/30 border-amber-500' : ''}`}>
-              <p>
-                To demonstrate non-inferiority of the CardiaFlow Transcatheter Aortic Valve System compared to an active control (Edwards SAPIEN 3) with respect to the composite rate of all-cause mortality and major adverse cardiovascular events 
-                <span className={primaryObjectiveIssue ? 'bg-amber-100 border-b-2 border-amber-500 px-1' : ''}>
-                  at 12 months
-                </span> {primaryObjectiveIssue && <InlineIssueMarker issue={primaryObjectiveIssue} />} post-implantation in patients with severe symptomatic aortic stenosis at intermediate surgical risk.
-              </p>
-              {primaryObjectiveIssue && (
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
-                  <strong>Warning:</strong> Timepoint should be explicitly stated and aligned with Section 4.8 calculations.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Secondary Objectives</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>To assess device technical success rate, paravalvular regurgitation severity, hemodynamic performance (effective orifice area, mean gradient), functional status improvement (NYHA class, 6-minute walk distance), quality of life (KCCQ), and new permanent pacemaker implantation rate. Endpoint assessments conducted at discharge, 30 days, 6 months, 12 months, and 24 months.</p>
-            </div>
-          </div>
-        </div>
-      );
-    })(),
-    '3': (() => {
-      const classificationIssue = issues.find(i => i.subsection.includes('Clinical Context'));
-      
-      return (
-        <div className="space-y-4">
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Device Description</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed space-y-2">
-              <p>The CardiaFlow Transcatheter Aortic Valve System is a balloon-expandable bioprosthetic valve consisting of a cobalt-chromium frame, bovine pericardial leaflets, and an external adaptive sealing skirt. The device is available in four sizes (23mm, 26mm, 29mm, 32mm) to accommodate annulus diameters 20-30mm. Delivery is via transfemoral approach using a low-profile 14-16F sheath compatible catheter system with integrated repositioning capability.</p>
-              <p>Key design features: (1) external sealing skirt with proprietary geometry intended to conform to irregular native annulus anatomy and minimize paravalvular leak, (2) controlled deployment mechanism enabling repositioning prior to final release, (3) modified frame design to reduce depth of implant into left ventricular outflow tract.</p>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Intended Clinical Use</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>The device is intended for transcatheter replacement of the native aortic valve in patients with severe symptomatic aortic stenosis who are at intermediate or high risk for surgical aortic valve replacement, as determined by a Heart Team assessment. The device is indicated for transfemoral delivery in patients with suitable iliofemoral vascular anatomy.</p>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide flex items-center gap-2">
-              Clinical Context & User Environment
-              {classificationIssue && <InlineIssueMarker issue={classificationIssue} />}
-            </div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed space-y-2">
-              <p>Implantation performed in hybrid operating room or catheterization laboratory equipped for cardiovascular interventions, with cardiac surgery backup immediately available. Procedure conducted by interventional cardiologist or cardiac surgeon with TAVR training and experience. Patients undergo pre-procedural CT angiography for sizing and anatomical assessment, intra-procedural fluoroscopy and echocardiographic guidance, and post-procedural monitoring per institutional TAVR protocols.</p>
-              <p className={classificationIssue ? 'bg-amber-50/30 border-l-2 border-amber-500 pl-2 py-1' : ''}>
-                <span className={classificationIssue ? 'bg-amber-100 border-b-2 border-amber-500 px-1' : ''}>
-                  Device classification: EU MDR Class III, Rule 8 (implantable device in contact with heart).
-                </span> {classificationIssue && <InlineIssueMarker issue={classificationIssue} />} Investigation conducted per MDR Article 62.
-              </p>
-              {classificationIssue && (
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
-                  <strong>Warning:</strong> Classification rationale should be expanded with explicit reference to Rule 8 criteria (cardiac contact duration, implantable nature).
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    })(),
-    '4': (
-      <div className="space-y-4">
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Study Type</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[80px] leading-relaxed"
-            defaultValue="This is a prospective, multi-center, randomized controlled, assessor-blinded non-inferiority trial. The investigational device (CardiaFlow) is compared to an active control (Edwards SAPIEN 3) with established safety and performance data. Study conducted at 8 sites across Germany, France, and the Netherlands. Target enrollment N=120 subjects randomized 2:1 (CardiaFlow:Control)."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Design Rationale</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="Randomized controlled design provides Class I evidence for device performance assessment. Active control comparison is ethically appropriate given availability of proven effective therapy. Non-inferiority margin (10 percentage points) selected based on FDA TAVR guidance and clinical relevance. 2:1 randomization maximizes exposure to investigational device while maintaining adequate control comparator data. Assessor blinding (Clinical Events Committee, Core Laboratory, statisticians) minimizes ascertainment bias."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Study Scope & Duration</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[80px] leading-relaxed"
-            defaultValue="Enrollment period: 6 months (Q2-Q4 2026). Per-subject participation: 24 months (screening, index procedure, follow-up at 30 days, 6 months, 12 months primary endpoint, and 24 months extended). Primary endpoint analysis at 12 months. Total study duration approximately 42 months including analysis and reporting. Subjects randomized after eligibility confirmation, informed consent, and Heart Team assessment."
-          />
-        </div>
-      </div>
-    ),
-    '5': (() => {
-      const blockerIssue = issues.find(i => i.severity === 'blocker' && i.subsection.includes('Inclusion Criteria'));
-      const exclusionIssue = issues.find(i => i.subsection.includes('Exclusion Criteria'));
-      
-      return (
-        <div className="space-y-4">
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide flex items-center gap-2">
-              Inclusion Criteria
-              {blockerIssue && <InlineIssueMarker issue={blockerIssue} />}
-            </div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed space-y-2">
-              <p>Subjects must meet all of the following criteria:</p>
-              <p className={blockerIssue ? 'bg-red-50/30 border-l-2 border-red-500 pl-2 py-1' : ''}>
-                Age ≥65 years. Severe aortic stenosis defined as aortic valve area ≤1.0 cm² or indexed area ≤0.6 cm²/m² with mean gradient ≥40 mmHg or peak velocity ≥4.0 m/s. Symptomatic disease (NYHA class II or III). Intermediate surgical risk (STS-PROM 4-8%). Heart Team consensus for TAVR appropriateness. Adequate iliofemoral access (vessel diameter ≥5.5mm for 14-16F sheath). Aortic annulus 20-27mm by CT. LVEF ≥30%. Life expectancy &gt;24 months. Willing and able to consent and comply with follow-up.
-              </p>
-              {blockerIssue && (
-                <div className="text-xs bg-red-50 border border-red-200 rounded p-2 mt-2" style={{color: '#991b1b'}}>
-                  <strong>Blocker:</strong> These criteria may yield insufficient recruitment pool for N=120 target within 6-month timeline. See cross-section consistency issue.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide flex items-center gap-2">
-              Exclusion Criteria
-              {exclusionIssue && <InlineIssueMarker issue={exclusionIssue} />}
-            </div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed space-y-2">
-              <p>Subjects meeting any of the following are excluded:</p>
-              <p>
-                Congenital unicuspid or bicuspid valve. Mixed valve disease (stenosis with &gt;mild regurgitation). Pre-existing prosthetic valve or ring. Severe mitral/tricuspid regurgitation requiring intervention. 
-                <span className={exclusionIssue ? 'bg-orange-50/50 border-b-2 border-orange-500 px-1' : ''}>
-                  LVEF &lt;30%
-                </span> {exclusionIssue && <InlineIssueMarker issue={exclusionIssue} />} or intracardiac mass. Recent MI (&lt;30d) or revascularization (&lt;90d). Stroke/TIA within 90 days or prior intracranial hemorrhage. Active infection or endocarditis. Severe renal impairment (eGFR &lt;20 or dialysis). Severe hepatic disease (Child-Pugh C). Active malignancy on treatment. Pregnancy or unwillingness to use contraception. Concurrent investigational study participation.
-              </p>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Withdrawal & Discontinuation Rules</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>Subjects may withdraw consent at any time. Investigators may withdraw subjects for safety concerns, protocol non-compliance, or lost to follow-up (≥3 contact attempts). Withdrawals before device implantation replaced; post-implantation withdrawals included in safety analysis. Vital status ascertained via national registries where permitted.</p>
-            </div>
-          </div>
-        </div>
-      );
-    })(),
-    '6': (() => {
-      const assessmentTimingIssue = issues.find(i => i.subsection.includes('Assessment Timing'));
-      
-      return (
-        <div className="space-y-4">
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide flex items-center gap-2">
-              Study Flow
-              {assessmentTimingIssue && <InlineIssueMarker issue={assessmentTimingIssue} />}
-            </div>
-            <div className={`text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed ${assessmentTimingIssue ? 'bg-red-50/30 border-red-500' : ''}`}>
-              <p>
-                Screening phase (up to 30 days): eligibility assessment, informed consent, clinical evaluation, echocardiography, CT angiography, laboratory tests, Heart Team review. Following randomization, subjects undergo index TAVR procedure per institutional protocol with protocol-specified assessments. Follow-up visits at discharge, 30 days (±7d), 6 months (±14d), 
-                <span className={assessmentTimingIssue ? 'bg-red-100 border-b-2 border-red-500 px-1' : ''}>
-                  12 months primary endpoint (±14d)
-                </span> {assessmentTimingIssue && <InlineIssueMarker issue={assessmentTimingIssue} />}, and 24 months extended (±30d). Unscheduled visits conducted for adverse events or clinical need.
-              </p>
-              {assessmentTimingIssue && (
-                <div className="text-xs bg-red-50 border border-red-200 rounded p-2 mt-2" style={{color: '#991b1b'}}>
-                  <strong>Blocker:</strong> Assessment window specification needed. Must define visit window (e.g., 12 months ±14 days) and specify how assessments outside window will be handled in statistical analysis.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Clinical Assessments</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>Clinical assessments: vital signs, NYHA class, 6-minute walk test, adverse event review. Quality of life: Kansas City Cardiomyopathy Questionnaire (KCCQ). ECG monitoring for conduction disturbances; pacemaker implantation documented with indication.</p>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Imaging & Endpoint Measurements</div>
-            <div className="text-xs text-slate-700 border border-slate-200 rounded p-3 leading-relaxed">
-              <p>Transthoracic echocardiography with Doppler (EOA, gradients, paravalvular leak grading per VARC-3) reviewed by independent Core Laboratory. Laboratory: hematology, chemistry, renal function. Endpoint adjudication: Clinical Events Committee reviews all deaths, strokes (neurologist-assessed), bleeding, vascular complications, and valve dysfunction.</p>
-            </div>
-          </div>
-        </div>
-      );
-    })(),
-    '7': (
-      <div className="space-y-4">
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Safety Oversight Structure</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="An independent Data Safety Monitoring Board (DSMB) provides ongoing safety oversight throughout the investigation. The DSMB reviews unblinded safety data at planned intervals (after 30, 60, and 90 subjects enrolled) and evaluates aggregate adverse event rates against pre-specified stopping rules. The DSMB has authority to recommend study modification, suspension, or termination based on safety concerns.&#10;&#10;Site investigators are responsible for continuous safety monitoring of enrolled subjects. The Sponsor maintains a qualified safety team for event assessment, regulatory reporting, and communication with competent authorities and ethics committees."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Event Definitions</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="Adverse Event (AE): Any untoward medical occurrence in a subject. Serious Adverse Event (SAE): Any AE that results in death, life-threatening condition, hospitalization or prolongation of hospitalization, persistent or significant disability, congenital anomaly, or requires intervention to prevent permanent impairment. Device-related event: Any AE where reasonable possibility exists that the investigational device caused or contributed to the event, as determined by the investigator.&#10;&#10;All adverse events graded per CTCAE v5.0 severity scale where applicable. Cardiovascular and procedural events adjudicated using VARC-3 standardized definitions."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Reporting Timelines & Escalation</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="SAEs reported to Sponsor within 24 hours of investigator awareness. Device-related SAEs and unanticipated serious adverse device effects (USADEs) reported to competent authorities and ethics committees within regulatory timelines: death or serious deterioration within 7 calendar days (preliminary) and 15 days (follow-up); other serious events within 15 days.&#10;&#10;All serious events undergo causality assessment by investigator and independent Clinical Events Committee. Sponsor files periodic safety update reports per MDR requirements."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Roles & Responsibilities</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[80px] leading-relaxed"
-            defaultValue="Investigators: identify, document, assess causality, report per protocol timelines. Sponsor: maintain safety database, perform causality review, submit regulatory notifications, provide safety updates to sites and DSMB. Clinical Events Committee: adjudicate all serious events using standardized criteria. DSMB: review aggregate safety data and make recommendations regarding study continuation."
-          />
-        </div>
-      </div>
-    ),
-    '8': (
-      <div className="space-y-4">
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Analysis Populations</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="Enrolled population: all subjects who sign informed consent. Intent-to-treat (ITT) population: all randomized subjects. Modified ITT (mITT) population: all randomized subjects who undergo device implantation attempt. Per-protocol (PP) population: mITT subjects without major protocol deviations affecting efficacy assessments. Safety population: all subjects who undergo device implantation attempt.&#10;&#10;Primary analysis uses mITT population for both effectiveness and safety. Per-protocol analysis performed as sensitivity analysis for primary endpoint."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Primary Endpoint Analysis</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="The primary endpoint (composite rate of all-cause mortality and major adverse cardiovascular events at 12 months) analyzed using one-sided 97.5% confidence interval for the difference in event rates (CardiaFlow minus Control). Non-inferiority concluded if the upper bound of the confidence interval is less than 10 percentage points. Confidence interval constructed using Miettinen-Nurminen method for risk difference with stratification by site and baseline STS-PROM score.&#10;&#10;If non-inferiority is demonstrated, superiority will be tested using the same confidence interval approach (two-sided alpha 0.05)."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Secondary Endpoints & Subgroup Analyses</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[80px] leading-relaxed"
-            defaultValue="Binary endpoints (device success, pacemaker rate, paravalvular leak grade) analyzed using risk differences with 95% confidence intervals. Continuous endpoints (EOA, mean gradient, KCCQ scores) analyzed using analysis of covariance (ANCOVA) with baseline value as covariate. Time-to-event endpoints analyzed using Kaplan-Meier methods and log-rank tests. Hierarchical testing procedure applied to control Type I error for key secondary endpoints."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Sample Size Justification</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[70px] leading-relaxed"
-            defaultValue="Sample size of N=120 (80 CardiaFlow, 40 Control) provides 80% power to demonstrate non-inferiority with a one-sided alpha of 0.025, assuming a 15% event rate in both groups, non-inferiority margin of 10 percentage points, and 15% loss to follow-up. Sample size calculation performed using PASS 2023 software."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Missing Data Handling</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[60px] leading-relaxed"
-            defaultValue="Missing primary endpoint data handled using multiple imputation under missing-at-random assumption, with sensitivity analyses exploring missing-not-at-random scenarios. Subjects lost to follow-up have vital status ascertained via national registries where permitted. Major protocol deviations reviewed by blinded adjudication committee prior to database lock."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Statistical Analysis Plan Reference</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[50px] leading-relaxed"
-            defaultValue="This section provides high-level statistical considerations. Detailed methodology, interim analyses, subgroup analyses, and sensitivity analyses are specified in the Statistical Analysis Plan (SAP), finalized and approved prior to database lock and unblinding."
-          />
-        </div>
-      </div>
-    ),
-    '9': (
-      <div className="space-y-4">
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Ethical Framework</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[90px] leading-relaxed"
-            defaultValue="This clinical investigation is conducted in accordance with the ethical principles of the Declaration of Helsinki (2013 revision), ISO 14155:2020 standards for clinical investigation of medical devices, and Good Clinical Practice guidelines. All study procedures respect human dignity, autonomy, privacy, and confidentiality. The investigation design ensures favorable risk-benefit balance for participants and scientific validity to generate meaningful clinical evidence."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Informed Consent Process</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="Written informed consent is obtained from each subject prior to any study-specific procedures. The informed consent form describes study purpose, procedures, risks, benefits, alternatives, confidentiality provisions, compensation for injury, voluntary participation, and right to withdraw. Consent is obtained by a qualified investigator or delegated study team member trained in informed consent procedures.&#10;&#10;Subjects receive adequate time to consider participation and opportunity to ask questions. Consent forms are approved by the relevant ethics committee and available in the local language. Subjects receive a signed copy of the consent document."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Ethics Committee Approval & Ongoing Reporting</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[80px] leading-relaxed"
-            defaultValue="The protocol, informed consent forms, and subject-facing materials are submitted to and approved by the ethics committee or institutional review board at each participating site prior to study initiation. Substantive protocol amendments require ethics committee approval before implementation. Annual progress reports and safety updates are submitted per ethics committee requirements. Serious adverse events are reported in accordance with local regulations and ethics committee procedures."
-          />
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-900 mb-2 uppercase tracking-wide">Regulatory Compliance</div>
-          <textarea 
-            className="w-full text-xs text-slate-700 border border-slate-200 rounded p-3 min-h-[100px] leading-relaxed"
-            defaultValue="This investigation is conducted per EU Medical Device Regulation (MDR) 2017/745, Article 62 requirements for clinical investigations. The Sponsor has submitted clinical investigation applications to competent authorities in Germany, France, and the Netherlands. Investigation commences only after receipt of approval or implicit authorization per national timelines.&#10;&#10;The study complies with ISO 14155:2020 standards, including requirements for protocol content, investigator qualifications, monitoring, data management, and reporting. The Sponsor maintains regulatory intelligence for any changes to applicable regulations during the investigation conduct. All data are handled in compliance with EU General Data Protection Regulation (GDPR) 2016/679."
-          />
-        </div>
-      </div>
-    ),
-  };
-
-  return contents[sectionId] || <p className="text-xs text-slate-500 italic">Content not available</p>;
+  return (
+    <div className="text-xs text-slate-500 border border-dashed border-slate-300 rounded p-4 bg-slate-50 text-center">
+      Content not yet generated. Click Generate to create this section.
+    </div>
+  );
 }
 
 function getSectionAuditTrail(sectionId: string): Array<{
@@ -1935,7 +2033,7 @@ function getSectionAuditTrail(sectionId: string): Array<{
         userRole: 'Principal Investigator',
         action: 'Content updated',
         affectedElement: 'Clinical Background',
-        details: 'Expanded background with current TAVR device performance data and unmet clinical needs.',
+        details: 'Expanded background with current device performance data and unmet clinical needs.',
         aiAssisted: true,
       },
       {
@@ -2092,7 +2190,7 @@ function getSectionAuditTrail(sectionId: string): Array<{
         userRole: 'Clinical Operations Lead',
         action: 'Content updated',
         affectedElement: 'Imaging & Endpoint Measurements',
-        details: 'Added echocardiography Core Laboratory review requirement and VARC-3 grading standards.',
+        details: 'Added independent imaging review requirement and standardized grading criteria.',
       },
       {
         timestamp: '2026-02-07 14:35:28',
@@ -2111,7 +2209,7 @@ function getSectionAuditTrail(sectionId: string): Array<{
         userRole: 'AI Content Generator',
         action: 'AI draft generated',
         affectedElement: 'Section 4.6 (entire)',
-        details: 'AI-generated procedures and assessments based on TAVR clinical standards, VARC-3 definitions, and endpoint requirements from Section 4.2.',
+        details: 'AI-generated procedures and assessments based on applicable clinical standards and endpoint requirements from Section 4.2.',
         aiAssisted: true,
       },
       {

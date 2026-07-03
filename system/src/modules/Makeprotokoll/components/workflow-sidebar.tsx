@@ -28,11 +28,11 @@ export function WorkflowSidebar({ currentStep, onNavigate }: WorkflowSidebarProp
   const getStatusIcon = (status: WorkflowStatus) => {
     switch (status) {
       case 'Complete':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'In Progress':
         return <Loader className="w-4 h-4 text-blue-600" />;
       case 'Blocked':
-        return <AlertCircle className="w-4 h-4 text-red-600" />;
+        return <AlertCircle className="w-4 h-4 text-rose-700" />;
       case 'Locked':
         return <Lock className="w-4 h-4 text-slate-600" />;
       case 'Not Started':

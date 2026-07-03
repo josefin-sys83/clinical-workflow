@@ -23,7 +23,7 @@ export function OpenItemsList({ items, onItemClick }: OpenItemsListProps) {
       case 'Reviewer':
         return 'bg-purple-100 text-purple-800 hover:bg-purple-100';
       case 'Approver':
-        return 'bg-green-100 text-green-800 hover:bg-green-100';
+        return 'bg-blue-50 text-blue-700 hover:bg-blue-50';
       case 'Principal Investigator':
         return 'bg-amber-100 text-amber-800 hover:bg-amber-100';
       case 'Observer':
@@ -38,13 +38,13 @@ export function OpenItemsList({ items, onItemClick }: OpenItemsListProps) {
       case 'Review':
         return 'bg-purple-50 text-purple-700 border-purple-200';
       case 'Approve':
-        return 'bg-green-50 text-green-700 border-green-200';
+        return 'bg-blue-50 text-blue-700 border-blue-200';
       case 'Edit':
         return 'bg-blue-50 text-blue-700 border-blue-200';
       case 'Sign':
         return 'bg-amber-50 text-amber-700 border-amber-200';
       case 'Upload':
-        return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+        return 'bg-purple-50 text-purple-700 border-purple-200';
       case 'Comment':
         return 'bg-gray-50 text-gray-700 border-gray-200';
       default:
@@ -75,9 +75,9 @@ export function OpenItemsList({ items, onItemClick }: OpenItemsListProps) {
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
     if (diffDays < 0) {
-      return { text: `${Math.abs(diffDays)} days overdue`, color: 'text-red-600' };
+      return { text: `${Math.abs(diffDays)} days overdue`, color: 'text-rose-700' };
     } else if (diffDays === 0) {
-      return { text: 'Due today', color: 'text-red-600' };
+      return { text: 'Due today', color: 'text-rose-700' };
     } else if (diffDays === 1) {
       return { text: 'Due tomorrow', color: 'text-yellow-600' };
     } else if (diffDays <= 3) {

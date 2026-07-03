@@ -16,10 +16,10 @@ interface SectionCompletenessIndicatorProps {
   onVerify?: (elementId: string) => void;
 }
 
-export function SectionCompletenessIndicator({ 
-  sectionNumber, 
+export function SectionCompletenessIndicator({
+  sectionNumber,
   requiredElements,
-  onVerify 
+  onVerify,
 }: SectionCompletenessIndicatorProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -27,9 +27,12 @@ export function SectionCompletenessIndicator({
   const partialCount = requiredElements.filter(e => e.status === 'partial').length;
   const missingCount = requiredElements.filter(e => e.status === 'missing').length;
   const totalCount = requiredElements.length;
-  
+
   const allComplete = completeCount === totalCount;
   const hasGaps = missingCount > 0 || partialCount > 0;
+
+  const statusLabel = allComplete ? 'Complete' : `${completeCount}/${totalCount}`;
+  const statusClassName = allComplete ? 'text-blue-700' : 'text-slate-600';
 
   const getStatusIcon = (status: RequiredElement['status']) => {
     switch (status) {
@@ -59,15 +62,9 @@ export function SectionCompletenessIndicator({
         </div>
         
         <div className="flex items-center gap-3">
-          {allComplete ? (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-blue-700">Complete</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-slate-600">{completeCount}/{totalCount}</span>
-            </div>
-          )}
+          <span className={`text-xs font-medium ${statusClassName}`}>
+            {statusLabel}
+          </span>
           {isExpanded ? (
             <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
           ) : (
@@ -116,7 +113,7 @@ export function SectionCompletenessIndicator({
                     </div>
                   )}
                   {element.status === 'missing' && (
-                    <div className="text-xs text-red-600 mt-1">
+                    <div className="text-xs text-rose-700 mt-1">
                       Missing - must be added before approval
                     </div>
                   )}

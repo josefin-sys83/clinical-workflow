@@ -28,7 +28,7 @@ export function ProjectSidebar({ gates, currentGateId }: ProjectSidebarProps) {
   const getGateStatusIcon = (status: string) => {
     switch (status) {
       case 'Completed':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'Active':
         return <FileText className="w-4 h-4 text-blue-600" />;
       case 'Locked':
@@ -113,7 +113,7 @@ export function ProjectSidebar({ gates, currentGateId }: ProjectSidebarProps) {
             </div>
             <div className="flex justify-between">
               <span className="text-slate-600">Blockers</span>
-              <span className="font-semibold text-red-700">1</span>
+              <span className="font-semibold text-rose-700">1</span>
             </div>
           </div>
         </div>

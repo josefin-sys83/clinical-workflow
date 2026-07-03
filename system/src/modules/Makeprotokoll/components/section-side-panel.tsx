@@ -125,7 +125,7 @@ export function SectionSidePanel({ sectionTitle, sectionNumber, onClose }: Secti
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'blocker':
-        return 'text-red-700 bg-red-50 border-red-200';
+        return 'text-rose-700 bg-rose-50 border-rose-200';
       case 'high':
         return 'text-orange-700 bg-orange-50 border-orange-200';
       case 'medium':
@@ -252,7 +252,7 @@ export function SectionSidePanel({ sectionTitle, sectionNumber, onClose }: Secti
                             Mark as Resolved
                           </button>
                         ) : (
-                          <span className="text-xs text-green-700 font-medium flex items-center gap-1">
+                          <span className="text-xs text-blue-700 font-medium flex items-center gap-1">
                             <CheckCircle className="w-3 h-3" />
                             Resolved
                           </span>
@@ -266,7 +266,7 @@ export function SectionSidePanel({ sectionTitle, sectionNumber, onClose }: Secti
                 {comment.replies && comment.replies.map((reply) => (
                   <div key={reply.id} className="ml-6 p-3 bg-white border border-slate-200 rounded-lg">
                     <div className="flex items-start gap-2">
-                      <div className="w-6 h-6 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-semibold">
+                      <div className="w-6 h-6 bg-blue-50 text-blue-700 rounded-full flex items-center justify-center text-xs font-semibold">
                         {reply.author.split(' ').map(n => n[0]).join('')}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -361,7 +361,7 @@ export function SectionSidePanel({ sectionTitle, sectionNumber, onClose }: Secti
                       {event.action.includes('Edit') && <Edit className="w-3.5 h-3.5 text-slate-600" />}
                       {event.action.includes('comment') && <MessageSquare className="w-3.5 h-3.5 text-blue-600" />}
                       {event.action.includes('Generated') && <div className="w-2 h-2 bg-blue-600 rounded-full" />}
-                      {event.action.includes('created') && <User className="w-3.5 h-3.5 text-green-600" />}
+                      {event.action.includes('created') && <User className="w-3.5 h-3.5 text-indigo-600" />}
                       {event.action.includes('Approved') && <CheckCircle className="w-3.5 h-3.5 text-blue-600" />}
                       {event.action.includes('Locked') && <Lock className="w-3.5 h-3.5 text-slate-600" />}
                       {event.action.includes('Unlocked') && <Unlock className="w-3.5 h-3.5 text-amber-600" />}

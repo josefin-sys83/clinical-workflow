@@ -72,7 +72,7 @@ export function SectionCommentsPanel({
             <span className="text-slate-700">{openCount} Open</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <CheckCircle className="w-3 h-3 text-green-600" />
+            <CheckCircle className="w-3 h-3 text-indigo-600" />
             <span className="text-slate-700">{resolvedCount} Resolved</span>
           </div>
           <div className="text-slate-400">•</div>
@@ -108,7 +108,7 @@ export function SectionCommentsPanel({
             <button
               className={`px-3 py-1 text-xs rounded-full transition-colors ${
                 filter === 'resolved' 
-                  ? 'bg-green-600 text-white' 
+                  ? 'bg-indigo-600 text-white' 
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
               onClick={() => setFilter('resolved')}

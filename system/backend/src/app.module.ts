@@ -8,6 +8,8 @@ import { AuditModule } from './modules/audit/audit.module';
 import { MeModule } from './modules/me/me.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AdminModule } from './modules/admin/admin.module';
+import { SettingsModule } from './modules/settings/settings.module';
 
 @Module({
   imports: [
@@ -19,6 +21,8 @@ import { AiModule } from './modules/ai/ai.module';
     MeModule,
     AuthModule,
     AiModule,
+    AdminModule,
+    SettingsModule,
   ],
   controllers: [HealthController],
 })

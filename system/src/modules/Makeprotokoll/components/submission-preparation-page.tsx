@@ -38,7 +38,7 @@ export function SubmissionPreparationPage({
                     {protocolName}
                   </h1>
                   {allSignoffsComplete && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-green-100 text-green-800 text-xs font-medium border border-green-200 rounded">
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-medium border border-blue-200 rounded">
                       <Lock className="w-3 h-3" />
                       Locked / Approved
                     </div>
@@ -125,19 +125,19 @@ export function SubmissionPreparationPage({
 
           {/* Completion Status */}
           {allSignoffsComplete && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-5">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-5">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-                  <Lock className="w-5 h-5 text-green-700" />
+                <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center flex-shrink-0">
+                  <Lock className="w-5 h-5 text-blue-700" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-base font-semibold text-green-900 mb-1">
+                  <h3 className="text-base font-semibold text-blue-900 mb-1">
                     Protocol Approved and Locked
                   </h3>
-                  <p className="text-sm text-green-800 leading-relaxed mb-3">
+                  <p className="text-sm text-blue-700 leading-relaxed mb-3">
                     All required sign-offs are complete. The protocol is now approved and immutable. Generate authority-specific export packages for submission to competent authorities and Ethics Committees.
                   </p>
-                  <div className="text-xs text-green-700">
+                  <div className="text-xs text-blue-700">
                     <div className="mb-1">
                       <span className="font-medium">Next steps:</span>
                     </div>

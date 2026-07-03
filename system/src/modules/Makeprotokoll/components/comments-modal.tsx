@@ -53,11 +53,11 @@ export function CommentsModal({
   const getCommentTypeStyle = (type: string) => {
     switch (type) {
       case 'issue':
-        return 'bg-red-50 border-l-4 border-red-500';
+        return 'bg-rose-50 border-l-4 border-rose-500';
       case 'approval-request':
         return 'bg-purple-50 border-l-4 border-purple-500';
       case 'resolved':
-        return 'bg-green-50 border-l-4 border-green-500';
+        return 'bg-blue-50 border-l-4 border-indigo-500';
       default:
         return 'bg-slate-50 border-l-4 border-slate-300';
     }
@@ -97,7 +97,7 @@ export function CommentsModal({
                 {openComments.length} open
               </span>
               <span className="flex items-center gap-1">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <div className="w-2 h-2 bg-indigo-600 rounded-full"></div>
                 {resolvedComments.length} resolved
               </span>
             </div>
@@ -190,14 +190,14 @@ export function CommentsModal({
               {resolvedComments.length > 0 && (
                 <div className="mt-6">
                   <div className="text-xs font-medium text-slate-700 mb-3 flex items-center gap-2">
-                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                    <div className="w-2 h-2 bg-indigo-600 rounded-full"></div>
                     RESOLVED COMMENTS ({resolvedComments.length})
                   </div>
                   <div className="space-y-3">
                     {resolvedComments.map((comment) => (
                       <div 
                         key={comment.id}
-                        className="p-4 rounded bg-green-50 border-l-4 border-green-500 opacity-75"
+                        className="p-4 rounded bg-blue-50 border-l-4 border-indigo-500 opacity-75"
                       >
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex items-start gap-3">
@@ -212,7 +212,7 @@ export function CommentsModal({
                                 <span className="px-2 py-0.5 bg-white/50 text-slate-700 text-xs rounded">
                                   {comment.authorRole}
                                 </span>
-                                <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                <CheckCircle2 className="w-4 h-4 text-indigo-600" />
                               </div>
                               <div className="flex items-center gap-1 text-xs text-slate-500 mt-1">
                                 <Clock className="w-3 h-3" />
@@ -227,7 +227,7 @@ export function CommentsModal({
                         </p>
 
                         {comment.resolvedBy && (
-                          <div className="mt-2 ml-11 p-2 bg-white/50 rounded text-xs text-green-800">
+                          <div className="mt-2 ml-11 p-2 bg-white/50 rounded text-xs text-blue-700">
                             <CheckCircle2 className="w-3 h-3 inline mr-1" />
                             Resolved by {comment.resolvedBy} on {comment.resolvedDate}
                           </div>

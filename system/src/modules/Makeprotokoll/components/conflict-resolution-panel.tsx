@@ -58,7 +58,7 @@ export function ConflictResolutionPanel({
       case 'missing':
         return 'text-orange-700 bg-orange-50 border-orange-200';
       case 'blocker':
-        return 'text-red-700 bg-red-50 border-red-200';
+        return 'text-rose-700 bg-rose-50 border-rose-200';
       default:
         return 'text-slate-700 bg-slate-50 border-slate-200';
     }

@@ -28,9 +28,9 @@ export function ReportReview() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-3 gap-4 mb-6">
-                <div className="text-center p-4 bg-green-50 rounded-lg border border-green-200">
-                  <div className="text-2xl font-bold text-green-700">3</div>
-                  <div className="text-xs text-green-600 mt-1">Approved</div>
+                <div className="text-center p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <div className="text-2xl font-bold text-blue-700">3</div>
+                  <div className="text-xs text-indigo-600 mt-1">Approved</div>
                 </div>
                 <div className="text-center p-4 bg-amber-50 rounded-lg border border-amber-200">
                   <div className="text-2xl font-bold text-amber-700">2</div>
@@ -48,7 +48,7 @@ export function ReportReview() {
                     <div className="font-medium text-sm">Medical Writer Review</div>
                     <div className="text-xs text-muted-foreground">Dr. Michael Chen</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <CheckCircle2 className="size-3 mr-1" />
                     Approved
                   </Badge>
@@ -59,7 +59,7 @@ export function ReportReview() {
                     <div className="font-medium text-sm">Statistical Review</div>
                     <div className="text-xs text-muted-foreground">Dr. Robert Kim</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <CheckCircle2 className="size-3 mr-1" />
                     Approved
                   </Badge>
@@ -70,7 +70,7 @@ export function ReportReview() {
                     <div className="font-medium text-sm">Clinical Review</div>
                     <div className="text-xs text-muted-foreground">Dr. Lisa Anderson</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <CheckCircle2 className="size-3 mr-1" />
                     Approved
                   </Badge>

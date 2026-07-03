@@ -1,6 +1,8 @@
 export type SectionStatus = 'approved' | 'warning' | 'blocked';
-
+export type SectionReviewStatus = 'pending' | 'approved' | 'rejected';
 export type FindingSeverity = 'warning' | 'blocker';
+export type FindingSource = 'regulatory' | 'system';
+export type ReviewRole = 'regulatory' | 'vp' | 'viewer';
 
 export interface TableData {
   id: string;
@@ -15,14 +17,16 @@ export interface FigureData {
   caption: string;
   reference: string;
   type: 'bar-chart' | 'forest-plot' | 'kaplan-meier';
-  data?: any; // Chart-specific data
+  data?: any;
 }
 
 export interface ReportSection {
   id: string;
   title: string;
   status: SectionStatus;
-  content: string | string[]; // Can be array of paragraphs with table/figure markers
+  /** Review decision made by Regulatory Affairs */
+  reviewStatus?: SectionReviewStatus;
+  content: string | string[];
   tables?: TableData[];
   figures?: FigureData[];
   warnings?: InlineMarker[];
@@ -32,8 +36,17 @@ export interface ReportSection {
 export interface InlineMarker {
   id: string;
   type: FindingSeverity;
-  position: number; // Character position in content
+  position: number;
   description: string;
+}
+
+/** A review decision (approve/reject) on a single protocol section */
+export interface SectionReview {
+  sectionId: string;
+  status: SectionReviewStatus;
+  reviewedBy: string;
+  reviewedAt: string; // ISO timestamp
+  comment?: string;
 }
 
 export interface RegulatoryFinding {
@@ -42,10 +55,17 @@ export interface RegulatoryFinding {
   severity: FindingSeverity;
   description: string;
   location: string;
+  /** ISO reference e.g. "ISO 14155:2020 § 6.4" */
+  reference?: string;
+  /** 'regulatory' = manually added by RA role; 'system' = auto-detected from protocol issues */
+  source: FindingSource;
+  sectionOwner?: string;
+  addedBy?: string;
+  addedAt?: string;
   acceptedRisk?: boolean;
   acceptedBy?: string;
   acceptedAt?: Date;
-  textHighlight?: string; // Text snippet to highlight in the report
+  textHighlight?: string;
 }
 
 export interface ReviewerComment {

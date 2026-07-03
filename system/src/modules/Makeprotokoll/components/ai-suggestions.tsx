@@ -40,7 +40,7 @@ export function AISuggestions({ suggestions, onAccept, onDismiss }: AISuggestion
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case 'high':
-        return 'border-red-300 bg-red-50';
+        return 'border-rose-300 bg-rose-50';
       case 'medium':
         return 'border-amber-300 bg-amber-50';
       case 'low':
@@ -112,7 +112,7 @@ export function AISuggestions({ suggestions, onAccept, onDismiss }: AISuggestion
                           {getTypeLabel(suggestion.type)}
                         </span>
                         {suggestion.priority === 'high' && (
-                          <span className="px-1.5 py-0.5 bg-red-200 text-red-800 text-xs rounded font-medium">
+                          <span className="px-1.5 py-0.5 bg-red-200 text-rose-800 text-xs rounded font-medium">
                             High Priority
                           </span>
                         )}
@@ -164,7 +164,7 @@ export function AISuggestions({ suggestions, onAccept, onDismiss }: AISuggestion
                       {onAccept && (
                         <button
                           onClick={() => onAccept(suggestion.id)}
-                          className="flex-1 px-3 py-2 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors flex items-center justify-center gap-1"
+                          className="flex-1 px-3 py-2 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700 transition-colors flex items-center justify-center gap-1"
                         >
                           <ThumbsUp className="w-3 h-3" />
                           Accept & Apply

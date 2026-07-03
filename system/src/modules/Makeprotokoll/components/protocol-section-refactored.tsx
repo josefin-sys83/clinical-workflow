@@ -84,7 +84,7 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                 </span>
               )}
               {isApproved && !section.locked && (
-                <span className="px-2 py-0.5 bg-green-50 text-green-700 text-xs rounded border border-green-200 flex items-center gap-1">
+                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3" />
                   Approved
                 </span>
@@ -113,7 +113,7 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                 <span>{section.comments} comments</span>
               </div>
               {totalIssues > 0 && (
-                <div className="flex items-center gap-1 text-red-600 font-medium">
+                <div className="flex items-center gap-1 text-rose-700 font-medium">
                   <AlertCircle className="w-3 h-3" />
                   <span>{totalIssues} issue{totalIssues > 1 ? 's' : ''}</span>
                 </div>
@@ -141,14 +141,14 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
             
             {/* Compact Blocker/Warning Summary Banner - Only if critical */}
             {isBlocked && (
-              <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded">
+              <div className="p-3 bg-rose-50 border-l-4 border-rose-500 rounded">
                 <div className="flex items-start gap-3">
-                  <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                  <AlertCircle className="w-4 h-4 text-rose-700 flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <div className="text-sm font-medium text-red-900 mb-1">
+                    <div className="text-sm font-medium text-rose-800 mb-1">
                       {blockerCount} blocker{blockerCount > 1 ? 's' : ''} blocking completion
                     </div>
-                    <p className="text-xs text-red-700">
+                    <p className="text-xs text-rose-700">
                       Critical issues must be resolved before this section can be approved. See details below.
                     </p>
                   </div>
@@ -174,16 +174,16 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
 
             {/* AI Notice - Compact, only if relevant */}
             {section.aiGenerated && !isApproved && (
-              <div className="p-3 bg-blue-50 border-l-4 border-blue-400 rounded">
+              <div className="p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
                 <div className="flex items-start gap-3">
-                  <div className="w-5 h-5 bg-blue-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
+                  <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
                     AI
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-blue-900 mb-1">
+                    <div className="text-sm font-medium text-purple-900 mb-1">
                       AI-generated draft
                     </div>
-                    <p className="text-xs text-blue-700">
+                    <p className="text-xs text-purple-700">
                       Review carefully and edit as needed. All changes are logged.
                     </p>
                   </div>
@@ -200,12 +200,12 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <AlertCircle className={`w-4 h-4 ${isBlocked ? 'text-red-600' : 'text-amber-600'}`} />
+                      <AlertCircle className={`w-4 h-4 ${isBlocked ? 'text-rose-700' : 'text-amber-600'}`} />
                       <span className="text-sm font-medium text-slate-900">
                         {totalIssues} issue{totalIssues > 1 ? 's' : ''} requiring attention
                       </span>
                       {blockerCount > 0 && (
-                        <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded font-medium">
+                        <span className="px-2 py-0.5 bg-rose-50 text-rose-700 text-xs rounded font-medium">
                           {blockerCount} blocker{blockerCount > 1 ? 's' : ''}
                         </span>
                       )}
@@ -223,19 +223,19 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                         key={issue.id}
                         className={`border-l-4 rounded p-3 bg-white ${
                           issue.severity === 'blocker' 
-                            ? 'border-red-500' 
+                            ? 'border-rose-500' 
                             : 'border-amber-500'
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          {issue.severity === 'blocker' && <Ban className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />}
+                          {issue.severity === 'blocker' && <Ban className="w-4 h-4 text-rose-700 flex-shrink-0 mt-0.5" />}
                           {issue.severity === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />}
                           
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
                               <span className={`text-xs font-medium uppercase tracking-wide ${
                                 issue.severity === 'blocker' 
-                                  ? 'text-red-900' 
+                                  ? 'text-rose-800' 
                                   : 'text-amber-900'
                               }`}>
                                 {issue.severity}
@@ -246,7 +246,7 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                             
                             <p className={`text-xs leading-relaxed mb-2 ${
                               issue.severity === 'blocker' 
-                                ? 'text-red-800' 
+                                ? 'text-rose-800' 
                                 : 'text-amber-800'
                             }`}>
                               {issue.description}
@@ -356,8 +356,8 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                       <div className="flex items-center gap-2">
                         {isApproved ? (
                           <>
-                            <CheckCircle2 className="w-4 h-4 text-green-600" />
-                            <span className="text-sm font-medium text-green-700">Approved</span>
+                            <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                            <span className="text-sm font-medium text-blue-700">Approved</span>
                           </>
                         ) : (
                           <>
@@ -426,7 +426,7 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
                   Request Changes
                 </button>
                 {!isApproved && (
-                  <button className="px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors flex items-center gap-2">
+                  <button className="px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 transition-colors flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4" />
                     Approve Section
                   </button>

@@ -70,14 +70,14 @@ export function UnlockAmendmentModal({
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           {/* Warning Notice */}
-          <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg">
             <div className="flex gap-3">
-              <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-rose-700 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <div className="text-sm font-medium text-red-900 mb-1">
+                <div className="text-sm font-medium text-rose-800 mb-1">
                   Regulatory Impact Warning
                 </div>
-                <p className="text-xs text-red-800 leading-relaxed">
+                <p className="text-xs text-rose-800 leading-relaxed">
                   Unlocking the protocol will revert all sections to editable state and initiate a new amendment cycle. 
                   All prior approvals will be marked as superseded and re-approval will be required. 
                   This action is audit-logged per ISO 14155:2020 § 6.3.8 and 21 CFR Part 11.
@@ -89,7 +89,7 @@ export function UnlockAmendmentModal({
           {/* Reason Input */}
           <div>
             <label className="block text-sm font-medium text-slate-900 mb-2">
-              Amendment Justification <span className="text-red-600">*</span>
+              Amendment Justification <span className="text-rose-700">*</span>
             </label>
             <textarea
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"

@@ -21,12 +21,17 @@ async function parseJsonSafe(res: Response) {
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = typeof FormData !== 'undefined' && init?.body instanceof FormData;
+  // Lazy import avoids circular deps; token module has no React imports
+  const { getToken } = await import('../auth/token');
+  const token = getToken();
+  const { headers: callerHeaders, ...restInit } = init ?? {};
   const res = await fetch(path.startsWith('/api') ? path : `/api${path}`, {
+    ...restInit,
     headers: {
       ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-      ...(init?.headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(callerHeaders ?? {}),
     },
-    ...init,
   });
 
   if (!res.ok) {

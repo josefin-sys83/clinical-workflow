@@ -1,4 +1,4 @@
-import { Database, FileText, Table2, BarChart3, FileSpreadsheet, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
+import { Database, FileText, Table2, BarChart3, FileSpreadsheet, CheckCircle2, Upload, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 import { DataAsset, UploadedFile, ReportSection } from '../types';
 import { useState } from 'react';
 
@@ -187,7 +187,23 @@ export function StatisticsDataAssetsPanel({
           
           {expandedUploadedFiles && (
             <div className="px-4 pb-3 space-y-2">
-              {uploadedFiles.map(file => (
+              {uploadedFiles.length === 0 ? (
+                <div className="flex flex-col items-center py-4 gap-2">
+                  <p
+                    className="text-[#9CA3AF] text-center"
+                    style={{ fontSize: '11px', fontFamily: 'system-ui, sans-serif' }}
+                  >
+                    No files uploaded yet
+                  </p>
+                  <button
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#D1D5DB] bg-white hover:bg-[#F9FAFB] text-[#374151] transition-colors"
+                    style={{ fontSize: '11px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
+                  >
+                    <Upload className="w-3 h-3" />
+                    Upload
+                  </button>
+                </div>
+              ) : uploadedFiles.map(file => (
                 <div
                   key={file.id}
                   className="p-2.5 rounded border border-[#E5E7EB] bg-white"
@@ -197,7 +213,7 @@ export function StatisticsDataAssetsPanel({
                       {getFileIcon(file.type)}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div 
+                      <div
                         className="text-[#111827] break-words"
                         style={{ fontSize: '11px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
                       >
@@ -205,23 +221,23 @@ export function StatisticsDataAssetsPanel({
                       </div>
                     </div>
                   </div>
-                  
+
                   <div className="flex items-center gap-2 ml-5">
-                    <span 
+                    <span
                       className="px-1.5 py-0.5 bg-[#F3F4F6] text-[#374151] rounded"
                       style={{ fontSize: '9px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
                     >
                       {getFileTypeLabel(file.type)}
                     </span>
-                    <span 
+                    <span
                       className="text-[#9CA3AF]"
                       style={{ fontSize: '9px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
                     >
                       {file.size}
                     </span>
                   </div>
-                  
-                  <div 
+
+                  <div
                     className="text-[#6B7280] ml-5 mt-1"
                     style={{ fontSize: '9px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
                   >
@@ -257,6 +273,23 @@ export function StatisticsDataAssetsPanel({
           
           {expandedDataAssets && (
             <div className="px-4 pb-3 space-y-2">
+              {dataAssets.length === 0 && (
+                <div className="flex flex-col items-center py-4 gap-2">
+                  <p
+                    className="text-[#9CA3AF] text-center"
+                    style={{ fontSize: '11px', fontFamily: 'system-ui, sans-serif' }}
+                  >
+                    No data assets added yet
+                  </p>
+                  <button
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#D1D5DB] bg-white hover:bg-[#F9FAFB] text-[#374151] transition-colors"
+                    style={{ fontSize: '11px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
+                  >
+                    <Plus className="w-3 h-3" />
+                    Add data asset
+                  </button>
+                </div>
+              )}
               {dataAssets.map(asset => {
                 const { referenced, sections: referencingSections } = isAssetReferenced(asset.id);
                 

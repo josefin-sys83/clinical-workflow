@@ -58,7 +58,7 @@ export function ProjectSetup({ onContinue, projectData }: ProjectSetupProps) {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-2">
-                      Project Name <span className="text-red-600">*</span>
+                      Project Name <span className="text-rose-700">*</span>
                     </label>
                     <input
                       type="text"
@@ -109,7 +109,7 @@ export function ProjectSetup({ onContinue, projectData }: ProjectSetupProps) {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-2">
-                      Sponsor Legal Entity <span className="text-red-600">*</span>
+                      Sponsor Legal Entity <span className="text-rose-700">*</span>
                     </label>
                     <input
                       type="text"
@@ -143,7 +143,7 @@ export function ProjectSetup({ onContinue, projectData }: ProjectSetupProps) {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-2">
-                      Device Name <span className="text-red-600">*</span>
+                      Device Name <span className="text-rose-700">*</span>
                     </label>
                     <input
                       type="text"

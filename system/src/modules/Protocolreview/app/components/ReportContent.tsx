@@ -1,20 +1,30 @@
 import { useEffect, useRef } from 'react';
+import {
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  AlertCircle,
+} from 'lucide-react';
 import type { ReportSection, RegulatoryFinding } from '../types/review';
 import { TableView } from './TableView';
 import { FigureView } from './FigureView';
-import { AlertTriangle, AlertCircle } from 'lucide-react';
 
 interface ReportContentProps {
   sections: ReportSection[];
   onSectionVisible: (sectionId: string) => void;
   findings: RegulatoryFinding[];
+  projectName?: string;
+  deviceName?: string;
 }
 
-export function ReportContent({ sections, onSectionVisible, findings }: ReportContentProps) {
+export function ReportContent({
+  sections,
+  onSectionVisible,
+  findings,
+  projectName,
+  deviceName,
+}: ReportContentProps) {
   const sectionRefs = useRef<{ [key: string]: HTMLElement | null }>({});
-
-  // Debug: Log findings to see if they're passed correctly
-  console.log('ReportContent received findings:', findings);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -25,7 +35,7 @@ export function ReportContent({ sections, onSectionVisible, findings }: ReportCo
           }
         });
       },
-      { threshold: 0.5 }
+      { threshold: 0.3 },
     );
 
     Object.values(sectionRefs.current).forEach((ref) => {
@@ -33,101 +43,82 @@ export function ReportContent({ sections, onSectionVisible, findings }: ReportCo
     });
 
     return () => observer.disconnect();
-  }, [onSectionVisible]);
+  }, [onSectionVisible, sections]);
 
-  const getStatusBadge = (status: ReportSection['status']) => {
-    switch (status) {
-      case 'approved':
-        return (
-          <span className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 border border-blue-200">
-            Approved
-          </span>
-        );
-      case 'warning':
-        return (
-          <span className="inline-flex items-center rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-700 border border-yellow-200">
-            Warning
-          </span>
-        );
+  // Review status badge in section header
+  const getReviewBadge = (section: ReportSection) => {
+    const rs = section.reviewStatus;
+    if (rs === 'approved') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 border border-blue-200">
+          <CheckCircle2 className="h-3 w-3" />
+          Approved
+        </span>
+      );
     }
+    if (rs === 'rejected') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 border border-rose-200">
+          <XCircle className="h-3 w-3" />
+          Rejected
+        </span>
+      );
+    }
+    return null;
   };
 
   const renderContent = (section: ReportSection) => {
-    const contentArray = Array.isArray(section.content) 
-      ? section.content 
-      : section.content.split('\n\n');
+    const contentArray = Array.isArray(section.content)
+      ? section.content
+      : (section.content || '').split('\n\n');
 
-    // Get findings for this section
-    const sectionFindings = findings.filter(f => f.sectionId === section.id);
-    
-    console.log(`[${section.id}] Processing section with ${sectionFindings.length} findings`);
+    const sectionFindings = findings.filter((f) => f.sectionId === section.id);
 
     return contentArray.map((paragraph, i) => {
-      // Check if this is a table marker
+      if (typeof paragraph !== 'string') return null;
+
       if (paragraph.startsWith('[TABLE:') && paragraph.endsWith(']')) {
         const tableId = paragraph.slice(7, -1);
-        const table = section.tables?.find(t => t.id === tableId);
-        if (table) {
-          return <TableView key={i} table={table} />;
-        }
+        const table = section.tables?.find((t) => t.id === tableId);
+        if (table) return <TableView key={i} table={table} />;
       }
 
-      // Check if this is a figure marker
       if (paragraph.startsWith('[FIGURE:') && paragraph.endsWith(']')) {
         const figureId = paragraph.slice(8, -1);
-        const figure = section.figures?.find(f => f.id === figureId);
-        if (figure) {
-          return <FigureView key={i} figure={figure} />;
-        }
+        const figure = section.figures?.find((f) => f.id === figureId);
+        if (figure) return <FigureView key={i} figure={figure} />;
       }
 
-      // Regular paragraph - check if any finding matches this paragraph
-      const matchingFinding = sectionFindings.find(f => 
-        f.textHighlight && paragraph.includes(f.textHighlight)
+      // Inline highlight for findings with textHighlight
+      const matchingFinding = sectionFindings.find(
+        (f) => f.textHighlight && paragraph.includes(f.textHighlight),
       );
 
-      if (matchingFinding && matchingFinding.textHighlight) {
-        console.log(`✓ MATCH found in paragraph ${i}:`, matchingFinding.textHighlight);
-        
-        // Find the index of the highlight in the paragraph
-        const highlightIndex = paragraph.indexOf(matchingFinding.textHighlight);
-        const beforeText = paragraph.substring(0, highlightIndex);
-        const highlightText = matchingFinding.textHighlight;
-        const afterText = paragraph.substring(highlightIndex + highlightText.length);
-        
-        // Determine styling based on severity and acceptance
-        let bgClass, borderClass, textClass;
-        
-        if (matchingFinding.acceptedRisk) {
-          bgClass = 'bg-neutral-100';
-          borderClass = 'border-neutral-300';
-          textClass = 'text-neutral-700';
-        } else if (matchingFinding.severity === 'blocker') {
-          bgClass = 'bg-red-100';
-          borderClass = 'border-red-300';
-          textClass = 'text-red-900';
-        } else {
-          bgClass = 'bg-amber-100';
-          borderClass = 'border-amber-300';
-          textClass = 'text-amber-900';
-        }
-        
+      if (matchingFinding?.textHighlight) {
+        const hi = matchingFinding.textHighlight;
+        const idx = paragraph.indexOf(hi);
+        const before = paragraph.substring(0, idx);
+        const after = paragraph.substring(idx + hi.length);
+
+        let bgClass = 'bg-amber-100 border-amber-300 text-amber-900';
+        if (matchingFinding.acceptedRisk) bgClass = 'bg-neutral-100 border-neutral-300 text-neutral-700';
+        else if (matchingFinding.severity === 'blocker') bgClass = 'bg-rose-50 border-rose-300 text-rose-800';
+
         return (
           <p key={i} className="text-neutral-700 leading-relaxed mb-4">
-            {beforeText}
-            <mark 
-              className={`${bgClass} ${borderClass} ${textClass} border px-1 py-0.5 rounded-sm not-italic`}
+            {before}
+            <mark
+              className={`${bgClass} border px-1 py-0.5 rounded-sm`}
               style={{ fontStyle: 'normal' }}
               title={matchingFinding.description}
             >
-              {highlightText}
+              {hi}
             </mark>
-            {afterText}
+            {after}
           </p>
         );
       }
 
-      // No highlight - render normally
       return (
         <p key={i} className="text-neutral-700 leading-relaxed mb-4">
           {paragraph}
@@ -139,18 +130,20 @@ export function ReportContent({ sections, onSectionVisible, findings }: ReportCo
   return (
     <div className="flex-1 overflow-y-auto bg-white min-h-0">
       <div className="max-w-4xl mx-auto px-12 py-8">
+        {/* Protocol header */}
         <div className="mb-8">
-          <h1 className="text-2xl font-medium text-neutral-900 mb-2">
+          <p className="text-xs text-neutral-400 uppercase tracking-wide mb-1">
             Clinical Investigation Protocol
+          </p>
+          <h1 className="text-2xl font-medium text-neutral-900">
+            {projectName || 'Protocol Review'}
           </h1>
-          <p className="text-neutral-600">
-            CARDIA-SUPPORT-2026 | Implantable Cardiac Support Device
-          </p>
-          <p className="text-sm text-neutral-500 mt-1">
-            Protocol: CIP-2024-MED-0847 | Study Period: January 2024 – December 2025
-          </p>
+          {deviceName && (
+            <p className="text-neutral-500 text-sm mt-1">{deviceName}</p>
+          )}
         </div>
 
+        {/* Sections */}
         <div className="space-y-12">
           {sections.map((section, index) => (
             <section
@@ -161,18 +154,47 @@ export function ReportContent({ sections, onSectionVisible, findings }: ReportCo
               }}
               className="scroll-mt-4"
             >
-              <div className="flex items-center justify-between mb-4 pb-3 border-b border-neutral-200">
-                <h2 className="text-lg font-medium text-neutral-900">
+              {/* Section header */}
+              <div className="flex items-start justify-between mb-3 pb-3 border-b border-neutral-200 gap-4">
+                <h2 className="text-lg font-medium text-neutral-900 leading-tight">
                   {index + 1}. {section.title}
                 </h2>
-                {getStatusBadge(section.status)}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* Findings count badge */}
+                  {(() => {
+                    const sf = findings.filter((f) => f.sectionId === section.id && !f.acceptedRisk);
+                    const blockers = sf.filter((f) => f.severity === 'blocker').length;
+                    const warnings = sf.filter((f) => f.severity === 'warning').length;
+                    if (blockers > 0) return (
+                      <span className="flex items-center gap-1 text-xs text-rose-700 font-medium">
+                        <AlertCircle className="h-3.5 w-3.5" />
+                        {blockers}
+                      </span>
+                    );
+                    if (warnings > 0) return (
+                      <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {warnings}
+                      </span>
+                    );
+                    return null;
+                  })()}
+                  {getReviewBadge(section)}
+                </div>
               </div>
 
-              <div className="prose prose-neutral max-w-none">
+              {/* Section content */}
+              <div className="prose prose-neutral max-w-none prose-p:leading-relaxed">
                 {renderContent(section)}
               </div>
             </section>
           ))}
+
+          {sections.length === 0 && (
+            <div className="text-center py-16 text-neutral-400">
+              <p className="text-sm">No protocol sections available.</p>
+            </div>
+          )}
         </div>
       </div>
     </div>

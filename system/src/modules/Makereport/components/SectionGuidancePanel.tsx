@@ -1,12 +1,5 @@
-import { Info, AlertTriangle, FileText, ChevronDown, ChevronRight } from 'lucide-react';
+import { Info, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
-
-interface ReferencedDocument {
-  name: string;
-  version: string;
-  date: string;
-  approvalStatus?: string;
-}
 
 interface SectionGuidance {
   requiredElements: {
@@ -15,15 +8,13 @@ interface SectionGuidance {
     mustAlignWith?: string;
   };
   commonPitfalls: string[];
-  referencedDocuments?: ReferencedDocument[];
 }
 
 interface SectionGuidancePanelProps {
   guidance?: SectionGuidance;
-  onViewDocument?: (docName: string) => void;
 }
 
-export function SectionGuidancePanel({ guidance, onViewDocument }: SectionGuidancePanelProps) {
+export function SectionGuidancePanel({ guidance }: SectionGuidancePanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Don't render if no guidance defined for this section
@@ -73,7 +64,7 @@ export function SectionGuidancePanel({ guidance, onViewDocument }: SectionGuidan
             </div>
             <ul className="space-y-1.5">
               {guidance.requiredElements.items.map((item, index) => (
-                <li 
+                <li
                   key={index}
                   className="flex items-start gap-2"
                 >
@@ -101,7 +92,7 @@ export function SectionGuidancePanel({ guidance, onViewDocument }: SectionGuidan
             </div>
             <ul className="space-y-1.5">
               {guidance.commonPitfalls.map((pitfall, index) => (
-                <li 
+                <li
                   key={index}
                   className="flex items-start gap-2"
                 >
@@ -113,30 +104,6 @@ export function SectionGuidancePanel({ guidance, onViewDocument }: SectionGuidan
               ))}
             </ul>
           </div>
-
-          {/* Referenced Documents - White box */}
-          {guidance.referencedDocuments && guidance.referencedDocuments.length > 0 && (
-            <div className="bg-white border border-[#E5E7EB] rounded-lg">
-              <button
-                onClick={() => {
-                  // This would open a modal or panel showing the documents
-                  console.log('View referenced documents');
-                }}
-                className="w-full flex items-center justify-between hover:bg-[#F9FAFB] px-3 py-2.5 rounded-lg transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-[#6B7280]" />
-                  <span className="text-[#111827]" style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'system-ui, sans-serif' }}>
-                    Referenced Documents
-                  </span>
-                  <span className="text-[#6B7280]" style={{ fontSize: '11px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}>
-                    ({guidance.referencedDocuments.length} referenced)
-                  </span>
-                </div>
-                <ChevronRight className="w-4 h-4 text-[#6B7280]" />
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

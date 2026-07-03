@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { CheckCircle2, Circle, Lock, FileText, Target } from 'lucide-react';
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { transitionWorkflow } from '@/shared/services/workflowService';
+import { theme } from '@/app/theme';
 
 
 interface WorkflowStep {
@@ -14,6 +16,7 @@ interface WorkflowStep {
 
 export function ScopeAndIntendedUsePage() {
   const navigate = useNavigate();
+  const { projectId } = useParams();
 
   // Phase 1: Study & Protocol Setup
   const phase1Steps: WorkflowStep[] = [
@@ -75,7 +78,7 @@ export function ScopeAndIntendedUsePage() {
                   >
                     <div className="flex-shrink-0">
                       {step.status === 'completed' && (
-                        <CheckCircle2 className="w-5 h-5 text-green-600" />
+                        <CheckCircle2 className="w-5 h-5 text-indigo-600" />
                       )}
                       {step.status === 'active' && (
                         <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-medium">
@@ -136,6 +139,17 @@ export function ScopeAndIntendedUsePage() {
                 <p className="text-slate-600 text-center max-w-md">
                   This section is currently under development. Content will be available soon.
                 </p>
+                <button
+                  onClick={() => {
+                    if (projectId) {
+                      transitionWorkflow({ projectId, stepId: 'scope', to: 'approved' }).catch(() => {});
+                    }
+                    navigate(`/projects/${projectId}/workflow/protocol/make`);
+                  }}
+                  className={`mt-6 px-6 py-3 rounded-lg font-medium transition-colors ${theme.button.primary}`}
+                >
+                  Complete Scope &amp; Continue
+                </button>
               </div>
             </div>
           </div>

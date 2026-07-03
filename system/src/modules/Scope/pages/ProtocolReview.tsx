@@ -34,7 +34,7 @@ export function ProtocolReview() {
                     <div className="font-medium text-sm">Medical Writer Review</div>
                     <div className="text-xs text-muted-foreground">Dr. Michael Chen</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <CheckCircle2 className="size-3 mr-1" />
                     Approved
                   </Badge>
@@ -44,7 +44,7 @@ export function ProtocolReview() {
                     <div className="font-medium text-sm">Statistical Review</div>
                     <div className="text-xs text-muted-foreground">Dr. Robert Kim</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <CheckCircle2 className="size-3 mr-1" />
                     Approved
                   </Badge>
@@ -54,7 +54,7 @@ export function ProtocolReview() {
                     <div className="font-medium text-sm">Regulatory Review</div>
                     <div className="text-xs text-muted-foreground">Jennifer Martinez</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <CheckCircle2 className="size-3 mr-1" />
                     Approved
                   </Badge>

@@ -1,10 +1,16 @@
 import { useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { AlertCircle, Loader2, FlaskConical } from 'lucide-react';
+import { setToken } from '@/shared/auth/token';
 
 export default function Login() {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/dashboard';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -14,59 +20,103 @@ export default function Login() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        setError('Fel användarnamn eller lösenord');
+        setError('Invalid email or password');
         return;
       }
       const data = await res.json();
-      localStorage.setItem('clinical_system_token', data.access_token);
-      window.location.href = '/dashboard';
+      setToken(data.access_token);
+      navigate(from, { replace: true });
     } catch {
-      setError('Kunde inte ansluta till servern');
+      setError('Could not connect to the server. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="bg-white rounded-lg shadow-md border border-gray-200 w-full max-w-md p-8">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Clinical Investigation Platform</h1>
-        <p className="text-sm text-gray-600 mb-8">Logga in för att fortsätta</p>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Användarnamn</label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="admin"
-              required
-            />
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+
+        {/* Branding */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 mb-4">
+            <FlaskConical className="w-6 h-6 text-white" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Lösenord</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="••••••••"
-              required
-            />
+          <h1 className="text-xl font-semibold text-slate-900">Clinical Investigation Platform</h1>
+          <p className="text-sm text-slate-500 mt-1">Sign in to your account</p>
+        </div>
+
+        {/* Form card */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-7">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+                placeholder="you@company.com"
+                autoComplete="email"
+                autoFocus
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+                placeholder="••••••••"
+                autoComplete="current-password"
+                required
+              />
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-rose-700 bg-rose-50 border border-red-100 rounded-lg px-3 py-2.5">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 mt-1"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Signing in…
+                </>
+              ) : (
+                'Sign in'
+              )}
+            </button>
+          </form>
+        </div>
+
+        {/* Demo credentials hint */}
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-100 px-4 py-3 text-xs text-slate-600">
+          <p className="font-semibold text-slate-700 mb-1.5">Demo accounts</p>
+          <div className="space-y-0.5 font-mono">
+            <div>admin@demo.local &nbsp;/&nbsp; admin</div>
+            <div>author@demo.local &nbsp;/&nbsp; author</div>
+            <div>reviewer@demo.local &nbsp;/&nbsp; reviewer</div>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-2.5 bg-blue-900 hover:bg-blue-950 text-white rounded-lg font-medium transition-colors"
-          >
-            {loading ? 'Loggar in...' : 'Logga in'}
-          </button>
-        </form>
+        </div>
+
       </div>
     </div>
   );

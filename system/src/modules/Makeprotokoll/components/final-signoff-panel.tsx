@@ -68,7 +68,7 @@ export function FinalSignoffPanel({
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'Signed':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       case 'Pending':
         return <Clock className="w-4 h-4 text-amber-600" />;
       case 'Required':
@@ -81,7 +81,7 @@ export function FinalSignoffPanel({
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Signed':
-        return 'text-green-700 bg-green-50 border-green-200';
+        return 'text-blue-700 bg-blue-50 border-blue-200';
       case 'Pending':
         return 'text-amber-700 bg-amber-50 border-amber-200';
       case 'Required':
@@ -172,7 +172,7 @@ export function FinalSignoffPanel({
           <div className="flex items-center gap-3">
             <div className="flex-1 bg-slate-200 rounded-full h-2 overflow-hidden">
               <div 
-                className="bg-green-600 h-full transition-all duration-500"
+                className="bg-indigo-600 h-full transition-all duration-500"
                 style={{ width: `${(signedCount / totalSteps) * 100}%` }}
               />
             </div>
@@ -194,7 +194,7 @@ export function FinalSignoffPanel({
                 key={step.id}
                 className={`flex items-start gap-4 p-4 border rounded-lg transition-all ${
                   step.status === 'Signed' 
-                    ? 'border-green-200 bg-green-50/30' 
+                    ? 'border-blue-200 bg-blue-50/30' 
                     : step.status === 'Pending'
                     ? 'border-amber-300 bg-amber-50/30'
                     : 'border-slate-200 bg-white'
@@ -203,7 +203,7 @@ export function FinalSignoffPanel({
                 {/* Step Number */}
                 <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center text-sm font-semibold flex-shrink-0 ${
                   step.status === 'Signed'
-                    ? 'border-green-600 bg-green-600 text-white'
+                    ? 'border-indigo-600 bg-indigo-600 text-white'
                     : step.status === 'Pending'
                     ? 'border-amber-600 bg-white text-amber-700'
                     : 'border-slate-300 bg-white text-slate-400'
@@ -233,7 +233,7 @@ export function FinalSignoffPanel({
                   </div>
 
                   {step.status === 'Signed' && step.signedDate && (
-                    <div className="p-2.5 bg-white border border-green-200 rounded text-xs">
+                    <div className="p-2.5 bg-white border border-blue-200 rounded text-xs">
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-slate-600">Signed by:</span>
                         <span className="font-medium text-slate-900">{step.signedBy}</span>
@@ -272,13 +272,13 @@ export function FinalSignoffPanel({
         {/* Footer */}
         <div className="px-5 py-4 bg-slate-50 border-t border-slate-200">
           {allSigned ? (
-            <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-              <Lock className="w-5 h-5 text-green-700 flex-shrink-0" />
+            <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <Lock className="w-5 h-5 text-blue-700 flex-shrink-0" />
               <div className="flex-1">
-                <div className="text-sm font-semibold text-green-900 mb-0.5">
+                <div className="text-sm font-semibold text-blue-900 mb-0.5">
                   All Sign-offs Complete
                 </div>
-                <p className="text-xs text-green-800">
+                <p className="text-xs text-blue-700">
                   Protocol is now Locked/Approved and immutable. All signatures logged with full audit trail.
                 </p>
               </div>

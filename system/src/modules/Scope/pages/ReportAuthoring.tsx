@@ -56,28 +56,28 @@ export function ReportAuthoring() {
                     <div className="font-medium">1. Synopsis</div>
                     <div className="text-xs text-muted-foreground">Executive summary of study</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">Complete</Badge>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">Complete</Badge>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
                   <div>
                     <div className="font-medium">2. Introduction & Objectives</div>
                     <div className="text-xs text-muted-foreground">Study rationale and aims</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">Complete</Badge>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">Complete</Badge>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
                   <div>
                     <div className="font-medium">3. Study Design & Methods</div>
                     <div className="text-xs text-muted-foreground">Protocol summary</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">Complete</Badge>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">Complete</Badge>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
                   <div>
                     <div className="font-medium">4. Study Population</div>
                     <div className="text-xs text-muted-foreground">Participant demographics</div>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">Complete</Badge>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">Complete</Badge>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
                   <div>
@@ -121,7 +121,7 @@ export function ReportAuthoring() {
             <CardContent>
               <div className="space-y-3 text-sm">
                 <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
-                  <TrendingUp className="size-5 text-green-600 shrink-0 mt-0.5" />
+                  <TrendingUp className="size-5 text-indigo-600 shrink-0 mt-0.5" />
                   <div>
                     <div className="font-medium mb-1">Primary Endpoint Met</div>
                     <div className="text-muted-foreground">

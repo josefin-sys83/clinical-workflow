@@ -77,7 +77,7 @@ export function ProjectView() {
             <div>
               <div className="text-sm text-gray-500 mb-1">Status</div>
               <span className={`text-xs px-2 py-1 rounded font-medium ${
-                project.status === 'completed' ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700'
+                project.status === 'completed' ? 'bg-blue-50 text-blue-700' : 'bg-blue-50 text-blue-700'
               }`}>
                 {project.status === 'completed' ? 'Completed' : 'Active'}
               </span>

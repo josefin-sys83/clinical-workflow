@@ -31,14 +31,14 @@ export function ProtocolApproval() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between py-3 border-b">
                   <div className="flex items-center gap-3">
-                    <Shield className="size-5 text-green-600" />
+                    <Shield className="size-5 text-indigo-600" />
                     <div>
                       <div className="font-medium text-sm">Regulatory Affairs Director</div>
                       <div className="text-xs text-muted-foreground">Jennifer Martinez</div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <Badge variant="outline" className="bg-green-50 text-green-700">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700">
                       <CheckCircle2 className="size-3 mr-1" />
                       Approved
                     </Badge>
@@ -50,14 +50,14 @@ export function ProtocolApproval() {
 
                 <div className="flex items-center justify-between py-3 border-b">
                   <div className="flex items-center gap-3">
-                    <FileCheck className="size-5 text-green-600" />
+                    <FileCheck className="size-5 text-indigo-600" />
                     <div>
                       <div className="font-medium text-sm">Quality Assurance Director</div>
                       <div className="text-xs text-muted-foreground">David Thompson</div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <Badge variant="outline" className="bg-green-50 text-green-700">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700">
                       <CheckCircle2 className="size-3 mr-1" />
                       Approved
                     </Badge>
@@ -88,32 +88,32 @@ export function ProtocolApproval() {
             </CardContent>
           </Card>
 
-          <Card className="border-green-200 bg-green-50/50">
+          <Card className="border-blue-200 bg-blue-50/50">
             <CardHeader>
-              <CardTitle className="text-green-900">Approval Checklist</CardTitle>
-              <CardDescription className="text-green-700">
+              <CardTitle className="text-blue-900">Approval Checklist</CardTitle>
+              <CardDescription className="text-blue-700">
                 All requirements verified before final approval
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>All review comments addressed</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Regulatory compliance verified</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Quality standards met</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Version control completed</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Document signatures verified</span>
                 </div>

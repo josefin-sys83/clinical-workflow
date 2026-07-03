@@ -142,7 +142,7 @@ export function ReviewActivityPanel({ reviewMode }: ReviewActivityPanelProps) {
       case 'change':
         return <FileText className="w-4 h-4 text-amber-600" />;
       case 'resolve':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
+        return <CheckCircle className="w-4 h-4 text-indigo-600" />;
       default:
         return <AlertCircle className="w-4 h-4 text-slate-600" />;
     }
@@ -153,7 +153,7 @@ export function ReviewActivityPanel({ reviewMode }: ReviewActivityPanelProps) {
   };
 
   const getUserColor = (name: string) => {
-    const colors = ['bg-blue-600', 'bg-purple-600', 'bg-green-600', 'bg-amber-600', 'bg-red-600'];
+    const colors = ['bg-blue-600', 'bg-purple-600', 'bg-indigo-600', 'bg-amber-600', 'bg-red-600'];
     const index = name.length % colors.length;
     return colors[index];
   };
@@ -254,7 +254,7 @@ export function ReviewActivityPanel({ reviewMode }: ReviewActivityPanelProps) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 text-xs">
-                  <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center text-white font-medium">
+                  <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white font-medium">
                     MZ
                   </div>
                   <div>

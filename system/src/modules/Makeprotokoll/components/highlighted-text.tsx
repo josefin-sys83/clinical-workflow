@@ -72,7 +72,7 @@ export function HighlightedText({ content, highlights = [] }: HighlightedTextPro
               onMouseEnter={() => setActiveTooltip(index)}
               onMouseLeave={() => setActiveTooltip(null)}
             >
-              <span className="border-b-2 border-red-500 bg-red-50 text-red-900">
+              <span className="border-b-2 border-rose-500 bg-rose-50 text-rose-800">
                 {segment.text}
               </span>
               {activeTooltip === index && segment.tooltip && (

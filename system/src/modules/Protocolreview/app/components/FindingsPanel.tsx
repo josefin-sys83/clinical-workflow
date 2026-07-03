@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { AlertTriangle, XCircle, MessageSquare, Sparkles, X, ChevronRight } from 'lucide-react';
+import { AlertTriangle, XCircle, MessageSquare, Sparkles, X, ChevronRight, Send } from 'lucide-react';
 import type { RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
+
+type CommentType = 'general' | 'issue' | 'approval-request';
 
 interface FindingsPanelProps {
   findings: RegulatoryFinding[];
@@ -9,6 +11,12 @@ interface FindingsPanelProps {
   onFindingClick: (sectionId: string) => void;
   onDismissAIFinding: (findingId: string) => void;
   onAcceptRisk: (findingId: string) => void;
+  /** Called when the user submits a new comment. Parent owns the API call. */
+  onAddComment?: (content: string, type: CommentType) => Promise<void>;
+  /** Called when the user submits a reply. Parent owns the API call. */
+  onAddReply?: (commentId: string, replyText: string) => Promise<void>;
+  /** The currently visible section id — used to label the comment modal. */
+  activeSectionTitle?: string;
 }
 
 export function FindingsPanel({
@@ -18,10 +26,20 @@ export function FindingsPanel({
   onFindingClick,
   onDismissAIFinding,
   onAcceptRisk,
+  onAddComment,
+  onAddReply,
+  activeSectionTitle,
 }: FindingsPanelProps) {
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [replySubmitting, setReplySubmitting] = useState(false);
+
+  // ── Add Comment modal state ───────────────────────────────────────────────
+  const [commentModalOpen, setCommentModalOpen] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [commentType, setCommentType] = useState<CommentType>('general');
+  const [submitting, setSubmitting] = useState(false);
 
   const toggleComment = (commentId: string) => {
     setExpandedComments((prev) => {
@@ -37,23 +55,64 @@ export function FindingsPanel({
     });
   };
 
-  const handleReplySubmit = (commentId: string) => {
-    console.log('Submitting reply to comment:', commentId, 'Content:', replyText);
-    // In a real application, this would submit the reply to the backend
-    setReplyingTo(null);
-    setReplyText('');
+  const handleReplySubmit = async (commentId: string) => {
+    if (!replyText.trim()) return;
+    setReplySubmitting(true);
+    try {
+      await onAddReply?.(commentId, replyText.trim());
+    } finally {
+      setReplySubmitting(false);
+      setReplyingTo(null);
+      setReplyText('');
+    }
   };
 
-  const formatTimestamp = (date: Date) => {
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
+  const handleOpenCommentModal = () => {
+    setCommentText('');
+    setCommentType('general');
+    setCommentModalOpen(true);
+  };
 
-    if (diffHours < 24) {
-      return diffHours === 0 ? 'Just now' : `${diffHours}h ago`;
+  const handleSubmitComment = async () => {
+    if (!commentText.trim() || !onAddComment) return;
+    setSubmitting(true);
+    try {
+      await onAddComment(commentText.trim(), commentType);
+      setCommentModalOpen(false);
+      setCommentText('');
+      setCommentType('general');
+    } finally {
+      setSubmitting(false);
     }
-    return diffDays === 1 ? '1 day ago' : `${diffDays} days ago`;
+  };
+
+  const formatTimestamp = (date: Date | string) => {
+    // Normalise — stored timestamps may arrive as ISO strings
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) return '';
+
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+
+    // Same calendar day → show time e.g. "14:32"
+    const sameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    if (sameDay) {
+      return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Older → "2026-05-21 14:32"
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    return `${yyyy}-${mm}-${dd} ${time}`;
   };
 
   return (
@@ -72,7 +131,7 @@ export function FindingsPanel({
                   finding.acceptedRisk
                     ? 'bg-neutral-50 border-neutral-300'
                     : finding.severity === 'blocker'
-                    ? 'bg-red-50 border-red-200'
+                    ? 'bg-rose-50 border-rose-200'
                     : 'bg-yellow-50 border-yellow-200'
                 }`}
               >
@@ -82,7 +141,7 @@ export function FindingsPanel({
                       finding.acceptedRisk
                         ? 'bg-neutral-200 text-neutral-700'
                         : finding.severity === 'blocker'
-                        ? 'bg-red-100 text-red-800'
+                        ? 'bg-rose-50 text-rose-800'
                         : 'bg-yellow-100 text-yellow-800'
                     }`}
                   >
@@ -110,10 +169,12 @@ export function FindingsPanel({
                   <span className="font-medium">{finding.sectionId.replace('section-', '')}</span>
                 </div>
                 
-                <div className="flex items-center justify-between text-xs text-neutral-600 mb-3">
-                  <span>Section owner</span>
-                  <span className="font-medium">Dr. Marcus Rivera</span>
-                </div>
+                {finding.sectionOwner && (
+                  <div className="flex items-center justify-between text-xs text-neutral-600 mb-3">
+                    <span>Section owner</span>
+                    <span className="font-medium">{finding.sectionOwner}</span>
+                  </div>
+                )}
                 
                 <div className="flex gap-2">
                   <button
@@ -122,7 +183,7 @@ export function FindingsPanel({
                       finding.acceptedRisk
                         ? 'text-neutral-700'
                         : finding.severity === 'blocker'
-                        ? 'text-red-700'
+                        ? 'text-rose-700'
                         : 'text-yellow-800'
                     }`}
                   >
@@ -145,97 +206,119 @@ export function FindingsPanel({
 
         {/* Reviewer Comments */}
         <div className="p-4">
-          <h3 className="text-sm font-medium text-neutral-900 mb-3">
+          <h3 className="text-sm font-medium text-slate-900 mb-3">
             Reviewer Comments
           </h3>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {comments.map((comment) => (
               <div
                 key={comment.id}
-                className="bg-white rounded-md border border-neutral-200 overflow-hidden"
+                className="bg-white rounded-md border border-slate-200 overflow-hidden"
               >
+                {/* Collapsed header — click to expand */}
                 <button
                   onClick={() => toggleComment(comment.id)}
-                  className="w-full p-3 text-left hover:bg-neutral-50 transition-colors"
+                  className="w-full px-3 py-2.5 text-left hover:bg-slate-50 transition-colors"
                 >
-                  <div className="flex items-start gap-3">
-                    <MessageSquare className="h-4 w-4 text-neutral-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex items-start gap-2.5">
+                    <MessageSquare className="h-3.5 w-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-medium text-neutral-900">
+                      {/* Author row */}
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-sm font-semibold text-slate-800 leading-snug">
                           {comment.author}
                         </span>
-                        <span className="text-xs text-neutral-500">
+                        <span className="text-xs text-slate-400">
                           {comment.role}
                         </span>
+                        <span className="text-xs text-slate-400 ml-auto flex-shrink-0">
+                          {formatTimestamp(comment.timestamp)}
+                        </span>
                       </div>
-                      <p className="text-xs text-neutral-500 mb-2">
-                        {formatTimestamp(comment.timestamp)}
-                      </p>
+                      {/* Content preview (collapsed only) */}
                       {!expandedComments.has(comment.id) && (
-                        <p className="text-sm font-normal text-neutral-700 line-clamp-2">
+                        <p className="text-sm text-slate-600 line-clamp-2 mt-0.5">
                           {comment.content}
                         </p>
                       )}
-                      {comment.replies && comment.replies.length > 0 && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-xs text-neutral-500">
-                            {comment.replies.length}{' '}
-                            {comment.replies.length === 1 ? 'reply' : 'replies'}
-                          </span>
-                        </div>
+                      {/* Reply count badge */}
+                      {comment.replies && comment.replies.length > 0 && !expandedComments.has(comment.id) && (
+                        <p className="text-xs text-slate-400 mt-1">
+                          {comment.replies.length} {comment.replies.length === 1 ? 'reply' : 'replies'}
+                        </p>
                       )}
                     </div>
                     <ChevronRight
-                      className={`h-4 w-4 text-neutral-400 flex-shrink-0 transition-transform ${
+                      className={`h-3.5 w-3.5 text-slate-400 flex-shrink-0 mt-0.5 transition-transform ${
                         expandedComments.has(comment.id) ? 'rotate-90' : ''
                       }`}
                     />
                   </div>
                 </button>
 
+                {/* Expanded body */}
                 {expandedComments.has(comment.id) && (
-                  <div className="border-t border-neutral-200 bg-neutral-50 p-3">
-                    <p className="text-sm font-normal text-neutral-700 mb-3 whitespace-pre-wrap">{comment.content}</p>
+                  <div className="border-t border-slate-100 bg-slate-50 px-3 pt-3 pb-3">
+                    {/* Full comment text */}
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap mb-3 leading-relaxed">
+                      {comment.content}
+                    </p>
+
+                    {/* Replies */}
                     {comment.replies && comment.replies.length > 0 && (
-                      <div className="space-y-2 ml-4 border-l-2 border-neutral-300 pl-3 mb-3">
+                      <div className="space-y-2 ml-3 border-l-2 border-slate-200 pl-3 mb-3">
                         {comment.replies.map((reply) => (
-                          <div key={reply.id} className="bg-white rounded p-2">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs font-medium text-neutral-900">
+                          <div key={reply.id} className="bg-white rounded border border-slate-100 px-2.5 py-2">
+                            <div className="flex items-baseline gap-1.5 mb-1">
+                              <span className="text-xs font-semibold text-slate-800">
                                 {reply.author}
                               </span>
-                              <span className="text-xs text-neutral-500">
+                              <span className="text-xs text-slate-400">
                                 {reply.role}
                               </span>
+                              <span className="text-xs text-slate-400 ml-auto">
+                                {formatTimestamp(reply.timestamp)}
+                              </span>
                             </div>
-                            <p className="text-xs text-neutral-500 mb-1">
-                              {formatTimestamp(reply.timestamp)}
+                            <p className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">
+                              {reply.content}
                             </p>
-                            <p className="text-sm text-neutral-700 whitespace-pre-wrap">{reply.content}</p>
                           </div>
                         ))}
                       </div>
                     )}
+
+                    {/* Reply form / Reply button */}
                     {replyingTo === comment.id ? (
                       <div className="space-y-2">
                         <textarea
                           value={replyText}
                           onChange={(e) => setReplyText(e.target.value)}
-                          className="w-full p-2 border border-neutral-300 rounded"
-                          placeholder="Type your reply here..."
+                          className="border border-slate-200 rounded p-2 text-sm w-full resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Type your reply here…"
+                          rows={3}
+                          autoFocus
                         />
-                        <button
-                          onClick={() => handleReplySubmit(comment.id)}
-                          className="text-sm text-neutral-700 hover:text-neutral-900 font-medium"
-                        >
-                          Submit Reply
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => handleReplySubmit(comment.id)}
+                            disabled={!replyText.trim() || replySubmitting}
+                            className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                          >
+                            {replySubmitting ? 'Saving…' : 'Submit Reply'}
+                          </button>
+                          <button
+                            onClick={() => { setReplyingTo(null); setReplyText(''); }}
+                            className="text-sm text-slate-500 hover:text-slate-700 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <button
                         onClick={() => setReplyingTo(comment.id)}
-                        className="text-sm text-neutral-700 hover:text-neutral-900 font-medium"
+                        className="text-sm px-3 py-1.5 text-blue-600 border border-blue-200 rounded hover:bg-blue-50 cursor-pointer transition-colors font-medium"
                       >
                         Reply
                       </button>
@@ -247,7 +330,7 @@ export function FindingsPanel({
           </div>
 
           <button
-            onClick={() => alert('Add comment functionality - in a real application, this would open a comment form')}
+            onClick={handleOpenCommentModal}
             className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md border border-neutral-300 bg-white text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
           >
             <MessageSquare className="h-4 w-4" />
@@ -255,6 +338,85 @@ export function FindingsPanel({
           </button>
         </div>
       </div>
+
+      {/* ── Add Comment Modal ───────────────────────────────────────────────── */}
+      {commentModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-lg mx-4 flex flex-col">
+            {/* Header */}
+            <div className="p-5 border-b border-neutral-200 flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <MessageSquare className="h-4 w-4 text-blue-600" />
+                  <h2 className="text-base font-semibold text-neutral-900">Add Comment</h2>
+                </div>
+                {activeSectionTitle && (
+                  <p className="text-xs text-neutral-500 mt-0.5">
+                    Section: <span className="font-medium text-neutral-700">{activeSectionTitle}</span>
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setCommentModalOpen(false)}
+                className="p-1 hover:bg-neutral-100 rounded transition-colors"
+              >
+                <X className="h-4 w-4 text-neutral-500" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4">
+              {/* Comment type selector */}
+              <div>
+                <label className="block text-xs font-medium text-neutral-700 mb-2">Comment Type</label>
+                <select
+                  value={commentType}
+                  onChange={(e) => setCommentType(e.target.value as CommentType)}
+                  className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="general">General Comment</option>
+                  <option value="issue">Issue</option>
+                  <option value="approval-request">Approval Request</option>
+                </select>
+              </div>
+
+              {/* Comment textarea */}
+              <div>
+                <label className="block text-xs font-medium text-neutral-700 mb-2">Comment</label>
+                <textarea
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="Write your comment here… (visible to all reviewers and approvers)"
+                  rows={5}
+                  className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm text-neutral-900 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+                <p className="text-xs text-neutral-400 mt-1">
+                  Comments are logged to the audit trail with your name and timestamp.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-4 border-t border-neutral-200 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setCommentModalOpen(false)}
+                className="px-4 py-2 text-sm text-neutral-700 border border-neutral-300 rounded-md hover:bg-neutral-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitComment}
+                disabled={!commentText.trim() || submitting}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="h-3.5 w-3.5" />
+                {submitting ? 'Posting…' : 'Post Comment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -55,11 +55,11 @@ export function ProtocolAuthoring() {
               <div className="space-y-2 text-sm">
                 <div className="flex items-center justify-between py-2 border-b">
                   <span>1. Introduction & Background</span>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">Complete</Badge>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">Complete</Badge>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
                   <span>2. Study Objectives</span>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">Complete</Badge>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">Complete</Badge>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
                   <span>3. Study Design & Endpoints</span>

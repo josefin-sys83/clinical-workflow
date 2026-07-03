@@ -66,7 +66,7 @@ export function LifecycleStrip({
       return 'bg-amber-600 hover:bg-amber-700 text-white';
     }
     if (status === 'Approved' || status === 'In Review') {
-      return 'bg-green-600 hover:bg-green-700 text-white';
+      return 'bg-indigo-600 hover:bg-indigo-700 text-white';
     }
     return 'bg-blue-600 hover:bg-blue-700 text-white';
   };
@@ -92,7 +92,7 @@ export function LifecycleStrip({
 
           {/* Open Findings */}
           {openFindingsCount > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-700 border border-red-200 rounded-lg">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg">
               <AlertCircle className="w-4 h-4" />
               <span className="text-sm font-medium">
                 {openFindingsCount} Open Finding{openFindingsCount !== 1 ? 's' : ''}

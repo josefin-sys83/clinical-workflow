@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { useParams, useLocation, Link } from 'react-router-dom';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle } from 'lucide-react';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState } from '@/shared/workflow/types';
+import { transitionWorkflow } from '@/shared/services/workflowService';
 import { ProtocolSection } from './components/protocol-section';
 import { ExportReadinessIndicator } from './components/export-readiness-indicator';
 import { ReviewModeEntry } from './components/review-mode-entry';
@@ -10,6 +11,10 @@ import { ReviewModeIndicator } from './components/review-mode-indicator';
 import { ReviewModeConfirmation } from './components/review-mode-confirmation';
 import { IssueFilterControl } from './components/issue-filter-control';
 import { WorkflowProgressIndicator } from './components/workflow-progress-indicator';
+import { AmendmentModal } from './components/AmendmentModal';
+import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 
 
 
@@ -28,16 +33,43 @@ export default function App() {
   const { projectId } = useParams();
   const location = useLocation();
   const { snapshot } = useWorkflowSnapshot({ projectId });
+  const { protocolFinalized, latestAmendment: statusLatestAmendment } = useProtocolStatus(projectId);
 
   const [projectData, setProjectData] = React.useState<any>(null);
   const [roles, setRoles] = React.useState<any[]>([]);
   const [protocol, setProtocol] = React.useState<any>(null);
   const [generatingProtocol, setGeneratingProtocol] = React.useState(false);
-  const [toast, setToast] = React.useState<{ message: string } | null>(null);
-  const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
+const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
-  const apiBase = window.location.origin.replace('-5173.', '-3001.');
+  const [showAmendmentModal, setShowAmendmentModal] = useState(false);
+  const [amendments, setAmendments] = React.useState<any[]>([]);
+  const [amendmentSuccessMessage, setAmendmentSuccessMessage] = React.useState<string | null>(null);
+  const [synopsisConsistencyIssues, setSynopsisConsistencyIssues] = React.useState<any[]>([]);
+  const [protocolMakeDeadline, setProtocolMakeDeadline] = React.useState<{ date: string; status: string } | null>(null);
+  const apiBase = '';
+
+  const runSynopsisConsistencyCheck = async () => {
+    if (!projectId) return;
+    try {
+      const res = await fetch(apiBase + '/api/projects/' + projectId + '/check-synopsis-consistency', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      setSynopsisConsistencyIssues(data.issues || []);
+    } catch (e) {
+      console.error('Synopsis consistency check failed', e);
+    }
+  };
+
+  const fetchAmendments = React.useCallback(() => {
+    if (!projectId) return;
+    fetch(apiBase + '/api/projects/' + projectId + '/amendments')
+      .then(r => r.json())
+      .then(data => setAmendments(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [apiBase, projectId]);
+
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -48,7 +80,11 @@ export default function App() {
         if (p.data && p.data.roles) setRoles(p.data.roles);
         if (p.data && p.data.protocol) {
           setProtocol(p.data.protocol);
-          p.data.protocol.sections?.forEach((s) => { if (s.content && (!s.issues || s.issues.length === 0)) analyzeSectionWithAI(s.title, s.content, s.id); });
+          p.data.protocol.sections?.forEach((s: any) => {
+            if (s.content && s.approvalStatus !== 'approved')
+              analyzeSectionWithAI(s.title, s.content, s.id);
+          });
+          runSynopsisConsistencyCheck();
         } else {
           setGeneratingProtocol(true);
           fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol', { method: 'POST' })
@@ -64,6 +100,7 @@ export default function App() {
                 result.sections?.forEach((s: any) => {
                   if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
                 });
+                runSynopsisConsistencyCheck();
               }
             })
             .catch(() => {})
@@ -71,7 +108,16 @@ export default function App() {
         }
       })
       .catch(() => {});
-  }, [projectId]);
+    fetchAmendments();
+    fetch(apiBase + '/api/projects/' + projectId + '/milestones')
+      .then(r => r.json())
+      .then((data: any) => {
+        const m = data?.milestones?.find((m: any) => m.stepId === 'protocol-make');
+        if (m?.deadline) setProtocolMakeDeadline({ date: m.deadline, status: m.status });
+      })
+      .catch(() => {});
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // Current user context
   const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0): Promise<number> => {
@@ -79,7 +125,7 @@ export default function App() {
       const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sectionTitle, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
+        body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
       });
       const result = await res.json();
       let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
@@ -115,10 +161,32 @@ export default function App() {
   };
 
   const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string) => {
-    // Capture previous open issue count before re-analysis
     const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
     const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
-    // Update section content in protocol state
+
+    // 1. Persist to backend — this also creates the audit trail entry with full
+    //    user identity, before/after content, and reason for change.
+    try {
+      await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + sectionId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: newContent,
+          previousContent: prevContent,
+          reason,
+          userId: currentUser,
+          userName: currentUser,
+          // Explicitly carry approval fields so saving content never clears them
+          approvalStatus: currentSection?.approvalStatus,
+          approvedBy: currentSection?.approvedBy,
+          approvedAt: currentSection?.approvedAt,
+        }),
+      });
+    } catch (e) {
+      console.error('Section save failed', e);
+    }
+
+    // 2. Update local state to reflect the saved content immediately
     setProtocol((prev: any) => {
       if (!prev) return prev;
       const updatedSections = prev.sections.map((s: any) =>
@@ -126,13 +194,11 @@ export default function App() {
       );
       return { ...prev, sections: updatedSections };
     });
-    // Run re-analysis
+
+    // 3. Re-analyse and surface any resolved issues
     const sectionTitle = currentSection?.title || '';
     const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
-    if (resolvedCount > 0) {
-      setToast({ message: `${resolvedCount} issue${resolvedCount > 1 ? 's' : ''} resolved` });
-      setTimeout(() => setToast(null), 3000);
-    }
+    // resolved issues are reflected in the issues panel automatically
   };
 
   const handleAddComment = async (sectionId: string, content: string, type: string) => {
@@ -216,7 +282,76 @@ export default function App() {
           message: `Comment resolved in section: ${section?.title || sectionId}`,
           stepId: 'protocol-make',
           actorUserId: currentUser,
-          metadataJson: JSON.stringify({ sectionId, commentId }),
+          metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title || sectionId, commentId }),
+        }),
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
+    }
+  };
+
+  const handleApproveSection = async (sectionId: string, comment: string) => {
+    const now = new Date().toISOString();
+    const section = protocol?.sections?.find((s: any) => s.id === sectionId);
+    setProtocol((prev: any) => {
+      if (!prev) return prev;
+      const updatedSections = prev.sections.map((s: any) =>
+        s.id === sectionId
+          ? { ...s, approvalStatus: 'approved', approvedBy: currentUser, approvedAt: now }
+          : s
+      );
+      const updated = { ...prev, sections: updatedSections };
+      fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { protocol: updated } }),
+      });
+      return updated;
+    });
+    try {
+      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'section.approved',
+          message: `Section "${section?.title || sectionId}" approved by ${currentUser}`,
+          stepId: 'protocol-make',
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, approvedAt: now, comment: comment || '' }),
+        }),
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
+    }
+  };
+
+  const handleUnlockSection = async (sectionId: string, reason: string) => {
+    const section = protocol?.sections?.find((s: any) => s.id === sectionId);
+    setProtocol((prev: any) => {
+      if (!prev) return prev;
+      const updatedSections = prev.sections.map((s: any) =>
+        s.id === sectionId
+          ? { ...s, approvalStatus: 'draft', approvedBy: undefined, approvedAt: undefined }
+          : s
+      );
+      const updated = { ...prev, sections: updatedSections };
+      fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { protocol: updated } }),
+      });
+      return updated;
+    });
+    try {
+      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'section.unlocked',
+          message: `Section "${section?.title || sectionId}" unlocked by ${currentUser}`,
+          stepId: 'protocol-make',
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, reason }),
         }),
       });
     } catch (e) {
@@ -258,8 +393,8 @@ export default function App() {
           type: 'note',
           message: `Issue marked as Won't Fix: ${issue.subsection}`,
           stepId: 'protocol-make',
-          actorUserId: 'unknown',
-          metadataJson: JSON.stringify({ issueId, comment, sectionId, issueDescription })
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({ issueId, comment, sectionId, sectionTitle: currentSection?.title || sectionId, issueDescription })
         })
       });
     } catch (e) {
@@ -267,9 +402,90 @@ export default function App() {
     }
   };
 
-  const currentUser = 'Dr. Marcus Rivera';
+  const handleCreateAmendment = async (data: { title: string; reason: string; description: string; affectedProtocolSections: string[] }) => {
+    try {
+      const res = await fetch(apiBase + '/api/projects/' + projectId + '/amendments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data, createdBy: currentUser }),
+      });
+      const newAmendment = await res.json();
+      setShowAmendmentModal(false);
+      fetchAmendments();
+      setAmendmentSuccessMessage(`Amendment ${newAmendment.number}: ${newAmendment.title} created. Report authoring is blocked until it's resolved.`);
+      setTimeout(() => setAmendmentSuccessMessage(null), 6000);
+    } catch (e) {
+      console.error('Amendment creation failed', e);
+    }
+  };
 
-  
+  const handleAmendmentApproval = async (amendmentId: string, action: 'approve-protocol-lead' | 'approve-vp' | 'reject') => {
+    try {
+      const res = await fetch(apiBase + '/api/projects/' + projectId + '/amendments/' + amendmentId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, by: currentUser }),
+      });
+      const updatedAmendment = await res.json();
+      fetchAmendments();
+
+      // If amendment is now fully approved, re-analyze affected protocol sections
+      if (updatedAmendment.status === 'approved') {
+        const affectedSectionIds: string[] = updatedAmendment.affectedProtocolSections || [];
+        const sectionsToAnalyze = protocol?.sections?.filter((s: any) =>
+          affectedSectionIds.includes(s.id)
+        ) || [];
+
+        for (const section of sectionsToAnalyze) {
+          if (section.content) {
+            await analyzeSectionWithAI(section.title, section.content, section.id);
+          }
+        }
+
+        // Also re-fetch project to get updated section states
+        fetch(apiBase + '/api/projects/' + projectId)
+          .then(r => r.json())
+          .then(p => {
+            if (p.data?.protocol) {
+              setProtocol(p.data.protocol);
+            }
+          })
+          .catch(() => {});
+
+        // Trigger report re-analysis via custom event
+        window.dispatchEvent(new CustomEvent('report:refresh-analysis'));
+
+        setAmendmentSuccessMessage(`Amendment approved. AI re-analysis triggered on ${sectionsToAnalyze.length} affected protocol section(s). Report re-analysis also triggered.`);
+        setTimeout(() => setAmendmentSuccessMessage(null), 8000);
+      }
+    } catch (e) {
+      console.error('Amendment approval failed', e);
+    }
+  };
+
+  // Derive current user from project roles (fallback until Microsoft SSO is integrated).
+  // Priority: Protocol Lead → Principal Investigator → Medical Writer → Regulatory Affairs → first available.
+  const currentUser = React.useMemo(() => {
+    const priority = ['Protocol Lead', 'Principal Investigator', 'Medical Writer', 'Regulatory Affairs'];
+    for (const roleTitle of priority) {
+      const role = roles.find((r: any) => r.title === roleTitle);
+      const person = role?.assignedTo?.[0];
+      if (person?.name) return `${person.name} (${roleTitle})`;
+    }
+    // Fall back to the first person in any role
+    for (const role of roles) {
+      const person = role?.assignedTo?.[0];
+      if (person?.name) return `${person.name} (${role.title})`;
+    }
+    return 'Unknown';
+  }, [roles]);
+
+  // Bare name (no role suffix) for matching against owner/raisedBy fields,
+  // which store only the person's name.
+  const currentUserName = React.useMemo(
+    () => currentUser.replace(/\s*\([^)]*\)$/, ''),
+    [currentUser]
+  );
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections(prev => 
@@ -309,7 +525,7 @@ export default function App() {
     number: s.id || String(idx + 1),
     title: s.title || '',
     status: s.status || 'draft',
-    owner: roles.find((r: any) => r.title === 'Protocol Lead')?.assignedTo?.[0]?.name || '',
+    owner: roles.find((r: any) => r.title === 'Principal Investigator')?.assignedTo?.[0]?.name || '',
     updated: s.updatedAt || '',
     comments: s.comments || [],
     aiGenerated: true,
@@ -317,12 +533,15 @@ export default function App() {
     locked: false,
     reviewCycle: 0,
     reviewer: roles.find((r: any) => r.title === 'Medical Writer')?.assignedTo?.[0]?.name || '',
-    approver: roles.find((r: any) => r.title === 'Regulatory Affairs')?.assignedTo?.[0]?.name || '',
-    approverRole: '',
+    approver: roles.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name || '',
+    approverRole: 'VP Clinical Affairs',
     ownerRole: 'Principal Investigator',
     issues: s.issues || [],
     requiredElements: s.requiredElements || [],
     content: s.content || '',
+    approvalStatus: s.approvalStatus || 'draft',
+    approvedBy: s.approvedBy || '',
+    approvedAt: s.approvedAt || '',
   })) || [
     { 
       id: '1', 
@@ -593,12 +812,6 @@ export default function App() {
     },
   ];
 
-  const issues = [
-    { id: 'i1', type: 'blocker', section: '4.4, 4.5', title: 'Inconsistency: Sample size justification missing', description: 'Section 4.4 specifies N=120 but Section 4.5 inclusion criteria may yield insufficient recruitment pool' },
-    { id: 'i2', type: 'warning', section: '4.2, 4.4', title: 'Objectives-design alignment Issue', description: 'Primary objective in Section 4.2 requires endpoint clarification in Section 4.4 study design' },
-    { id: 'i3', type: 'warning', section: '4.3', title: 'Device classification requires clarification', description: 'Device description does not explicitly state EU MDR classification rationale' },
-  ];
-
   // Helper function to get section status visualization
   const getSectionStatusIcon = (section: typeof protocolSections[0]) => {
     // Check if locked first
@@ -626,18 +839,55 @@ export default function App() {
     setShowReviewConfirmation(true);
   };
 
-  const handleConfirmReview = () => {
+  const handleConfirmReview = async () => {
+    const nextCycle = reviewCycle + 1;
     setIsReviewMode(true);
-    setReviewCycle(prev => prev + 1);
+    setReviewCycle(nextCycle);
     setShowReviewConfirmation(false);
-    // Log audit event
-    console.log(`Review Mode entered - Cycle ${reviewCycle + 1}`, new Date().toISOString());
+
+    // Transition protocol-make → approved so the sidebar unlocks Protocol Review.
+    // Non-blocking: navigate even if the transition fails.
+    transitionWorkflow({
+      projectId: projectId!,
+      stepId: 'protocol-make',
+      to: 'approved',
+      note: `Protocol review cycle ${nextCycle} started by ${currentUser}`,
+    }).catch(() => {});
+
+    try {
+      await fetch(apiBase + '/api/projects/' + projectId + '/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'lifecycle_transition',
+          message: `Protocol review cycle ${nextCycle} started`,
+          stepId: 'protocol-make',
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({ reviewCycle: nextCycle, startedBy: currentUser }),
+        }),
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
+    }
   };
 
-  const handleExitReview = () => {
+  const handleExitReview = async () => {
     setIsReviewMode(false);
-    // Log audit event
-    console.log(`Review Mode exited - Cycle ${reviewCycle}`, new Date().toISOString());
+    try {
+      await fetch(apiBase + '/api/projects/' + projectId + '/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'lifecycle_transition',
+          message: `Protocol review cycle ${reviewCycle} exited`,
+          stepId: 'protocol-make',
+          actorUserId: currentUser,
+          metadataJson: JSON.stringify({ reviewCycle, exitedBy: currentUser }),
+        }),
+      });
+    } catch (e) {
+      console.error('Audit trail entry failed', e);
+    }
   };
 
   // Calculate review readiness metrics
@@ -648,8 +898,14 @@ export default function App() {
     count + (section.issues?.filter(i => i.severity === 'warning' && i.status === 'open').length || 0), 0
   );
   const allOpenIssuesCount = totalBlockers + totalWarnings;
-  const allSectionsComplete = protocolSections.every(s => s.status === 'complete');
-  const incompleteSections = protocolSections.filter(s => s.status !== 'complete').map(s => s.number);
+  const allSectionsComplete = protocolSections.every(s =>
+    s.approvalStatus === 'approved' || s.status === 'approved'
+  );
+  const incompleteSections = protocolSections
+    .filter(s => s.approvalStatus !== 'approved' && s.status !== 'approved')
+    .map(s => s.number);
+  const allSectionsApproved = protocolSections.length > 0 && protocolSections.every(s => s.approvalStatus === 'approved');
+  const approvedCount = protocolSections.filter(s => s.approvalStatus === 'approved').length;
 
   // Issue filtering logic
   const getFilteredSections = () => {
@@ -660,14 +916,14 @@ export default function App() {
     // Filter to 'my-issues': sections where current user is owner OR has assigned issues
     return protocolSections.filter(section => {
       // User is section owner
-      if (section.owner === currentUser) return true;
-      
+      if (section.owner === currentUserName) return true;
+
       // User has issues assigned in this section
-      const hasAssignedIssue = section.issues?.some(issue => 
-        issue.raisedBy?.includes(currentUser) || 
-        section.owner === currentUser
+      const hasAssignedIssue = section.issues?.some(issue =>
+        issue.raisedBy?.includes(currentUserName) ||
+        section.owner === currentUserName
       );
-      
+
       return hasAssignedIssue;
     });
   };
@@ -685,6 +941,7 @@ export default function App() {
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
+      <MilestoneBanner projectId={projectId!} currentStepId="protocol-make" />
       {/* Review Mode Indicator */}
       <ReviewModeIndicator 
         isReviewMode={isReviewMode}
@@ -714,21 +971,9 @@ export default function App() {
                   }`}
                 >
                   {isComplete ? (
-                    <div className="w-4 h-4 flex-shrink-0 relative flex items-center justify-center">
-                      <Circle 
-                        className="w-4 h-4 text-blue-600 absolute" 
-                        strokeWidth={2}
-                      />
-                      <Check 
-                        className="w-2.5 h-2.5 text-blue-600 relative" 
-                        strokeWidth={2.5}
-                      />
-                    </div>
+                    <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-blue-600" />
                   ) : (
-                    <Circle 
-                      className="w-4 h-4 flex-shrink-0 text-orange-400" 
-                      strokeWidth={2}
-                    />
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-orange-400" />
                   )}
                   <div className={`text-sm ${
                     isActive ? 'font-semibold text-slate-900' : 'font-normal text-slate-600'
@@ -743,8 +988,16 @@ export default function App() {
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          {protocolFinalized && (
+            <div className="mx-6 mt-4">
+              <ProtocolFinalizedBanner
+                projectId={projectId!}
+                latestAmendment={statusLatestAmendment}
+              />
+            </div>
+          )}
           {/* Workflow Progress Indicator */}
-          <WorkflowProgressIndicator 
+          <WorkflowProgressIndicator
             currentStep="protocol-authoring"
           />
 
@@ -793,16 +1046,36 @@ export default function App() {
                 </div>
 
                 <div className="mb-6">
-                  <h2 className="text-lg font-semibold text-slate-900 mb-1">Protocol Sections</h2>
+                  <div className="flex items-start justify-between gap-4 mb-1">
+                    <h2 className="text-lg font-semibold text-slate-900">Protocol Sections</h2>
+                    {snapshot?.steps?.['protocol-pdf']?.state === 'final' && (
+                      <button
+                        onClick={() => setShowAmendmentModal(true)}
+                        className="px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-xs rounded transition-colors flex-shrink-0"
+                      >
+                        Initiate Amendment
+                      </button>
+                    )}
+                  </div>
                   <p className="text-sm text-slate-600 mb-3">Review, edit, and approve each section according to your role and responsibilities</p>
-                  
+
+                  {amendmentSuccessMessage && (
+                    <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+                      {amendmentSuccessMessage}
+                    </div>
+                  )}
+
                   {/* AI Disclaimer */}
-                  <div className="flex items-start gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded">
-                    <Info className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0 mt-0.5" />
-                    <span className="text-xs text-indigo-700">
-                      This system continuously uses AI to analyze content for completeness, consistency, and regulatory alignment. 
-                      All decisions, approvals, and final responsibility remain with assigned human roles.
-                    </span>
+                  <div className="p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
+                    <div className="flex items-start gap-2">
+                      <div className="w-3.5 h-3.5 bg-purple-600 text-white rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0 mt-0.5">
+                        AI
+                      </div>
+                      <span className="text-xs text-purple-800">
+                        AI continuously analyzes this protocol for completeness, consistency, and regulatory alignment.
+                        All decisions and final responsibility remain with assigned human roles.
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -811,6 +1084,8 @@ export default function App() {
                     <ProtocolSection
                       key={section.id}
                       section={section}
+                      targetMarkets={projectData?.targetMarkets || []}
+                      deviceCategory={projectData?.deviceCategory || ''}
                       isExpanded={expandedSections.includes(section.id)}
                       onToggle={() => toggleSection(section.id)}
                       onNavigate={() => navigateToSection(section.id)}
@@ -821,9 +1096,19 @@ export default function App() {
                       onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
                       onAddComment={(content, type) => handleAddComment(section.id, content, type)}
                       onResolveComment={(commentId) => handleResolveComment(section.id, commentId)}
+                      onApprove={(comment) => handleApproveSection(section.id, comment)}
+                      onUnlock={(reason) => handleUnlockSection(section.id, reason)}
+                      deadline={protocolMakeDeadline}
                     />
                   ))}
                 </div>
+
+                {protocolSections.length > 0 && approvedCount > 0 ? (
+                  <div className="mt-4 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
+                    <span className="text-xs text-slate-500">{approvedCount} of {protocolSections.length} sections approved</span>
+                  </div>
+                ) : null}
               </div>
 
               {/* Review Mode Entry - shown after sections on gray background when not in review mode */}
@@ -834,7 +1119,9 @@ export default function App() {
                     hasBlockers={totalBlockers > 0}
                     blockerCount={totalBlockers}
                     allSectionsComplete={allSectionsComplete}
+                    allSectionsApproved={allSectionsApproved}
                     userRole="Project Lead"
+                    amendmentLink={amendments.some(a => a.status === 'approved') ? `/projects/${projectId}/workflow/protocol/amendment` : undefined}
                   />
                 </div>
               )}
@@ -842,8 +1129,61 @@ export default function App() {
 
             {/* Right Panel - Issues & Consistency */}
             <div className="w-80 bg-white border-l border-slate-200 flex flex-col overflow-hidden">
+              {/* Protocol Amendments */}
+              {amendments.length > 0 && (
+                <div className="px-4 pt-4 pb-3 border-b border-slate-200 max-h-48 overflow-y-auto flex-shrink-0">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Protocol Amendments</h3>
+                  </div>
+                  {amendments.map((amendment: any) => {
+                    const statusColors: Record<string, string> = {
+                      draft: 'bg-amber-500',
+                      approved: 'bg-indigo-600',
+                      rejected: 'bg-rose-500',
+                    };
+                    const protocolLeadApproved = !!amendment.approvals?.protocolLead?.approved;
+                    const vpApproved = !!amendment.approvals?.clinicalAffairsVP?.approved;
+                    const isDraft = amendment.status === 'draft';
+                    return (
+                      <div key={amendment.id} className="mb-3 last:mb-0">
+                        <div className="flex items-start gap-2">
+                          <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${statusColors[amendment.status] || 'bg-slate-400'}`} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-slate-800 leading-tight">
+                              Amendment {amendment.number}: {amendment.title}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-0.5 leading-tight line-clamp-2">{amendment.reason}</p>
+                            {amendment.description && (
+                              <p className="text-xs text-slate-600 mt-1 leading-tight line-clamp-2">{amendment.description}</p>
+                            )}
+                            {amendment.affectedProtocolSections?.length > 0 && (
+                              <p className="text-xs text-slate-400 mt-1">Affects: {amendment.affectedProtocolSections.join(', ')}</p>
+                            )}
+                            {isDraft && (
+                              <div className="flex gap-2 mt-1.5 flex-wrap">
+                                {!protocolLeadApproved && !vpApproved && (
+                                  <button onClick={() => handleAmendmentApproval(amendment.id, 'approve-protocol-lead')} className="text-xs font-semibold text-blue-600 hover:text-blue-800">
+                                    Approve
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleAmendmentApproval(amendment.id, 'reject')}
+                                  className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Fixed Header */}
-              <div className="p-4 border-b border-slate-200 flex-shrink-0">
+              <div className="p-4 border-b border-slate-200 flex-shrink-0 sticky top-0 bg-white z-10">
                 <h3 className="text-sm font-semibold text-slate-900 mb-1">Issues & Consistency</h3>
                 <p className="text-xs text-slate-500 mb-3">System-detected inconsistencies and review flags</p>
                 
@@ -857,21 +1197,38 @@ export default function App() {
               </div>
 
               {/* Scrollable Content */}
-              <div className="flex-1 issues-scroll">
+              <div className="flex-1 overflow-y-auto min-h-0">
                 <div className="p-4 space-y-3">
+                  {synopsisConsistencyIssues.length > 0 && (issueFilter === 'all' || issueFilter === 'my') && synopsisConsistencyIssues.map((issue: any, i: number) => (
+                    <div key={'synopsis-' + i} className="p-3 border-b border-slate-100 hover:bg-slate-50">
+                      <div className="flex items-start gap-2">
+                        <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${issue.severity === 'blocker' ? 'bg-rose-500' : 'bg-amber-400'}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${issue.severity === 'blocker' ? 'bg-rose-50 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {issue.severity === 'blocker' ? 'Blocker' : 'Warning'}
+                            </span>
+                            <span className="text-xs text-slate-500">Synopsis consistency</span>
+                          </div>
+                          <p className="text-xs text-slate-700 leading-relaxed">{issue.description}</p>
+                          <p className="text-xs text-slate-400 mt-1">Affected: Synopsis ↔ Protocol</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                   {filteredSections.map((section) => {
                     const openIssues = (section.issues || []).filter((issue: any) => issue.status === 'open');
                     if (openIssues.length === 0) return null;
 
                     return openIssues.map((issue: any) => {
                       const isBlocker = issue.severity === 'blocker';
-                      const bgColor = isBlocker ? 'bg-red-50' : 'bg-amber-50';
-                      const borderColor = isBlocker ? 'border-red-200' : 'border-amber-200';
-                      const hoverColor = isBlocker ? 'hover:bg-red-100' : 'hover:bg-amber-100';
-                      const badgeBgColor = isBlocker ? 'bg-red-100' : 'bg-amber-100';
-                      const badgeTextColor = isBlocker ? 'text-red-700' : 'text-amber-700';
-                      const linkColor = isBlocker ? 'text-red-700' : 'text-amber-700';
-                      const linkHoverColor = isBlocker ? 'hover:text-red-900' : 'hover:text-amber-900';
+                      const bgColor = isBlocker ? 'bg-rose-50' : 'bg-amber-50';
+                      const borderColor = isBlocker ? 'border-rose-200' : 'border-amber-200';
+                      const hoverColor = isBlocker ? 'hover:bg-rose-50' : 'hover:bg-amber-100';
+                      const badgeBgColor = isBlocker ? 'bg-rose-50' : 'bg-amber-100';
+                      const badgeTextColor = isBlocker ? 'text-rose-700' : 'text-amber-700';
+                      const linkColor = isBlocker ? 'text-rose-700' : 'text-amber-700';
+                      const linkHoverColor = isBlocker ? 'hover:text-rose-800' : 'hover:text-amber-900';
 
                       return (
                         <div
@@ -885,6 +1242,9 @@ export default function App() {
                                 <span className={`text-xs px-1.5 py-0.5 rounded ${badgeBgColor} ${badgeTextColor}`}>
                                   {isBlocker ? 'Blocker' : 'Warning'}
                                 </span>
+                                {issue.raisedBy?.toLowerCase().includes('system') && (
+                                  <span className="text-xs text-slate-500">AI Regulatory Review</span>
+                                )}
                               </div>
                               <div className="text-xs text-slate-900 mb-1">{issue.subsection || 'Issue'}</div>
                               <p className="text-xs text-slate-600 leading-relaxed mb-2">
@@ -936,7 +1296,7 @@ export default function App() {
 
                   {filteredSections.every(s => (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && (
                     <div className="p-6 text-center">
-                      <CheckCircle2 className="w-8 h-8 text-green-600 mx-auto mb-2" />
+                      <CheckCircle2 className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                       <p className="text-sm text-slate-700 mb-1">No issues found</p>
                       <p className="text-xs text-slate-500 leading-relaxed">
                         {issueFilter === 'my-issues' 
@@ -948,48 +1308,57 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Fixed Footer */}
-              <div className="p-4 border-t border-slate-200 flex-shrink-0">
-                <ExportReadinessIndicator 
+              <div className="p-4 border-t border-slate-200">
+                <ExportReadinessIndicator
                   checks={[
                     {
                       category: 'All sections complete',
-                      passed: false,
-                      message: '7 of 9 sections approved',
-                      details: 'Sections 4.4 and 4.6 require approval'
+                      passed: protocolSections.every((s: any) => s.approvalStatus === 'approved'),
+                      message: protocolSections.every((s: any) => s.approvalStatus === 'approved')
+                        ? 'All sections approved'
+                        : `${protocolSections.filter((s: any) => s.approvalStatus === 'approved').length} of ${protocolSections.length} sections approved`,
+                      details: protocolSections.every(s => s.approvalStatus === 'approved')
+                        ? undefined
+                        : protocolSections.filter((s: any) => s.approvalStatus !== 'approved').map((s: any) => s.title).join(', '),
                     },
                     {
                       category: 'No open blockers',
-                      passed: false,
-                      message: '1 Blocker must be resolved',
-                      details: 'Sample size feasibility Issue in Section 4.5'
+                      passed: totalBlockers === 0,
+                      message: totalBlockers === 0 ? 'No blockers found' : `${totalBlockers} blocker${totalBlockers > 1 ? 's' : ''} must be resolved`,
                     },
                     {
                       category: 'Required elements covered',
-                      passed: true,
-                      message: 'All ISO 14155 elements present'
+                      passed: protocolSections.every((s: any) => (s.requiredElements || []).every((e: any) => e.status === 'complete')),
+                      message: protocolSections.every((s: any) => (s.requiredElements || []).every((e: any) => e.status === 'complete'))
+                        ? 'All ISO 14155 elements present'
+                        : 'Some required elements incomplete or missing',
                     },
                     {
                       category: 'Cross-section consistency',
-                      passed: false,
-                      message: '2 consistency issues detected',
-                      details: 'Objectives-design alignment and sample size justification'
+                      passed: synopsisConsistencyIssues.length === 0,
+                      message: synopsisConsistencyIssues.length === 0
+                        ? 'No consistency issues detected'
+                        : `${synopsisConsistencyIssues.length} consistency issue${synopsisConsistencyIssues.length > 1 ? 's' : ''} detected`,
+                      details: synopsisConsistencyIssues.length > 0 ? synopsisConsistencyIssues.map((i: any) => `${i.section}: ${i.description}`).join(' · ') : undefined,
                     },
                     {
                       category: 'Regulatory compliance',
                       passed: true,
-                      message: 'EU MDR requirements met'
+                      message: 'EU MDR requirements met',
                     },
                     {
                       category: 'Audit trail complete',
                       passed: true,
-                      message: 'All changes logged and traceable'
-                    }
+                      message: 'All changes logged and traceable',
+                    },
+                    {
+                      category: 'No pending amendments',
+                      passed: !amendments.some((a: any) => a.status === 'draft'),
+                      message: amendments.some((a: any) => a.status === 'draft')
+                        ? `Amendment #${amendments.find((a: any) => a.status === 'draft')?.number} pending approval — resolve before export`
+                        : 'No pending amendments',
+                    },
                   ]}
-                  onExport={() => {
-                    console.log('Export protocol document');
-                    alert('Export functionality would generate a clean protocol document without AI markers, comments, or system metadata.');
-                  }}
                 />
               </div>
             </div>
@@ -1007,16 +1376,14 @@ export default function App() {
         incompleteSections={incompleteSections}
       />
 
-      {/* Toast notification */}
-      {toast && (
-        <div style={{position:'fixed', bottom:'1.5rem', right:'1.5rem', zIndex:9999,
-          backgroundColor:'#16a34a', color:'white', padding:'0.75rem 1.25rem',
-          borderRadius:'0.5rem', display:'flex', alignItems:'center', gap:'0.5rem',
-          boxShadow:'0 4px 24px rgba(0,0,0,0.2)', fontSize:'0.875rem', fontWeight:500
-        }}>
-          ✓ {toast.message}
-        </div>
-      )}
+      {/* Amendment Modal */}
+      <AmendmentModal
+        open={showAmendmentModal}
+        onClose={() => setShowAmendmentModal(false)}
+        onSubmit={handleCreateAmendment}
+        protocolSections={protocolSections.map((s: any) => ({ id: s.id, title: s.title }))}
+        createdBy={currentUser}
+      />
 
       {/* Right Panel Won't Fix Modal */}
       {rightPanelWontFixModal && (

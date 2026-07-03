@@ -20,51 +20,51 @@ export function ReportApproval() {
         </div>
 
         <div className="space-y-6">
-          <Card className="border-green-200 bg-green-50/50">
+          <Card className="border-blue-200 bg-blue-50/50">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-green-900">
+              <CardTitle className="flex items-center gap-2 text-blue-900">
                 <Award className="size-5" />
                 All Approvals Complete
               </CardTitle>
-              <CardDescription className="text-green-700">
+              <CardDescription className="text-blue-700">
                 CSR v1.0 ready for regulatory submission
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                <div className="flex items-center justify-between py-3 border-b border-green-200">
+                <div className="flex items-center justify-between py-3 border-b border-blue-200">
                   <div className="flex items-center gap-3">
-                    <FileCheck className="size-5 text-green-700" />
+                    <FileCheck className="size-5 text-blue-700" />
                     <div>
-                      <div className="font-medium text-sm text-green-900">Regulatory Affairs Director</div>
-                      <div className="text-xs text-green-700">Jennifer Martinez</div>
+                      <div className="font-medium text-sm text-blue-900">Regulatory Affairs Director</div>
+                      <div className="text-xs text-blue-700">Jennifer Martinez</div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <Badge variant="outline" className="bg-green-100 text-green-800 border-green-300">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                       <CheckCircle2 className="size-3 mr-1" />
                       Approved
                     </Badge>
-                    <div className="text-xs text-green-700 mt-1">
+                    <div className="text-xs text-blue-700 mt-1">
                       35 minutes ago
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between py-3 border-b border-green-200">
+                <div className="flex items-center justify-between py-3 border-b border-blue-200">
                   <div className="flex items-center gap-3">
-                    <FileCheck className="size-5 text-green-700" />
+                    <FileCheck className="size-5 text-blue-700" />
                     <div>
-                      <div className="font-medium text-sm text-green-900">Quality Assurance Director</div>
-                      <div className="text-xs text-green-700">David Thompson</div>
+                      <div className="font-medium text-sm text-blue-900">Quality Assurance Director</div>
+                      <div className="text-xs text-blue-700">David Thompson</div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <Badge variant="outline" className="bg-green-100 text-green-800 border-green-300">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                       <CheckCircle2 className="size-3 mr-1" />
                       Approved
                     </Badge>
-                    <div className="text-xs text-green-700 mt-1">
+                    <div className="text-xs text-blue-700 mt-1">
                       18 minutes ago
                     </div>
                   </div>
@@ -72,18 +72,18 @@ export function ReportApproval() {
 
                 <div className="flex items-center justify-between py-3">
                   <div className="flex items-center gap-3">
-                    <FileCheck className="size-5 text-green-700" />
+                    <FileCheck className="size-5 text-blue-700" />
                     <div>
-                      <div className="font-medium text-sm text-green-900">Medical Director</div>
-                      <div className="text-xs text-green-700">Dr. Patricia Stevens</div>
+                      <div className="font-medium text-sm text-blue-900">Medical Director</div>
+                      <div className="text-xs text-blue-700">Dr. Patricia Stevens</div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <Badge variant="outline" className="bg-green-100 text-green-800 border-green-300">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                       <CheckCircle2 className="size-3 mr-1" />
                       Approved
                     </Badge>
-                    <div className="text-xs text-green-700 mt-1">
+                    <div className="text-xs text-blue-700 mt-1">
                       3 minutes ago
                     </div>
                   </div>
@@ -115,7 +115,7 @@ export function ReportApproval() {
                 </div>
                 <div>
                   <div className="text-muted-foreground mb-1">Document Status</div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700">
                     <Lock className="size-3 mr-1" />
                     Locked
                   </Badge>
@@ -133,31 +133,31 @@ export function ReportApproval() {
             </CardHeader>
             <CardContent>
               <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>All review comments resolved</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Statistical analysis verified</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Safety data validated</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Regulatory compliance confirmed</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Quality standards met</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>All approval signatures collected</span>
                 </div>
-                <div className="flex items-center gap-2 text-green-800">
+                <div className="flex items-center gap-2 text-blue-700">
                   <CheckCircle2 className="size-4" />
                   <span>Document version locked</span>
                 </div>

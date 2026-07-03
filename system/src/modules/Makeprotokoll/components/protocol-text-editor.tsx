@@ -43,7 +43,7 @@ export function ProtocolTextEditor({
   };
 
   const getMarkerIcon = () => {
-    if (hasBlocker) return <AlertTriangle className="w-3 h-3 text-red-700" />;
+    if (hasBlocker) return <AlertTriangle className="w-3 h-3 text-rose-700" />;
     if (hasHigh) return <AlertCircle className="w-3 h-3 text-orange-700" />;
     if (hasWarning) return <Info className="w-3 h-3 text-amber-700" />;
     return null;

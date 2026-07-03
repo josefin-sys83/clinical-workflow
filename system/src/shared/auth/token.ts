@@ -25,3 +25,29 @@ export function clearToken() {
     // ignore
   }
 }
+
+export function getTokenRoles(): string[] {
+  const token = getToken();
+  if (!token) return [];
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return Array.isArray(payload?.roles) ? payload.roles : [];
+  } catch {
+    return [];
+  }
+}
+
+export function isAdmin(): boolean {
+  return getTokenRoles().includes('admin');
+}
+
+export function isSuperadmin(): boolean {
+  const token = getToken();
+  if (!token) return false;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload?.is_superadmin === true;
+  } catch {
+    return false;
+  }
+}

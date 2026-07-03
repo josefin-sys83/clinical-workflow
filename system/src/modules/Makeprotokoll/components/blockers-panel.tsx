@@ -37,7 +37,7 @@ export function BlockersPanel() {
   const getPriorityStyles = (priority: Blocker['priority']) => {
     switch (priority) {
       case 'High':
-        return 'bg-red-100 text-red-700 border-red-200';
+        return 'bg-rose-50 text-rose-700 border-rose-200';
       case 'Medium':
         return 'bg-amber-100 text-amber-700 border-amber-200';
       case 'Low':
@@ -49,7 +49,7 @@ export function BlockersPanel() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-slate-900">Active Blockers</h3>
-        <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded">
+        <span className="px-2 py-0.5 bg-rose-50 text-rose-700 text-xs font-medium rounded">
           {blockers.length}
         </span>
       </div>

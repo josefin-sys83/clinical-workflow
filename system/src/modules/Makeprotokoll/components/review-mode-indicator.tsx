@@ -33,9 +33,9 @@ export function ReviewModeIndicator({
           </div>
           
           {blockerCount > 0 && (
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-red-50 border border-red-200 rounded">
-              <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-              <span className="text-xs text-red-800 font-medium">
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-rose-50 border border-rose-200 rounded">
+              <AlertCircle className="w-3.5 h-3.5 text-rose-700" />
+              <span className="text-xs text-rose-800 font-medium">
                 {blockerCount} blocker{blockerCount > 1 ? 's' : ''} open
               </span>
             </div>

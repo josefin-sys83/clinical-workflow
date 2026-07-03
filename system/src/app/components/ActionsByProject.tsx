@@ -3,7 +3,7 @@ import { OpenItem, Project } from '../types/project';
 import { Badge } from './ui/badge';
 
 interface ActionsByProjectProps {
-  items: OpenItem[];
+  items: (OpenItem & { projectName?: string; actionType?: string })[];
   projects: Project[];
   onItemClick: (link: string) => void;
 }
@@ -38,7 +38,7 @@ export function ActionsByProject({ items, projects, onItemClick }: ActionsByProj
     if (isOverdue) {
       const daysOverdue = Math.abs(daysUntilDue);
       return (
-        <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+        <div className="flex items-center gap-1.5 text-xs text-rose-700 font-medium">
           <AlertCircle className="h-3.5 w-3.5" />
           <span>{daysOverdue === 1 ? '1 day overdue' : `${daysOverdue} days overdue`}</span>
         </div>
@@ -47,7 +47,7 @@ export function ActionsByProject({ items, projects, onItemClick }: ActionsByProj
     
     if (daysUntilDue === 0) {
       return (
-        <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+        <div className="flex items-center gap-1.5 text-xs text-rose-700 font-medium">
           <Clock className="h-3.5 w-3.5" />
           <span>Due today</span>
         </div>
@@ -56,7 +56,7 @@ export function ActionsByProject({ items, projects, onItemClick }: ActionsByProj
     
     if (daysUntilDue === 1) {
       return (
-        <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+        <div className="flex items-center gap-1.5 text-xs text-rose-700 font-medium">
           <Clock className="h-3.5 w-3.5" />
           <span>Due tomorrow</span>
         </div>
@@ -87,9 +87,9 @@ export function ActionsByProject({ items, projects, onItemClick }: ActionsByProj
       case 'Review':
         return 'bg-gray-50 text-gray-700 border border-gray-300';
       case 'Input needed':
-        return 'bg-teal-50 text-teal-700 border border-teal-200';
+        return 'bg-orange-50 text-orange-800 border border-orange-200';
       case 'Blocker':
-        return 'bg-red-50 text-red-700 border border-red-200';
+        return 'bg-rose-50 text-rose-700 border border-rose-200';
       default:
         return 'bg-gray-50 text-gray-700 border border-gray-200';
     }
@@ -114,15 +114,17 @@ export function ActionsByProject({ items, projects, onItemClick }: ActionsByProj
     <div className="space-y-6">
       {Object.entries(itemsByProject).map(([projectId, projectItems]) => {
         const project = projects.find(p => p.id === projectId);
-        if (!project) return null;
+        const projectName = project?.name ?? projectItems[0]?.projectName ?? projectId;
 
         return (
           <div key={projectId} className="space-y-3">
             <div className="flex items-center gap-3">
-              <h3 className="text-sm font-semibold text-gray-900">{project.name}</h3>
-              <Badge variant="outline" className="text-xs">
-                {project.phase}
-              </Badge>
+              <h3 className="text-sm font-semibold text-gray-900">{projectName}</h3>
+              {project?.phase && (
+                <Badge variant="outline" className="text-xs">
+                  {project.phase}
+                </Badge>
+              )}
               <span className="text-xs text-gray-500">
                 {projectItems.length} action{projectItems.length !== 1 ? 's' : ''}
               </span>

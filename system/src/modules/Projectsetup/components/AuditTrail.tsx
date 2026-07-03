@@ -39,14 +39,14 @@ export function AuditTrail({ entries, onExport, isOpen, onToggle }: AuditTrailPr
 
   const getCategoryColor = (category: AuditEntry['category']) => {
     const colors: Record<AuditEntry['category'], string> = {
-      role: 'text-green-700 bg-green-50 border-green-200',
+      role: 'text-blue-700 bg-blue-50 border-blue-200',
       requirement: 'text-purple-700 bg-purple-50 border-purple-200',
       scope: 'text-blue-700 bg-blue-50 border-blue-200',
       timeline: 'text-orange-700 bg-orange-50 border-orange-200',
-      regulatory: 'text-red-700 bg-red-50 border-red-200',
-      team: 'text-teal-700 bg-teal-50 border-teal-200',
+      regulatory: 'text-rose-700 bg-rose-50 border-rose-200',
+      team: 'text-orange-800 bg-orange-50 border-orange-200',
       approval: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-      version: 'text-indigo-700 bg-indigo-50 border-indigo-200'
+      version: 'text-purple-700 bg-purple-50 border-purple-200'
     };
     return colors[category];
   };

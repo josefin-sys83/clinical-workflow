@@ -106,7 +106,7 @@ export function RightPanel({ isCollapsed, onToggleCollapse }: RightPanelProps) {
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
-      case 'Blocker': return 'bg-red-100 text-red-700 border-red-300';
+      case 'Blocker': return 'bg-rose-50 text-rose-700 border-rose-300';
       case 'High': return 'bg-amber-100 text-amber-700 border-amber-300';
       case 'Info': return 'bg-blue-100 text-blue-700 border-blue-300';
       default: return 'bg-slate-100 text-slate-700 border-slate-300';

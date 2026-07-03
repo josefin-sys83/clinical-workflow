@@ -65,7 +65,7 @@ export function WorkflowStepper() {
   const getStatusIcon = (status: WorkflowStep['status']) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle2 className="w-5 h-5 text-green-600" />;
+        return <CheckCircle2 className="w-5 h-5 text-indigo-600" />;
       case 'locked':
         return <Lock className="w-5 h-5 text-slate-400" />;
       case 'active':
@@ -78,7 +78,7 @@ export function WorkflowStepper() {
   const getStatusColor = (status: WorkflowStep['status']) => {
     switch (status) {
       case 'completed':
-        return 'bg-green-100 text-green-700 border-green-200';
+        return 'bg-blue-50 text-blue-700 border-blue-200';
       case 'locked':
         return 'bg-slate-100 text-slate-600 border-slate-200';
       case 'active':

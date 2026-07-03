@@ -114,23 +114,23 @@ export function AIRoleClarityBanner({
 
   // Human-authored content
   return (
-    <div className="p-4 bg-green-50 border-2 border-green-300 rounded-lg">
+    <div className="p-4 bg-blue-50 border-2 border-indigo-300 rounded-lg">
       <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-200 flex items-center justify-center">
-          <CheckCircle2 className="w-4 h-4 text-green-700" />
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+          <CheckCircle2 className="w-4 h-4 text-blue-700" />
         </div>
         <div className="flex-1">
-          <div className="text-sm font-medium text-green-900 mb-1">
+          <div className="text-sm font-medium text-blue-900 mb-1">
             Human-Authored Content
           </div>
-          <p className="text-xs text-green-800 leading-relaxed mb-2">
+          <p className="text-xs text-blue-700 leading-relaxed mb-2">
             This content was authored directly by qualified personnel without AI generation.
           </p>
           
           {originalAuthor && (
-            <div className="text-xs pt-2 border-t border-green-200">
-              <span className="text-green-600">Authored by:</span>
-              <span className="ml-1.5 text-green-900">{originalAuthor}</span>
+            <div className="text-xs pt-2 border-t border-blue-200">
+              <span className="text-indigo-600">Authored by:</span>
+              <span className="ml-1.5 text-blue-900">{originalAuthor}</span>
             </div>
           )}
         </div>

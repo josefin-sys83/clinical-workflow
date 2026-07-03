@@ -42,7 +42,7 @@ export function ReviewDetailsModal({
   const getSeverityStyles = (sev: string) => {
     switch (sev) {
       case 'blocker':
-        return 'bg-red-100 text-red-800 border-red-200';
+        return 'bg-rose-50 text-rose-800 border-rose-200';
       case 'high':
         return 'bg-orange-100 text-orange-800 border-orange-200';
       case 'medium':
@@ -96,14 +96,14 @@ export function ReviewDetailsModal({
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Regulatory Impact Warning */}
           {severity === 'blocker' && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg">
               <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
+                <AlertTriangle className="w-5 h-5 text-rose-700 mt-0.5" />
                 <div>
-                  <div className="text-sm font-semibold text-red-900 mb-1">
+                  <div className="text-sm font-semibold text-rose-800 mb-1">
                     Regulatory Impact – Blocker
                   </div>
-                  <p className="text-xs text-red-800">
+                  <p className="text-xs text-rose-800">
                     {aiRecommendation.regulatoryImpact}
                   </p>
                 </div>
@@ -116,10 +116,10 @@ export function ReviewDetailsModal({
             <h3 className="text-sm font-semibold text-slate-900 mb-3">Document Comparison</h3>
             <div className="space-y-3">
               {/* Synopsis */}
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-xs font-semibold text-green-900 uppercase tracking-wide">
+                  <CheckCircle className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs font-semibold text-blue-900 uppercase tracking-wide">
                     {comparisonData.synopsis.section}
                   </span>
                   <span className="text-xs text-blue-700">(Approved Baseline)</span>
@@ -134,19 +134,19 @@ export function ReviewDetailsModal({
               </div>
 
               {/* Protocol */}
-              <div className="p-4 bg-red-50 border border-red-300 rounded-lg">
+              <div className="p-4 bg-rose-50 border border-rose-300 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
-                  <AlertTriangle className="w-4 h-4 text-red-600" />
-                  <span className="text-xs font-semibold text-red-900 uppercase tracking-wide">
+                  <AlertTriangle className="w-4 h-4 text-rose-700" />
+                  <span className="text-xs font-semibold text-rose-800 uppercase tracking-wide">
                     {comparisonData.protocol.section}
                   </span>
-                  <span className="text-xs text-red-700">(Conflict Detected)</span>
+                  <span className="text-xs text-rose-700">(Conflict Detected)</span>
                 </div>
                 <p className="text-sm text-slate-900 leading-relaxed">
                   "{comparisonData.protocol.content}"
                 </p>
-                <div className="mt-2 p-2 bg-red-100 border-l-2 border-red-400 rounded">
-                  <p className="text-xs text-red-800">
+                <div className="mt-2 p-2 bg-rose-50 border-l-2 border-red-400 rounded">
+                  <p className="text-xs text-rose-800">
                     <strong>Conflict:</strong> States "all-cause mortality" instead of "cardiovascular mortality"
                   </p>
                 </div>

@@ -11,6 +11,8 @@ interface RightSidebarProps {
   onVerifyElement: (elementId: string) => void;
   dataAssets: DataAsset[];
   uploadedFiles: UploadedFile[];
+  sectionAiIssues: Record<string, any[]>;
+  crossConsistencyIssues?: any[];
 }
 
 export function RightSidebar({
@@ -21,17 +23,21 @@ export function RightSidebar({
   onVerifyElement,
   dataAssets,
   uploadedFiles,
+  sectionAiIssues,
+  crossConsistencyIssues,
 }: RightSidebarProps) {
   return (
-    <div className="w-[320px] flex flex-col overflow-hidden border-l border-[#E5E7EB] bg-white">
+    <div className="w-80 flex flex-col overflow-hidden border-l border-slate-200 bg-white">
       {/* Quality System Panel - Top */}
-      <div className="flex-shrink-0 border-b border-[#E5E7EB] overflow-y-auto max-h-[50vh]">
+      <div className="flex-shrink-0 border-b border-slate-200 overflow-y-auto max-h-[50vh]">
         <QualitySystemPanel
           currentSection={currentSection}
           sections={sections}
           onNavigateToSection={onNavigateToSection}
           currentUser={currentUser}
           onVerifyElement={onVerifyElement}
+          sectionAiIssues={sectionAiIssues}
+          crossConsistencyIssues={crossConsistencyIssues}
         />
       </div>
 

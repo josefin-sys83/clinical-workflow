@@ -1,38 +1,58 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { getPool } from '../../db/pg';
 import { Role } from './roles.decorator';
-
-type DemoUser = { id: string; username: string; password: string; name: string; roles: Role[] };
-
-// NOTE: This is a demo in-memory user store. Replace with real IdP (Entra/Keycloak/Auth0) later.
-const USERS: DemoUser[] = [
-  { id: 'u_admin', username: 'admin', password: 'admin', name: 'Admin User', roles: ['admin', 'author', 'reviewer', 'approver'] },
-  { id: 'u_author', username: 'author', password: 'author', name: 'Author User', roles: ['author'] },
-  { id: 'u_reviewer', username: 'reviewer', password: 'reviewer', name: 'Reviewer User', roles: ['reviewer'] },
-  { id: 'u_approver', username: 'approver', password: 'approver', name: 'Approver User', roles: ['approver'] },
-];
 
 @Injectable()
 export class AuthService {
   constructor(private readonly jwt: JwtService) {}
 
-  login(username: string, password: string) {
-    const user = USERS.find((u) => u.username === username && u.password === password);
+  async login(email: string, password: string) {
+    const { rows } = await getPool().query<{
+      id: string;
+      name: string;
+      system_role: Role;
+      company_id: string | null;
+      is_superadmin: boolean;
+    }>(
+      `select id, name, system_role, company_id, is_superadmin
+       from users
+       where email = $1
+         and password_hash = crypt($2, password_hash)
+         and is_active = true`,
+      [email, password],
+    );
+
+    const user = rows[0];
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
+    // Touch last_active_at for the company on every login
+    if (user.company_id) {
+      await getPool().query(
+        `update companies set last_active_at = now() where id = $1`,
+        [user.company_id],
+      );
+    }
+
+    // admin carries all roles so existing role guards keep working
+    const roles: Role[] =
+      user.system_role === 'admin'
+        ? ['admin', 'author', 'reviewer', 'approver']
+        : [user.system_role];
+
     const access_token = this.jwt.sign(
-      { name: user.name, roles: user.roles },
+      { name: user.name, roles, company_id: user.company_id, is_superadmin: user.is_superadmin },
       { subject: user.id },
     );
 
     return {
       access_token,
       token_type: 'Bearer',
-      user: { id: user.id, name: user.name, roles: user.roles },
+      user: { id: user.id, name: user.name, roles, company_id: user.company_id, is_superadmin: user.is_superadmin },
     };
   }
 
-  me(user: { userId: string; name: string; roles: Role[] }) {
-    return { id: user.userId, name: user.name, roles: user.roles };
+  me(user: { userId: string; name: string; roles: Role[]; companyId?: string }) {
+    return { id: user.userId, name: user.name, roles: user.roles, company_id: user.companyId ?? null };
   }
 }

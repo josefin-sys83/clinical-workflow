@@ -100,7 +100,7 @@ export function ReopenSectionModal({
           {/* Reason for Reopening */}
           <div>
             <label className="block text-sm font-medium text-slate-900 mb-2">
-              Reason for Reopening <span className="text-red-600">*</span>
+              Reason for Reopening <span className="text-rose-700">*</span>
             </label>
             <p className="text-xs text-slate-600 mb-2">
               Provide a clear explanation for why this section needs to be reopened. This will be visible in the audit trail.
@@ -115,7 +115,7 @@ export function ReopenSectionModal({
               <span className="text-xs text-slate-500">
                 Minimum 20 characters required
               </span>
-              <span className={`text-xs ${reason.length >= 20 ? 'text-green-600' : 'text-slate-400'}`}>
+              <span className={`text-xs ${reason.length >= 20 ? 'text-indigo-600' : 'text-slate-400'}`}>
                 {reason.length} / 20
               </span>
             </div>

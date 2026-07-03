@@ -237,7 +237,7 @@ export default function AIAssistedProtocolDemo() {
             <div className="text-xs font-medium text-slate-900 mb-2">EXAMPLE: Inclusion Criteria Text</div>
             <div className="text-sm text-slate-700 leading-relaxed">
               <p className="mb-2">Subjects must meet all of the following criteria:</p>
-              <p className="bg-red-50/30 border-l-2 border-red-500 pl-2 py-1">
+              <p className="bg-rose-50/30 border-l-2 border-rose-500 pl-2 py-1">
                 Age ≥65 years. Severe aortic stenosis defined as aortic valve area ≤1.0 cm². 
                 Symptomatic disease (NYHA class II or III). Intermediate surgical risk (STS-PROM 4-8%).
                 <InlineIssueMarker 
@@ -263,13 +263,13 @@ export default function AIAssistedProtocolDemo() {
             5. Human Decision Loop
           </h2>
           <div className="space-y-3 text-sm text-slate-700">
-            <div className="flex items-start gap-3 p-3 bg-green-50 border border-green-200 rounded">
-              <div className="w-6 h-6 bg-green-600 text-white rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">
+            <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-200 rounded">
+              <div className="w-6 h-6 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">
                 ✓
               </div>
               <div>
-                <div className="font-medium text-green-900">Humans May:</div>
-                <ul className="text-xs text-green-800 mt-1 space-y-0.5 list-disc list-inside">
+                <div className="font-medium text-blue-900">Humans May:</div>
+                <ul className="text-xs text-blue-700 mt-1 space-y-0.5 list-disc list-inside">
                   <li>Edit any AI-generated text</li>
                   <li>Accept, modify, or reject AI suggestions</li>
                   <li>Resolve issues after making changes</li>
@@ -279,13 +279,13 @@ export default function AIAssistedProtocolDemo() {
               </div>
             </div>
 
-            <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded">
+            <div className="flex items-start gap-3 p-3 bg-rose-50 border border-rose-200 rounded">
               <div className="w-6 h-6 bg-red-600 text-white rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">
                 ✗
               </div>
               <div>
-                <div className="font-medium text-red-900">AI May NOT:</div>
-                <ul className="text-xs text-red-800 mt-1 space-y-0.5 list-disc list-inside">
+                <div className="font-medium text-rose-800">AI May NOT:</div>
+                <ul className="text-xs text-rose-800 mt-1 space-y-0.5 list-disc list-inside">
                   <li>Auto-edit protocol content</li>
                   <li>Close or resolve issues</li>
                   <li>Approve sections</li>
@@ -323,7 +323,7 @@ export default function AIAssistedProtocolDemo() {
           <p className="text-sm text-slate-600 mb-4">
             All AI and human actions are fully logged for inspection readiness.
           </p>
-          <div className="space-y-2 text-xs font-mono bg-slate-900 text-green-400 p-4 rounded">
+          <div className="space-y-2 text-xs font-mono bg-slate-900 text-gray-400 p-4 rounded">
             <div>[2026-02-07 10:15:42 CET] AI_SYSTEM: Draft generated for Section 4.5</div>
             <div className="ml-4">└─ Sources: Synopsis v1.2, Intended Use v1.0, ISO 14155:2020</div>
             <div className="ml-4">└─ Model: Protocol-AI-v2.3.1</div>

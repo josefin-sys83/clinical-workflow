@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { CheckCircle2, AlertTriangle, Info } from 'lucide-react';
 
 interface ReviewModeEntryProps {
@@ -6,17 +7,21 @@ interface ReviewModeEntryProps {
   hasBlockers: boolean;
   blockerCount: number;
   allSectionsComplete: boolean;
+  allSectionsApproved: boolean;
   userRole: string;
+  amendmentLink?: string;
 }
 
-export function ReviewModeEntry({ 
-  onEnterReview, 
-  hasBlockers, 
-  blockerCount, 
+export function ReviewModeEntry({
+  onEnterReview,
+  hasBlockers,
+  blockerCount,
   allSectionsComplete,
-  userRole 
+  allSectionsApproved,
+  userRole,
+  amendmentLink,
 }: ReviewModeEntryProps) {
-  const canEnter = userRole === 'Project Lead';
+  const canEnter = userRole === 'Project Lead' && allSectionsApproved;
 
   return (
     <div className="border-t border-slate-200 pt-6">
@@ -30,12 +35,12 @@ export function ReviewModeEntry({
           </p>
           
           {hasBlockers && (
-            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded mb-3">
+            <div className="flex items-start gap-2 p-3 bg-rose-50 border border-rose-200 rounded mb-3">
               <div className="flex-1">
-                <p className="text-xs text-red-900 mb-1 font-medium">
+                <p className="text-xs text-rose-800 mb-1 font-medium">
                   {blockerCount} open blocker{blockerCount > 1 ? 's' : ''} detected
                 </p>
-                <p className="text-xs text-red-800 leading-relaxed">
+                <p className="text-xs text-rose-800 leading-relaxed">
                   You can still enter review mode. Reviewers will be notified of outstanding blockers 
                   and may request resolution before approval.
                 </p>
@@ -55,7 +60,7 @@ export function ReviewModeEntry({
             </div>
           )}
 
-          {!canEnter && (
+          {userRole !== 'Project Lead' && (
             <div className="flex items-start gap-2 p-3 bg-slate-50 border border-slate-200 rounded mb-3">
               <Info className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
@@ -65,19 +70,39 @@ export function ReviewModeEntry({
               </div>
             </div>
           )}
+
+          {userRole === 'Project Lead' && !allSectionsApproved && (
+            <div className="flex items-start gap-2 p-3 bg-slate-50 border border-slate-200 rounded mb-3">
+              <Info className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  All sections must be approved before entering review mode.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
         
-        <button 
-          onClick={onEnterReview}
-          disabled={!canEnter}
-          className={`px-6 py-3 rounded text-sm font-medium transition-colors flex-shrink-0 ${
-            canEnter
-              ? 'bg-slate-700 text-white hover:bg-slate-800'
-              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-          }`}
-        >
-          Enter Review Mode
-        </button>
+        {amendmentLink ? (
+          <Link
+            to={amendmentLink}
+            className="px-6 py-3 rounded text-sm font-medium transition-colors flex-shrink-0 bg-slate-700 text-white hover:bg-slate-800"
+          >
+            Review Amendment Form
+          </Link>
+        ) : (
+          <button
+            onClick={onEnterReview}
+            disabled={!canEnter}
+            className={`px-6 py-3 rounded text-sm font-medium transition-colors flex-shrink-0 ${
+              canEnter
+                ? 'bg-slate-700 text-white hover:bg-slate-800'
+                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+            }`}
+          >
+            Enter Review Mode
+          </button>
+        )}
       </div>
     </div>
   );

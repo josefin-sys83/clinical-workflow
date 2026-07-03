@@ -84,7 +84,7 @@ export function ReportContent({ sections, onSectionVisible, findings }: ReportCo
           const highlightClass = finding.acceptedRisk
             ? 'bg-neutral-100 text-neutral-700'
             : finding.severity === 'blocker'
-            ? 'bg-red-100 text-red-800 border border-red-300'
+            ? 'bg-rose-50 text-rose-800 border border-rose-300'
             : 'bg-yellow-100 text-yellow-800 border border-yellow-300';
           
           content = (

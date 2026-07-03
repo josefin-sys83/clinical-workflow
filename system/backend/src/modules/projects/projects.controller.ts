@@ -1,10 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Res, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
+import { randomUUID } from 'crypto';
 import { CreateProjectDto } from './dto';
 import { ProjectsService } from './projects.service';
 import { AiService } from '../ai/ai.service';
 import { AuditService } from '../audit/audit.service';
+import { WorkflowService } from '../workflow/workflow.service';
+import { MilestoneService } from '../milestones/milestone.service';
+import { AdminService } from '../admin/admin.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @ApiTags('projects')
 @Controller('/api/projects')
@@ -13,6 +18,9 @@ export class ProjectsController {
     private readonly projects: ProjectsService,
     private readonly ai: AiService,
     private readonly audit: AuditService,
+    private readonly workflow: WorkflowService,
+    private readonly milestones: MilestoneService,
+    private readonly adminService: AdminService,
   ) {}
 
   @Get()
@@ -21,15 +29,60 @@ export class ProjectsController {
   @Get('/completed')
   listCompleted() { return this.projects.listCompleted(); }
 
+  @Get('/:projectId/report-sections')
+  async getReportSections(@Param('projectId') projectId: string) {
+    const project = await this.projects.get(projectId);
+    const scope = project?.data?.scope || {};
+    const projectData = project?.data?.projectData || {};
+
+    const inferredFromRequirements: string[] = (scope?.requirements || [])
+      .filter((r: any) => r.status === 'accepted')
+      .map((r: any) => {
+        if (r.title.includes('FDA') || r.title.includes('US')) return 'FDA';
+        if (r.title.includes('EU') || r.title.includes('MDR')) return 'EU';
+        return null;
+      })
+      .filter(Boolean);
+    const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
+    const targetMarkets: string[] =
+      scope?.targetMarkets ||
+      projectData?.targetMarkets ||
+      (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+
+    const sections = this.getDynamicReportSections(targetMarkets, scope);
+    return {
+      sections,
+      targetMarkets,
+      deviceCategory: scope?.deviceCategory || '',
+      studyType: project?.data?.synopsis?.studyType || '',
+    };
+  }
+
   @Get('/:projectId')
   get(@Param('projectId') projectId: string) { return this.projects.get(projectId); }
 
   @Post()
-  create(@Body() dto: CreateProjectDto) { return this.projects.create(dto); }
+  @UseGuards(JwtAuthGuard)
+  async create(@Body() dto: CreateProjectDto, @Req() req: any) {
+    const companyId: string | undefined = req.user?.companyId;
+    if (companyId) {
+      await this.adminService.enforceProjectLimit(companyId);
+      await this.adminService.touchLastActive(companyId);
+    }
+    return this.projects.create(dto);
+  }
 
   @Patch('/:projectId')
   async update(@Param('projectId') projectId: string, @Body() body: { name?: string; description?: string; data?: any }) {
     const existing = await this.projects.get(projectId);
+    // Check if scope is locked (protocol has been finalized)
+    if (body.data?.scope) {
+      const workflowSteps = await this.workflow.getSnapshot(projectId);
+      const protocolFinal = workflowSteps?.steps?.['protocol-pdf']?.state === 'final';
+      if (protocolFinal) {
+        return { error: 'Scope is locked after protocol finalization', locked: true };
+      }
+    }
     const result = await this.projects.update(projectId, body);
     if (body.data?.roles) {
       const oldRoles: any[] = existing?.data?.roles || [];
@@ -64,31 +117,115 @@ export class ProjectsController {
     return result;
   }
 
+  // ── Electronic signature (21 CFR Part 11 / EU MDR compliant) ───────────────
+  @Post('/:projectId/signatures')
+  async createSignature(
+    @Param('projectId') projectId: string,
+    @Body() body: {
+      role: string;
+      signerName: string;
+      signerEmail: string;
+      signerUserId: string;
+      documentHash: string;
+    },
+    @Req() req: any,
+  ) {
+    const id = randomUUID();
+    const signedAt = new Date().toISOString();
+
+    // Resolve client IP — honour proxy headers first
+    const ipAddress =
+      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      req.ip ||
+      'unknown';
+
+    const sigRecord = {
+      id,
+      projectId,
+      role: body.role,
+      signerName: body.signerName,
+      signerEmail: body.signerEmail,
+      signerUserId: body.signerUserId,
+      documentHash: body.documentHash,
+      signedAt,
+      ipAddress,
+    };
+
+    // Append to signatures array (preserves previous signatures on the same document)
+    const project = await this.projects.get(projectId);
+    const existing: any[] = Array.isArray(project.data?.signatures) ? project.data.signatures : [];
+    // Remove any prior signature for the same role so there is at most one per slot
+    const filtered = existing.filter((s: any) => s.role !== body.role);
+    await this.projects.update(projectId, {
+      data: { signatures: [...filtered, sigRecord] },
+    });
+
+    // Regulatory audit record — full metadata for tamper-evident trail
+    await this.audit.create(projectId, {
+      type: 'protocol.signed',
+      message: `Protocol electronically signed by ${body.signerName} (${body.role})`,
+      stepId: 'protocol-pdf',
+      actorUserId: body.signerUserId,
+      metadataJson: JSON.stringify({
+        signatureId: id,
+        signerName: body.signerName,
+        signerEmail: body.signerEmail,
+        signerUserId: body.signerUserId,
+        role: body.role,
+        documentHash: body.documentHash,
+        signedAt,
+        ipAddress,
+      }),
+    });
+
+    return sigRecord;
+  }
+
   @Patch('/:projectId/protocol/sections/:sectionId')
   async updateSection(
     @Param('projectId') projectId: string,
     @Param('sectionId') sectionId: string,
-    @Body() body: { content: string; userId?: string; userName?: string; previousContent?: string; reason?: string }
+    @Body() body: { content: string; approvalStatus?: string; approvedBy?: string; approvedAt?: string; userId?: string; userName?: string; previousContent?: string; reason?: string }
   ) {
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol;
     if (!protocol) return null;
     const now = new Date().toISOString();
     const section = protocol.sections.find((s: any) => s.id === sectionId);
+    // Spread DB section first (preserves all fields), then apply content update.
+    // If the caller explicitly sends approval fields, apply those too so that saving
+    // content can never silently clear an already-approved status.
+    const approvalOverrides: Record<string, any> = {};
+    if (body.approvalStatus !== undefined) approvalOverrides.approvalStatus = body.approvalStatus;
+    if (body.approvedBy !== undefined) approvalOverrides.approvedBy = body.approvedBy;
+    if (body.approvedAt !== undefined) approvalOverrides.approvedAt = body.approvedAt;
     const sections = protocol.sections.map((s: any) =>
-      s.id === sectionId ? { ...s, content: body.content, updatedAt: now } : s
+      s.id === sectionId ? { ...s, ...approvalOverrides, content: body.content, updatedAt: now } : s
     );
     await this.projects.update(projectId, {
       data: { ...project.data, protocol: { ...protocol, sections } }
     });
 
+    // Detect structural additions/removals for summary annotation
+    const prevContent = body.previousContent || '';
+    const newContent = body.content;
+    const hasTable = (s: string) => /^\|.+\|/m.test(s);
+    const hasImage = (s: string) => /!\[.*?\]\(.*?\)/.test(s);
+    const structuralNotes: string[] = [];
+    if (!hasTable(prevContent) && hasTable(newContent))  structuralNotes.push('Table added');
+    if (hasTable(prevContent)  && !hasTable(newContent)) structuralNotes.push('Table removed');
+    if (!hasImage(prevContent) && hasImage(newContent))  structuralNotes.push('Image added');
+    if (hasImage(prevContent)  && !hasImage(newContent)) structuralNotes.push('Image removed');
+    const messageSuffix = structuralNotes.length > 0 ? ` (${structuralNotes.join(', ')})` : '';
+
     // Log audit event
     await this.audit.create(projectId, {
       type: 'section.content.updated',
-      message: `Section "${section?.title || sectionId}" content updated`,
+      message: `Section "${section?.title || sectionId}" content updated${messageSuffix}`,
       stepId: 'protocol-make',
       actorUserId: body.userId || 'unknown',
-      metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, updatedAt: now, editedBy: body.userName || 'Unknown user', reason: body.reason || '', previousContent: (body.previousContent || '').substring(0, 500), newContent: body.content.substring(0, 500) })
+      metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, updatedAt: now, editedBy: body.userName || 'Unknown user', reason: body.reason || '', previousContent: prevContent, newContent })
     });
 
     return { ok: true, updatedAt: now };
@@ -131,7 +268,30 @@ export class ProjectsController {
     console.log('[analyzeSynopsis] extracted text length:', text.length, '| preview:', text.slice(0, 300));
     const results = await this.ai.analyzeSynopsis(text);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
+
+    // Persist extracted text and checklist so downstream steps (protocol generation, complexity) can use them
+    const existing = await this.projects.get(projectId);
+    const existingSynopsis = existing?.data?.synopsis || {};
+    await this.projects.update(projectId, {
+      data: {
+        synopsis: {
+          ...existingSynopsis,
+          extractedText: text,
+          readinessChecklist: results,
+          aiReviewComplete: true,
+        },
+      },
+    });
+
     return results;
+  }
+
+  @Post('/:projectId/derive-scope')
+  async deriveScope(@Param('projectId') projectId: string) {
+    const project = await this.projects.get(projectId);
+    const synopsisText = project?.data?.synopsis?.extractedText;
+    if (!synopsisText) return { deviceCategory: '', intendedUse: '', confidence: 'low' };
+    return this.ai.deriveScopeFromSynopsis(synopsisText);
   }
 
   @Post('/:projectId/analyze-scope')
@@ -147,7 +307,8 @@ export class ProjectsController {
     const roles = project?.data?.roles || [];
     const scope = project?.data?.scope || {};
     const synopsisData = project?.data?.synopsis || {};
-    const synopsisText = synopsisData.reviewResult ? JSON.stringify(synopsisData.reviewResult) : '';
+    const synopsisText = synopsisData.extractedText ||
+      (synopsisData.readinessChecklist?.map((i: any) => i.reason).filter(Boolean).join(' ') ?? '');
     const targetMarkets = projectData?.targetMarkets || ['EU'];
     const deviceCategory = scope?.deviceCategory || '';
     const intendedUse = scope?.intendedUse || '';
@@ -155,17 +316,22 @@ export class ProjectsController {
     const protocol = await this.ai.generateProtocol(projectData, roles, synopsisText, scope);
     if (!protocol) return null;
 
-    await Promise.all(
-      protocol.sections.map(async (section: any) => {
-        const elements = await this.ai.generateRequiredElements(
-          section.title,
-          targetMarkets,
-          deviceCategory,
-          intendedUse
-        );
-        section.requiredElements = elements;
-      })
-    );
+    // Batched (not all-at-once) to avoid tripping Azure OpenAI rate limits.
+    const REQUIRED_ELEMENTS_BATCH_SIZE = 3;
+    for (let i = 0; i < protocol.sections.length; i += REQUIRED_ELEMENTS_BATCH_SIZE) {
+      const batch = protocol.sections.slice(i, i + REQUIRED_ELEMENTS_BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (section: any) => {
+          const elements = await this.ai.generateRequiredElements(
+            section.title,
+            targetMarkets,
+            deviceCategory,
+            intendedUse
+          );
+          section.requiredElements = elements;
+        })
+      );
+    }
 
     // Log audit event
     await this.audit.create(projectId, {
@@ -182,13 +348,716 @@ export class ProjectsController {
   @Post('/:projectId/analyze-section')
   async analyzeSection(
     @Param('projectId') projectId: string,
-    @Body() body: { sectionTitle: string; sectionContent: string; requiredElements?: any[] }
+    @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] }
   ) {
     const project = await this.projects.get(projectId);
+    return this.runSectionAnalysis(project, body.sectionTitle, body.sectionContent, body.sectionId, body.requiredElements);
+  }
+
+  @Post('/:projectId/analyze-sections')
+  async analyzeSections(
+    @Param('projectId') projectId: string,
+    @Body() body: { sectionIds?: string[] } = {},
+  ) {
+    const project = await this.projects.get(projectId);
+    const protocol = project?.data?.protocol || {};
+    const sections = (protocol.sections || []).filter((s: any) =>
+      s.content && (!body.sectionIds || body.sectionIds.includes(s.id))
+    );
+
+    // Batches of 3 (same pattern as generateProtocol) keep concurrent Azure OpenAI
+    // requests low enough to avoid tripping per-minute rate limits.
+    const results = await this.ai.mapInBatches(sections, 3, async (section: any) => {
+      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements);
+      return { sectionId: section.id, ...result };
+    });
+
+    return { results };
+  }
+
+  private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined) {
     const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
     const deviceCategory = project?.data?.scope?.deviceCategory || '';
     const intendedUse = project?.data?.scope?.intendedUse || '';
-    const result = await this.ai.analyzeSection(body.sectionTitle, body.sectionContent, targetMarkets, deviceCategory, intendedUse, body.requiredElements);
+
+    const protocol = project?.data?.protocol || {};
+    const section = (protocol.sections || []).find((s: any) => s.title === sectionTitle || s.id === sectionId);
+    const amendmentContext = section?.amended && section?.amendmentId
+      ? (protocol.amendments || []).find((a: any) => a.id === section.amendmentId) || null
+      : null;
+
+    const crossSectionContext = (protocol.sections || [])
+      .filter((s: any) => ['Study Design', 'Study Rationale & Objectives'].includes(s.title) && s.title !== sectionTitle && s.content)
+      .map((s: any) => ({ title: s.title, content: s.content }));
+
+    const acceptedRequirements = (project?.data?.scope?.requirements || [])
+      .filter((r: any) => r.status === 'accepted')
+      .map((r: any) => `${r.title}: ${r.description}`)
+      .join('\n');
+
+    const synopsisExcerpt = project?.data?.synopsis?.extractedText || '';
+
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt);
+
+    // Deterministic rule-based checks always run alongside the AI analysis, so
+    // regulatory-reference and specificity gaps are caught even if the AI misses them.
+    const ruleIssues = getRuleBasedIssues(
+      { id: sectionId || section?.id || sectionTitle, title: sectionTitle, content: sectionContent },
+      targetMarkets,
+      project?.data?.projectData || {},
+    );
+    result.issues = mergeIssues(result.issues || [], ruleIssues);
     return result;
   }
+
+  // ── Protocol amendments ─────────────────────────────────────────────────
+  @Post('/:projectId/amendments')
+  async createAmendment(
+    @Param('projectId') projectId: string,
+    @Body() body: {
+      title: string;
+      reason: string;
+      description: string;
+      affectedProtocolSections: string[];
+      createdBy: string;
+    }
+  ) {
+    const project = await this.projects.get(projectId);
+    const protocol = project?.data?.protocol || {};
+    const amendments: any[] = protocol.amendments || [];
+
+    // Capture a snapshot of every protocol section's content at the moment the amendment
+    // is initiated — this is the "before" state used for track-changes rendering.
+    const protocolSections: any[] = protocol.sections || [];
+    const protocolSnapshot: Record<string, { title: string; content: string; version: string }> = {};
+    for (const section of protocolSections) {
+      if (section.id) {
+        protocolSnapshot[section.id] = {
+          title: section.title || section.id,
+          content: section.content || '',
+          version: protocol.version || '1.0',
+        };
+      }
+    }
+
+    const newAmendment = {
+      id: `amd-${Date.now()}`,
+      number: amendments.length + 1,
+      title: body.title,
+      reason: body.reason,
+      description: body.description,
+      affectedProtocolSections: body.affectedProtocolSections,
+      affectedReportSections: this.getAffectedReportSections(body.affectedProtocolSections),
+      status: 'draft',
+      createdBy: body.createdBy,
+      createdAt: new Date().toISOString(),
+      protocolVersion: protocol.version || '1.0',
+      protocolSnapshot,
+      approvals: {
+        pi: { approved: false, by: null, at: null },
+        sponsor: { approved: false, by: null, at: null },
+        ethicsCommittee: { status: 'pending', uploadedDoc: null, confirmedAt: null }
+      }
+    };
+
+    amendments.push(newAmendment);
+
+    await this.projects.update(projectId, {
+      data: {
+        ...project.data,
+        protocol: { ...protocol, amendments }
+      }
+    });
+
+    await this.audit.create(projectId, {
+      type: 'amendment.created',
+      message: `Amendment ${newAmendment.number}: ${body.title}`,
+      stepId: 'protocol-make',
+      actorUserId: body.createdBy,
+      metadataJson: JSON.stringify({ amendmentId: newAmendment.id, reason: body.reason, affectedProtocolSections: body.affectedProtocolSections })
+    });
+
+    // Block report-make while the amendment is pending approval
+    try {
+      await this.workflow.transition(projectId, 'report-make', { action: 'request_changes', reason: `Amendment ${newAmendment.number} pending approval` });
+    } catch (e: any) {
+      console.warn('[amendment] Could not block report-make:', e?.message);
+    }
+
+    return newAmendment;
+  }
+
+  @Patch('/:projectId/amendments/:amendmentId')
+  async updateAmendment(
+    @Param('projectId') projectId: string,
+    @Param('amendmentId') amendmentId: string,
+    @Body() body: {
+      action: 'approve-protocol-lead' | 'approve-vp' | 'reject' | 'finalize';
+      by?: string;
+    }
+  ) {
+    const project = await this.projects.get(projectId);
+    const protocol = project?.data?.protocol || {};
+    const amendments: any[] = protocol.amendments || [];
+
+    const amendment = amendments.find((a: any) => a.id === amendmentId);
+    if (!amendment) return { error: 'Amendment not found' };
+
+    if (!amendment.approvals) amendment.approvals = {};
+
+    if (body.action === 'approve-protocol-lead') {
+      amendment.approvals.protocolLead = { approved: true, by: body.by, at: new Date().toISOString() };
+    } else if (body.action === 'approve-vp') {
+      amendment.approvals.clinicalAffairsVP = { approved: true, by: body.by, at: new Date().toISOString() };
+    } else if (body.action === 'reject') {
+      amendment.status = 'rejected';
+    } else if (body.action === 'finalize') {
+      amendment.status = 'finalized';
+      await this.audit.create(projectId, {
+        type: 'amendment.finalized',
+        message: `Amendment ${amendment.number}: ${amendment.title} finalized`,
+        stepId: 'protocol-make',
+        actorUserId: body.by || 'system',
+        metadataJson: JSON.stringify({ amendmentId: amendment.id }),
+      });
+      await this.projects.update(projectId, {
+        data: { ...project.data, protocol: { ...protocol, amendments, sections: protocol.sections } }
+      });
+      return amendment;
+    }
+
+    // Check if fully approved
+    const protocolLeadApproved = !!amendment.approvals.protocolLead?.approved;
+    const vpApproved = !!amendment.approvals.clinicalAffairsVP?.approved;
+
+    if ((protocolLeadApproved || vpApproved) && amendment.status !== 'rejected') {
+      amendment.status = 'approved';
+
+      // Mark affected protocol sections as amended
+      const sections = protocol.sections || [];
+      sections.forEach((s: any) => {
+        if (amendment.affectedProtocolSections.includes(s.id)) {
+          s.amended = true;
+          s.amendmentId = amendmentId;
+          s.amendmentNumber = amendment.number;
+          s.approvalStatus = 'needs-review';
+        }
+      });
+
+      // Unblock report-make only if no other amendment is still pending
+      const stillPendingAmendments = amendments.filter((a: any) =>
+        a.id !== amendmentId && a.status === 'draft'
+      );
+      const shouldUnblock = stillPendingAmendments.length === 0;
+      if (shouldUnblock) {
+        try {
+          await this.workflow.transition(projectId, 'report-make', { action: 'approve' });
+        } catch (e: any) {
+          console.warn('[amendment] Could not unblock report-make:', e?.message);
+        }
+      }
+
+      await this.audit.create(projectId, {
+        type: 'amendment.approved',
+        message: `Amendment ${amendment.number}: ${amendment.title} fully approved`,
+        stepId: 'protocol-make',
+        actorUserId: body.by,
+        metadataJson: JSON.stringify({ amendmentId: amendment.id })
+      });
+    }
+
+    if (body.action === 'reject') {
+      // Unblock report-make on rejection too, only if no other amendment is still pending
+      const stillPendingAmendments = amendments.filter((a: any) =>
+        a.id !== amendmentId && a.status === 'draft'
+      );
+      const shouldUnblock = stillPendingAmendments.length === 0;
+      if (shouldUnblock) {
+        try {
+          await this.workflow.transition(projectId, 'report-make', { action: 'approve' });
+        } catch (e: any) {
+          console.warn('[amendment] Could not unblock report-make:', e?.message);
+        }
+      }
+
+      await this.audit.create(projectId, {
+        type: 'amendment.rejected',
+        message: `Amendment ${amendment.number}: ${amendment.title} rejected`,
+        stepId: 'protocol-make',
+        actorUserId: body.by,
+        metadataJson: JSON.stringify({ amendmentId: amendment.id })
+      });
+    }
+
+    await this.projects.update(projectId, {
+      data: {
+        ...project.data,
+        protocol: { ...protocol, amendments, sections: protocol.sections }
+      }
+    });
+
+    return amendment;
+  }
+
+  @Get('/:projectId/amendments')
+  async getAmendments(@Param('projectId') projectId: string) {
+    const project = await this.projects.get(projectId);
+    return project?.data?.protocol?.amendments || [];
+  }
+
+  private getAffectedReportSections(protocolSectionIds: string[]): string[] {
+    const map: Record<string, string[]> = {
+      'section-1': ['section-2', 'section-3'], // Protocol Overview → Introduction, Objectives
+      'section-2': ['section-2', 'section-3'], // Study Rationale → Introduction, Objectives
+      'section-3': ['section-2'],               // Device Description → Introduction
+      'section-4': ['section-4', 'section-6'], // Study Design → Clinical Investigation Design, Subject Disposition
+      'section-5': ['section-6'],               // Subject Eligibility → Subject Disposition
+      'section-6': ['section-4', 'section-7'], // Study Procedures → Clinical Design, Performance Results
+      'section-7': ['section-8', 'section-9'], // Safety Monitoring → Safety Analysis, Conclusions
+      'section-8': ['section-5', 'section-7'], // Statistical → Statistical Methods, Performance Results
+      'section-9': ['section-1'],               // Ethics → Executive Summary
+    };
+
+    const affected = new Set<string>();
+    protocolSectionIds.forEach(id => {
+      (map[id] || []).forEach(r => affected.add(r));
+    });
+    return Array.from(affected);
+  }
+
+  private getDynamicReportSections(
+    targetMarkets: string[],
+    scope: any,
+  ): Array<{ id: string; title: string; number: number }> {
+    const baseSections = [
+      { id: 'section-1', title: 'Executive Summary', number: 1 },
+      { id: 'section-2', title: 'Introduction and Background', number: 2 },
+      { id: 'section-3', title: 'Objectives and Endpoints', number: 3 },
+      { id: 'section-4', title: 'Clinical Investigation Design', number: 4 },
+      { id: 'section-5', title: 'Statistical Methods', number: 5 },
+      { id: 'section-6', title: 'Subject Disposition and Baseline', number: 6 },
+      { id: 'section-7', title: 'Clinical Performance Results', number: 7 },
+      { id: 'section-8', title: 'Safety Analysis', number: 8 },
+      { id: 'section-9', title: 'Conclusions and Benefit-Risk Assessment', number: 9 },
+    ];
+
+    const dynamicSections: Array<{ id: string; title: string }> = [];
+    if (targetMarkets.includes('EU')) {
+      dynamicSections.push({
+        id: 'section-eu-compliance',
+        title: 'Regulatory Compliance Statement (EU MDR 2017/745)',
+      });
+    }
+    if (targetMarkets.includes('FDA') || targetMarkets.includes('US')) {
+      dynamicSections.push({
+        id: 'section-us-ide',
+        title: 'Investigational Device Exemption (IDE) Compliance Summary',
+      });
+    }
+
+    const numbered = dynamicSections.map((s, i) => ({ ...s, number: 10 + i }));
+    const appendicesNumber = 10 + dynamicSections.length;
+
+    return [
+      ...baseSections,
+      ...numbered,
+      { id: 'section-appendices', title: 'Report Appendices', number: appendicesNumber },
+    ];
+  }
+
+  @Post('/:projectId/generate-report')
+  async generateReport(@Param('projectId') projectId: string) {
+    const project = await this.projects.get(projectId);
+    const projectData = project?.data?.projectData || {};
+    const roles = project?.data?.roles || [];
+    const scope = project?.data?.scope || {};
+    const protocolSections = project?.data?.protocol?.sections || [];
+    const existingReport = project?.data?.report || {};
+    const existingSections = existingReport.sections || {};
+
+    // Resolve targetMarkets from multiple sources
+    const inferredFromRequirements: string[] = (scope?.requirements || [])
+      .filter((r: any) => r.status === 'accepted')
+      .map((r: any) => {
+        if (r.title.includes('FDA') || r.title.includes('US')) return 'FDA';
+        if (r.title.includes('EU') || r.title.includes('MDR')) return 'EU';
+        return null;
+      })
+      .filter(Boolean);
+    const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
+    const targetMarkets: string[] =
+      scope?.targetMarkets ||
+      projectData?.targetMarkets ||
+      (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+
+    // Resolve device name from multiple sources
+    const deviceName: string =
+      projectData?.deviceName ||
+      scope?.deviceName ||
+      project?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim() ||
+      project?.name ||
+      '[Device Name]';
+
+    // Build enriched synopsis context from whichever fields are populated
+    const rawSynopsis = project?.data?.synopsis || {};
+    const synopsisTextParts = [
+      rawSynopsis.synopsisText || rawSynopsis.text || rawSynopsis.content || '',
+      rawSynopsis.studyTitle ? 'Study Title: ' + rawSynopsis.studyTitle : '',
+      rawSynopsis.studyType ? 'Study Type: ' + rawSynopsis.studyType : '',
+      rawSynopsis.primaryEndpoint ? 'Primary Endpoint: ' + rawSynopsis.primaryEndpoint : '',
+      rawSynopsis.readinessChecklist
+        ? rawSynopsis.readinessChecklist
+            .filter((i: any) => i.status === 'complete')
+            .map((i: any) => i.label + ': ' + (i.reason || ''))
+            .join('\n')
+            .slice(0, 1000)
+        : '',
+    ].filter(Boolean);
+    const enrichedSynopsis = {
+      ...rawSynopsis,
+      synopsisText: synopsisTextParts.join('\n'),
+    };
+
+    // Enrich scope with resolved values so AI service picks them up
+    const enrichedScope = { ...scope, targetMarkets, deviceName };
+
+    const sectionDefs = this.getDynamicReportSections(targetMarkets, scope);
+
+    const generatedContents: string[] = [];
+    for (const s of sectionDefs) {
+      const content = await this.ai.generateReportSection(
+        s.title, s.number, protocolSections, enrichedSynopsis, enrichedScope, projectData, roles, []
+      );
+      generatedContents.push(content);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    const newSections: Record<string, any> = {};
+    sectionDefs.forEach((s, i) => {
+      newSections[s.id] = { ...(existingSections[s.id] || {}), content: generatedContents[i].trim() };
+    });
+
+    await this.projects.update(projectId, {
+      data: {
+        ...project.data,
+        report: { ...existingReport, sections: newSections, sectionDefs },
+      },
+    });
+
+    await this.audit.create(projectId, {
+      type: 'report.ai.generated',
+      message: 'Clinical Investigation Report generated by AI',
+      stepId: 'report-make',
+      actorUserId: 'system',
+      metadataJson: JSON.stringify({
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
+        sectionsGenerated: sectionDefs.length,
+        targetMarkets,
+        deviceName,
+        generatedAt: new Date().toISOString(),
+      }),
+    });
+
+    return sectionDefs.map((s, i) => ({
+      id: s.id,
+      title: s.title,
+      number: s.number,
+      content: generatedContents[i].trim(),
+    }));
+  }
+
+  @Post('/:projectId/generate-report-section')
+  async generateReportSection(
+    @Param('projectId') projectId: string,
+    @Body() body: { sectionId: string; sectionTitle: string; sectionNumber: number },
+  ) {
+    const project = await this.projects.get(projectId);
+    const projectData = project?.data?.projectData || {};
+    const roles = project?.data?.roles || [];
+    const scope = project?.data?.scope || {};
+    const protocolSections = project?.data?.protocol?.sections || [];
+    const existingReport = project?.data?.report || {};
+    const existingSections = existingReport.sections || {};
+
+    // Same context resolution as generate-report
+    const inferredFromRequirements: string[] = (scope?.requirements || [])
+      .filter((r: any) => r.status === 'accepted')
+      .map((r: any) => {
+        if (r.title.includes('FDA') || r.title.includes('US')) return 'FDA';
+        if (r.title.includes('EU') || r.title.includes('MDR')) return 'EU';
+        return null;
+      })
+      .filter(Boolean);
+    const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
+    const targetMarkets: string[] =
+      scope?.targetMarkets ||
+      projectData?.targetMarkets ||
+      (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+
+    const deviceName: string =
+      projectData?.deviceName ||
+      scope?.deviceName ||
+      project?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim() ||
+      project?.name ||
+      '[Device Name]';
+
+    const rawSynopsis = project?.data?.synopsis || {};
+    const synopsisTextParts = [
+      rawSynopsis.synopsisText || rawSynopsis.text || rawSynopsis.content || '',
+      rawSynopsis.studyTitle ? 'Study Title: ' + rawSynopsis.studyTitle : '',
+      rawSynopsis.studyType ? 'Study Type: ' + rawSynopsis.studyType : '',
+      rawSynopsis.primaryEndpoint ? 'Primary Endpoint: ' + rawSynopsis.primaryEndpoint : '',
+      rawSynopsis.readinessChecklist
+        ? rawSynopsis.readinessChecklist
+            .filter((i: any) => i.status === 'complete')
+            .map((i: any) => i.label + ': ' + (i.reason || ''))
+            .join('\n')
+            .slice(0, 1000)
+        : '',
+    ].filter(Boolean);
+    const enrichedSynopsis = { ...rawSynopsis, synopsisText: synopsisTextParts.join('\n') };
+    const enrichedScope = { ...scope, targetMarkets, deviceName };
+
+    const content = await this.ai.generateReportSection(
+      body.sectionTitle,
+      body.sectionNumber,
+      protocolSections,
+      enrichedSynopsis,
+      enrichedScope,
+      projectData,
+      roles,
+      [],
+    );
+
+    const trimmedContent = content.trim();
+
+    await this.projects.update(projectId, {
+      data: {
+        ...project.data,
+        report: {
+          ...existingReport,
+          sections: {
+            ...existingSections,
+            [body.sectionId]: { ...(existingSections[body.sectionId] || {}), content: trimmedContent },
+          },
+        },
+      },
+    });
+
+    await this.audit.create(projectId, {
+      type: 'report.section.ai.generated',
+      message: `Report section "${body.sectionTitle}" generated by AI`,
+      stepId: 'report-make',
+      actorUserId: 'system',
+      metadataJson: JSON.stringify({
+        sectionId: body.sectionId,
+        sectionTitle: body.sectionTitle,
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
+        generatedAt: new Date().toISOString(),
+      }),
+    });
+
+    return { sectionId: body.sectionId, content: trimmedContent };
+  }
+
+  @Post('/:projectId/analyze-report-section')
+  async analyzeReportSection(
+    @Param('projectId') projectId: string,
+    @Body() body: { sectionTitle: string; sectionContent: string; appendicesList?: string[] },
+  ) {
+    const project = await this.projects.get(projectId);
+    const targetMarkets = project?.data?.projectData?.targetMarkets || project?.data?.scope?.targetMarkets || ['EU'];
+    const deviceCategory = project?.data?.scope?.deviceCategory || '';
+    const intendedUse = project?.data?.scope?.intendedUse || '';
+
+    const protocol = project?.data?.protocol || {};
+    const reportSections = project?.data?.report?.sections || {};
+    const amendments = protocol.amendments || [];
+
+    // Find approved amendments that affect this report section
+    const affectedAmendment = amendments.find((a: any) =>
+      a.status === 'approved' &&
+      (a.affectedReportSections || []).includes(
+        Object.keys(reportSections).find(id =>
+          reportSections[id]?.title === body.sectionTitle
+        ) || ''
+      )
+    ) || null;
+
+    const amendmentContext = affectedAmendment ? {
+      number: affectedAmendment.number,
+      title: affectedAmendment.title,
+      reason: affectedAmendment.reason,
+      description: affectedAmendment.description,
+    } : null;
+
+    const result = await this.ai.analyzeReportSection(body.sectionTitle, body.sectionContent, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext);
+    return result;
+  }
+
+  @Post('/:projectId/check-cross-consistency')
+  async checkCrossConsistency(
+    @Param('projectId') projectId: string,
+  ) {
+    const project = await this.projects.get(projectId);
+    const protocol = project?.data?.protocol || {};
+    const report = project?.data?.report || {};
+    const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
+    const deviceCategory = project?.data?.scope?.deviceCategory || '';
+
+    const protocolSections = (protocol.sections || []).map((s: any) => ({
+      title: s.title,
+      content: s.content || '',
+    })).filter((s: any) => s.content);
+
+    // Report sections are stored keyed by id (e.g. 'section-7') with no title field —
+    // map ids to the human-readable titles the AI service's section maps expect.
+    const sectionTitleMap: Record<string, string> = {
+      'section-1': 'Executive Summary',
+      'section-2': 'Introduction and Background',
+      'section-3': 'Objectives and Endpoints',
+      'section-4': 'Clinical Investigation Design',
+      'section-5': 'Statistical Methods',
+      'section-6': 'Subject Disposition and Baseline',
+      'section-7': 'Clinical Performance Results',
+      'section-8': 'Safety Analysis',
+      'section-9': 'Conclusions and Benefit-Risk Assessment',
+      'section-eu-compliance': 'Regulatory Compliance Statement (EU MDR 2017/745)',
+      'section-us-ide': 'Investigational Device Exemption (IDE) Compliance Summary',
+      'section-appendices': 'Report Appendices',
+    };
+
+    const reportSections = Object.entries(report.sections || {}).map(([id, data]: [string, any]) => ({
+      title: sectionTitleMap[id] || data.title || id,
+      content: data.content || '',
+    })).filter((s: any) => s.content);
+
+    return this.ai.checkCrossConsistency(protocolSections, reportSections, targetMarkets, deviceCategory);
+  }
+
+  @Post('/:projectId/check-synopsis-consistency')
+  async checkSynopsisConsistency(
+    @Param('projectId') projectId: string,
+  ) {
+    const project = await this.projects.get(projectId);
+    const protocol = project?.data?.protocol || {};
+    const synopsis = project?.data?.synopsis || {};
+
+    const synopsisText = synopsis.readiness || synopsis.text || synopsis.content ||
+      Object.values(synopsis).filter(v => typeof v === 'string').join('\n') || '';
+
+    const protocolSections = (protocol.sections || []).map((s: any) => ({
+      title: s.title,
+      content: s.content || '',
+    })).filter((s: any) => s.content);
+
+    return this.ai.checkSynopsisConsistency(synopsisText, protocolSections);
+  }
+
+  @Post('/:projectId/validate-statistics')
+  async validateStatistics(@Param('projectId') projectId: string) {
+    const project = await this.projects.get(projectId);
+    const reportSections = project?.data?.report?.sections || {};
+    const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
+
+    // Find relevant sections
+    const findSection = (keywords: string[]) => {
+      const entry = Object.entries(reportSections).find(([id, s]: [string, any]) =>
+        keywords.some(k => id.includes(k) || s.title?.toLowerCase().includes(k.toLowerCase()))
+      );
+      return entry ? (entry[1] as any).content || '' : '';
+    };
+
+    const statisticalContent = findSection(['section-5', 'statistical']);
+    const resultsContent = findSection(['section-7', 'performance', 'clinical-performance']);
+    const safetyContent = findSection(['section-8', 'safety']);
+
+    // Run deterministic checks on results sections
+    const resultsValidation = this.ai.validateStatisticalValues(resultsContent, 'Clinical Performance Results');
+    const safetyValidation = this.ai.validateStatisticalValues(safetyContent, 'Safety Analysis');
+
+    // Run AI cross-check
+    const aiCrossCheck = await this.ai.checkStatisticalConsistency(
+      statisticalContent,
+      resultsContent,
+      targetMarkets
+    );
+
+    return {
+      deterministicIssues: [
+        ...resultsValidation.issues.map(i => ({ ...i, section: 'Clinical Performance Results' })),
+        ...safetyValidation.issues.map(i => ({ ...i, section: 'Safety Analysis' })),
+      ],
+      aiCrossCheckIssues: aiCrossCheck.issues,
+    };
+  }
+
+  @Get('/:projectId/milestones')
+  async getMilestones(@Param('projectId') projectId: string) {
+    const project = await this.projects.get(projectId);
+    if (!project) throw new BadRequestException('Project not found');
+
+    const snapshot = await this.workflow.getSnapshot(projectId);
+    const workflowStates: Record<string, string> = {};
+    for (const [k, v] of Object.entries(snapshot.steps || {})) {
+      workflowStates[k] = (v as any).state;
+    }
+
+    return this.milestones.computeMilestones(project, workflowStates);
+  }
+}
+
+// ── Deterministic rule-based section checks ──────────────────────────────
+// These always run alongside AI analysis so specific regulatory-reference and
+// specificity gaps are caught even if the AI misses them.
+function getRuleBasedIssues(section: { id: string; title: string; content: string }, targetMarkets: string[], projectData: any): any[] {
+  const issues: any[] = [];
+  const content = section.content || '';
+  const sectionTitle = section.title || '';
+
+  // Rule 1: EU MDR reference missing
+  if (targetMarkets?.includes('EU') && !content.includes('MDR') && !content.includes('2017/745')) {
+    issues.push({ id: `rule-eu-${section.id}`, severity: 'warning', description: 'EU MDR 2017/745 not referenced in this section', reference: 'EU MDR 2017/745 Annex XV', raisedBy: 'Rule-based check', status: 'open', dueDate: '7 days' });
+  }
+
+  // Rule 2: FDA reference missing
+  if (targetMarkets?.includes('US') && !content.includes('21 CFR') && !content.includes('FDA')) {
+    issues.push({ id: `rule-fda-${section.id}`, severity: 'warning', description: 'FDA 21 CFR reference missing in this section', reference: 'FDA 21 CFR Part 812', raisedBy: 'Rule-based check', status: 'open', dueDate: '7 days' });
+  }
+
+  // Rule 3: ISO 14155 missing
+  if (!content.includes('ISO 14155') && !['Protocol Overview'].includes(sectionTitle)) {
+    issues.push({ id: `rule-iso-${section.id}`, severity: 'warning', description: 'ISO 14155:2020 not referenced in this section', reference: 'ISO 14155:2020', raisedBy: 'Rule-based check', status: 'open', dueDate: '7 days' });
+  }
+
+  // Rule 4: Statistical significance missing
+  if (sectionTitle.includes('Statistical') && !content.includes('0.05') && !content.includes('significance') && !content.includes('confidence interval')) {
+    issues.push({ id: `rule-stats-${section.id}`, severity: 'blocker', description: 'Statistical significance level or confidence interval not specified', reference: 'ISO 14155:2020 §7.4.4', raisedBy: 'Rule-based check', status: 'open', dueDate: '7 days' });
+  }
+
+  return issues;
+}
+
+// Each rule's id encodes its topic as `rule-<topic>-<sectionId>`; duplicate detection reuses
+// the same keywords the rule itself checks for, so a rule is suppressed only when an AI issue
+// already covers that exact regulatory gap.
+const RULE_TOPIC_KEYWORDS: Record<string, string[]> = {
+  eu: ['mdr', '2017/745'],
+  fda: ['fda', '21 cfr'],
+  iso: ['iso 14155'],
+  stats: ['significance', 'confidence interval', '0.05'],
+};
+
+function isDuplicateOfAiIssue(ruleIssue: any, aiIssues: any[]): boolean {
+  const topic = ruleIssue.id.match(/^rule-([a-z]+)-/)?.[1] || '';
+  const keywords = RULE_TOPIC_KEYWORDS[topic] || [];
+  return aiIssues.some((ai: any) => {
+    const text = `${ai.description || ''} ${ai.reference || ''}`.toLowerCase();
+    return keywords.some((k) => text.includes(k));
+  });
+}
+
+function mergeIssues(aiIssues: any[], ruleIssues: any[]): any[] {
+  const newRuleIssues = ruleIssues.filter((r) => !isDuplicateOfAiIssue(r, aiIssues));
+  return [...aiIssues, ...newRuleIssues];
 }

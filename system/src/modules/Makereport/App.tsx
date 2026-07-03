@@ -1,8 +1,7 @@
-import { RouterProvider } from 'react-router';
-import { router } from './routes';
+import { ReportWorkspace } from './pages/ReportWorkspace';
 
 function App() {
-  return <RouterProvider router={router} />;
+  return <ReportWorkspace />;
 }
 
 export default App;

@@ -1,271 +1,232 @@
 import { FileText } from 'lucide-react';
-import { useState } from 'react';
-import { SignatureModal } from './SignatureModal';
-import { Info, X, FileDown, Lock } from 'lucide-react';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
+import { transitionWorkflow } from '@/shared/services/workflowService';
+import { createProjectAuditEvent } from '@/shared/services/auditService';
+import { Info, X, FileDown, Lock, CheckCircle2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
 
-interface CIRSection {
-  number: string;
-  title: string;
-  content: string[];
-  subsections?: CIRSection[];
+// ─── Inline document styles (A4 paper layout preserved for print/PDF) ─────────
+
+const pageStyle: React.CSSProperties = {
+  background: '#fff',
+  width: '210mm',
+  minHeight: '297mm',
+  padding: '40px 60px',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+  display: 'flex',
+  flexDirection: 'column',
+  position: 'relative',
+  color: '#111827',
+  fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  fontSize: '11pt',
+  lineHeight: 1.7,
+};
+
+const h2Style: React.CSSProperties = {
+  color: '#111827',
+  fontSize: '16pt',
+  fontWeight: 600,
+  marginTop: '32px',
+  marginBottom: '20px',
+  letterSpacing: '-0.01em',
+};
+
+const paraStyle: React.CSSProperties = {
+  color: '#374151',
+  fontSize: '11pt',
+  lineHeight: 1.7,
+  marginBottom: '14px',
+  textAlign: 'left',
+};
+
+const pageNumStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: '20px',
+  right: '60px',
+  color: '#9ca3af',
+  fontSize: '10pt',
+  fontWeight: 400,
+};
+
+/** Format an ISO timestamp for human display */
+function fmtDate(iso: string) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
-const cirData: CIRSection[] = [
-  {
-    number: "1",
-    title: "Administrative Information",
-    content: [
-      "This Clinical Investigation Report summarizes the results of the clinical investigation conducted in accordance with the approved Clinical Investigation Protocol (CIP-2024-MED-0847).",
-      "The clinical investigation was sponsored by CardiaFlow Medical Technologies GmbH and conducted at investigational sites within the European Union. The study was performed in compliance with ISO 14155:2020, Regulation (EU) 2017/745 (EU MDR), and applicable national regulations.",
-      "Study start date: [Date]",
-      "Study end date: [Date]",
-      "Study status: Completed as planned."
-    ]
-  },
-  {
-    number: "2",
-    title: "Study Overview",
-    content: [
-      "The objective of this clinical investigation was to evaluate the safety and performance of the Implantable Cardiac Support Device in adult patients with chronic or advanced heart failure where conventional medical therapy was insufficient.",
-      "The study was designed as a prospective, multi-center clinical investigation conducted under Article 62 of the EU MDR. The investigation was performed according to the approved protocol and associated study documents.",
-      "This report presents the final analysis of safety and performance outcomes generated during the conduct of the clinical investigation."
-    ]
-  },
-  {
-    number: "3",
-    title: "Investigational Device Description",
-    content: [
-      "The Implantable Cardiac Support Device is a fully implantable medical device intended to provide long-term cardiovascular support in patients with chronic or advanced heart failure.",
-      "The device was used in accordance with its intended clinical use, the approved Clinical Investigation Protocol, and the Instructions for Use. No deviations related to device configuration or intended use were identified during the study."
-    ]
-  },
-  {
-    number: "4",
-    title: "Study Objectives and Endpoints",
-    content: [],
-    subsections: [
-      {
-        number: "4.1",
-        title: "Primary Objective",
-        content: [
-          "To demonstrate the safety and performance of the Implantable Cardiac Support Device in providing long-term cardiovascular support in patients with chronic or advanced heart failure."
-        ]
-      },
-      {
-        number: "4.2",
-        title: "Secondary Objectives",
-        content: [
-          "Secondary objectives included evaluation of procedural success, clinical outcomes, quality of life, device durability, and long-term reliability."
-        ]
-      },
-      {
-        number: "4.3",
-        title: "Primary Endpoint",
-        content: [
-          "The primary endpoint was the composite rate of all-cause mortality and major adverse cardiovascular events at 12 months post-implantation."
-        ]
-      },
-      {
-        number: "4.4",
-        title: "Secondary Endpoints",
-        content: [
-          "Secondary endpoints included functional status, hemodynamic improvement, quality of life outcomes, hospitalization rates, and device-related complications."
-        ]
-      }
-    ]
-  },
-  {
-    number: "5",
-    title: "Study Design and Conduct",
-    content: [
-      "The clinical investigation was conducted as a prospective, multi-center study at specialized investigational sites within the European Union.",
-      "Eligible subjects underwent screening, baseline assessment, device implantation, and structured follow-up visits as defined in the protocol. Independent core laboratories and a Data Safety Monitoring Board (DSMB) supported blinded data review and ongoing safety oversight.",
-      "The study was conducted in accordance with the approved protocol without substantial deviations affecting study integrity."
-    ]
-  },
-  {
-    number: "6",
-    title: "Subject Disposition and Accountability",
-    content: [
-      "A total of [N] subjects were screened for participation in the clinical investigation.",
-      "Screened: [N]",
-      "Enrolled: [N]",
-      "Implanted: [N]",
-      "Completed primary follow-up: [N]",
-      "Withdrawn or discontinued: [N]",
-      "Reasons for subject discontinuation included [e.g. adverse events, withdrawal of consent, loss to follow-up]."
-    ]
-  },
-  {
-    number: "7",
-    title: "Baseline Demographics and Clinical Characteristics",
-    content: [
-      "Baseline demographic and clinical characteristics were consistent with the intended target population for the Implantable Cardiac Support Device.",
-      "Subjects presented with advanced heart failure despite optimal medical therapy. Baseline characteristics including age, sex, NYHA classification, and left ventricular ejection fraction are summarized in Table [X]."
-    ]
-  },
-  {
-    number: "8",
-    title: "Study Procedures and Compliance",
-    content: [
-      "All study procedures were performed in accordance with the protocol and Good Clinical Practice principles.",
-      "Visit adherence was high across investigational sites. Assessments conducted outside predefined visit windows were documented and handled in accordance with the Statistical Analysis Plan.",
-      "Protocol deviations were documented, assessed for impact, and classified as minor or major. No deviations were identified that compromised subject safety or data integrity.",
-      "No major protocol deviations were identified that impacted subject safety or the scientific validity of the study results."
-    ]
-  },
-  {
-    number: "9",
-    title: "Safety Results",
-    content: [],
-    subsections: [
-      {
-        number: "9.1",
-        title: "Adverse Events",
-        content: [
-          "All adverse events were collected, documented, and evaluated throughout the clinical investigation.",
-          "A total of [N] adverse events were reported. Device-related and procedure-related adverse events were analyzed separately."
-        ]
-      },
-      {
-        number: "9.2",
-        title: "Serious Adverse Events",
-        content: [
-          "Serious adverse events were reported in accordance with ISO 14155 and EU MDR requirements. All serious adverse events were reviewed by the DSMB.",
-          "The DSMB concluded that no safety concerns were identified that warranted study suspension or termination."
-        ]
-      },
-      {
-        number: "9.3",
-        title: "Deaths",
-        content: [
-          "A total of 4 deaths occurred during the study period. Causes of death were adjudicated and assessed for relationship to device or procedure.",
-          "No unexpected safety signals were identified."
-        ]
-      }
-    ]
-  },
-  {
-    number: "10",
-    title: "Performance and Effectiveness Results",
-    content: [
-      "The Implantable Cardiac Support Device demonstrated performance consistent with the study objectives."
-    ],
-    subsections: [
-      {
-        number: "10.1",
-        title: "Primary Endpoint Results",
-        content: [
-          "The primary endpoint at 12 months post-implantation was achieved in [X]% of subjects."
-        ]
-      },
-      {
-        number: "10.2",
-        title: "Secondary Endpoint Results",
-        content: [
-          "Improvements were observed in functional status, hemodynamic parameters, and quality of life measures as assessed by validated instruments.",
-          "Detailed results are presented in Tables [X–Y]."
-        ]
-      }
-    ]
-  },
-  {
-    number: "11",
-    title: "Statistical Analysis Results",
-    content: [
-      "Statistical analyses were performed in accordance with the pre-specified Statistical Analysis Plan.",
-      "Primary and secondary endpoints were analyzed using appropriate statistical methods. Missing data and protocol deviations were handled as defined in the SAP.",
-      "The study achieved adequate statistical power to support interpretation of safety and performance outcomes."
-    ]
-  },
-  {
-    number: "12",
-    title: "Benefit–Risk Evaluation",
-    content: [
-      "The clinical investigation demonstrated that the Implantable Cardiac Support Device provides meaningful clinical benefit to patients with chronic or advanced heart failure.",
-      "Observed clinical benefits, including improved functional capacity and hemodynamic stability, were considered to outweigh the identified risks when the device was used as intended.",
-      "The overall benefit–risk profile of the device is considered favorable."
-    ]
-  },
-  {
-    number: "13",
-    title: "Discussion",
-    content: [
-      "The results of this clinical investigation support the safety and performance of the Implantable Cardiac Support Device in the intended patient population.",
-      "Findings were consistent with the study objectives and aligned with the anticipated clinical benefits described in the Clinical Investigation Protocol."
-    ]
-  },
-  {
-    number: "14",
-    title: "Study Limitations",
-    content: [
-      "Study limitations include sample size considerations, duration of follow-up, and the inherent limitations of a multi-center clinical investigation.",
-      "These limitations were considered when interpreting the study results."
-    ]
-  },
-  {
-    number: "15",
-    title: "Conclusions",
-    content: [
-      "Based on the results of this clinical investigation, the Implantable Cardiac Support Device demonstrated acceptable safety and performance in patients with chronic or advanced heart failure.",
-      "The clinical evidence generated supports conformity with applicable EU MDR requirements."
-    ]
-  },
-  {
-    number: "16",
-    title: "Compliance Statement",
-    content: [
-      "This clinical investigation was conducted in compliance with ISO 14155:2020, Regulation (EU) 2017/745 (EU MDR), the approved Clinical Investigation Protocol, and applicable ethical and regulatory requirements.",
-      "Ethics committees were informed of study completion in accordance with applicable national requirements."
-    ]
-  },
-  {
-    number: "17",
-    title: "References",
-    content: [
-      "[List as applicable]"
-    ]
-  },
-  {
-    number: "18",
-    title: "Appendices",
-    content: [
-      "Approved Clinical Investigation Protocol",
-      "Statistical Analysis Plan",
-      "Protocol Deviations Listing",
-      "Adverse Event Listings",
-      "DSMB Summaries",
-      "Ethics Committee Approvals"
-    ]
-  }
-];
+// Full signature record as stored in and returned from the backend
+type SignatureRecord = {
+  id: string;
+  projectId: string;
+  role: string;
+  signerName: string;
+  signerEmail: string;
+  signerUserId: string;
+  documentHash: string;
+  signedAt: string;
+  ipAddress: string;
+};
 
 export function ClinicalInvestigationReport() {
-  const [signatures, setSignatures] = useState<{
-    investigator?: { name: string; date: string; signature: string };
-    sponsor?: { name: string; date: string; signature: string };
-  }>({});
-  const [showSignatureModal, setShowSignatureModal] = useState(false);
-  const [signingAs, setSigningAs] = useState<'investigator' | 'sponsor' | null>(null);
-  const [showSidebar, setShowSidebar] = useState(true);
+  const { projectId } = useParams();
+  const apiBase = '';
 
-  const handleSign = (role: 'investigator' | 'sponsor') => {
-    setSigningAs(role);
-    setShowSignatureModal(true);
+  const [signatures, setSignatures] = useState<{
+    investigator?: SignatureRecord;
+    sponsor?: SignatureRecord;
+  }>({});
+
+  const [projectData, setProjectData] = useState<any>(null);
+  const [roles, setRoles] = useState<any[]>([]);
+  const [reportSections, setReportSections] = useState<any[]>([]);
+  const [documentHash, setDocumentHash] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [confirmingAs, setConfirmingAs] = useState<'investigator' | 'sponsor' | null>(null);
+  const [confirmChecked, setConfirmChecked] = useState(false);
+  const [confirmNameInput, setConfirmNameInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [showRequestChangesDialog, setShowRequestChangesDialog] = useState(false);
+  const [requestChangesComment, setRequestChangesComment] = useState('');
+  const [requestChangesSubmitting, setRequestChangesSubmitting] = useState(false);
+
+  // ── Fetch real project data and restore persisted signatures ──────────────
+  useEffect(() => {
+    if (!projectId) return;
+    Promise.all([
+      fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()),
+      fetch(apiBase + '/api/projects/' + projectId + '/report-sections').then(r => r.json()).catch(() => null),
+    ])
+      .then(([p, sectionMeta]) => {
+        setProjectData(p);
+        setRoles(p.data?.roles || []);
+
+        // Saved sections only store { state, content } — real titles come from
+        // the dynamic report-sections definition, keyed by section id.
+        const titleMap: Record<string, string> = {};
+        (sectionMeta?.sections || []).forEach((s: any) => { titleMap[s.id] = s.title; });
+
+        // Build report sections from saved data
+        const savedSections = p.data?.report?.sections || {};
+        const sectionList = Object.entries(savedSections).map(([id, data]: [string, any]) => ({
+          id,
+          title: titleMap[id] || data.title || id,
+          content: data.content || '',
+          state: data.state || 'draft',
+        })).filter(s => s.content);
+        setReportSections(sectionList);
+
+        // Restore persisted signatures
+        if (Array.isArray(p.data?.signatures)) {
+          const restored: { investigator?: SignatureRecord; sponsor?: SignatureRecord } = {};
+          for (const sig of p.data.signatures as SignatureRecord[]) {
+            if (sig.role === 'report-investigator') restored.investigator = sig;
+            if (sig.role === 'report-sponsor') restored.sponsor = sig;
+          }
+          if (Object.keys(restored).length > 0) setSignatures(restored);
+        }
+        setIsLoading(false);
+      })
+      .catch(() => setIsLoading(false));
+  }, [projectId]);
+
+  // ── Compute SHA-256 document integrity hash ────────────────────────────────
+  useEffect(() => {
+    if (!projectId || reportSections.length === 0) return;
+    const canonical = projectId + '|report|' + reportSections
+      .map(s => `${s.id}|${s.title}|${s.content}`)
+      .join('||');
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+      .then(buf => {
+        setDocumentHash(Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''));
+      });
+  }, [projectId, reportSections]);
+
+  // ── Real role names from project data ──────────────────────────────────────
+  const investigatorRole = roles.find((r: any) => r.title === 'Principal Investigator');
+  const investigatorName = investigatorRole?.assignedTo?.[0]?.name || 'Principal Investigator';
+  const sponsorRole = roles.find((r: any) => r.title === 'Clinical Affairs VP');
+  const sponsorName = sponsorRole?.assignedTo?.[0]?.name || 'Clinical Affairs VP';
+
+  const expectedName = confirmingAs === 'investigator' ? investigatorName : sponsorName;
+  const nameMatches = confirmNameInput.trim().toLowerCase() === expectedName.trim().toLowerCase();
+  const canSign = confirmChecked && nameMatches && !!documentHash && !saving;
+  const hashPreview = documentHash ? documentHash.slice(0, 16) + '...' : 'Computing...';
+
+  const handleSignClick = (role: 'investigator' | 'sponsor') => {
+    setConfirmChecked(false);
+    setConfirmNameInput('');
+    setConfirmingAs(role);
   };
 
-  const handleSignatureComplete = (signatureData: { name: string; date: string; signature: string }) => {
-    if (signingAs) {
-      setSignatures(prev => ({
-        ...prev,
-        [signingAs]: signatureData
-      }));
+  const handleConfirmSign = async () => {
+    if (!projectId || !documentHash || !confirmingAs) return;
+    const roleMap: Record<string, string> = {
+      investigator: 'Principal Investigator',
+      sponsor: 'Clinical Affairs VP',
+    };
+    const roleTitle = roleMap[confirmingAs];
+    const personRole = roles.find((r: any) => r.title === roleTitle);
+    const person = personRole?.assignedTo?.[0];
+    if (!person) return;
+    setSaving(true);
+    try {
+      const res = await fetch(apiBase + '/api/projects/' + projectId + '/signatures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role: confirmingAs === 'investigator' ? 'report-investigator' : 'report-sponsor',
+          signerName: person.name,
+          signerEmail: person.email || '',
+          signerUserId: person.name,
+          documentHash,
+        }),
+      });
+      const record = await res.json();
+      const updated = { ...signatures, [confirmingAs]: record };
+      setSignatures(updated);
+      setConfirmingAs(null);
+      setConfirmChecked(false);
+      setConfirmNameInput('');
+      if (updated.investigator && updated.sponsor) {
+        await transitionWorkflow({ projectId, stepId: 'report-pdf', to: 'signed' });
+      }
+    } catch (e) {
+      console.error('Signing failed', e);
+    } finally {
+      setSaving(false);
     }
-    setShowSignatureModal(false);
-    setSigningAs(null);
+  };
+
+  const handleRequestChanges = () => {
+    setShowRequestChangesDialog(true);
+  };
+
+  const handleSubmitRequestChanges = async () => {
+    if (!requestChangesComment.trim()) return;
+    setRequestChangesSubmitting(true);
+    try {
+      await createProjectAuditEvent({
+        projectId: projectId!,
+        domain: 'report',
+        stepId: 'report-pdf',
+        type: 'changes_requested',
+        summary: `Request Changes: ${requestChangesComment.trim()}`,
+      });
+      await transitionWorkflow({ projectId: projectId!, stepId: 'report-pdf', to: 'draft' });
+      window.location.href = window.location.pathname.split('/workflow/')[0] + '/workflow/report/review';
+    } catch (e) {
+      console.error('Request changes failed', e);
+    } finally {
+      setRequestChangesSubmitting(false);
+      setShowRequestChangesDialog(false);
+      setRequestChangesComment('');
+    }
   };
 
   const handleExportPDF = async () => {
@@ -374,824 +335,376 @@ export function ClinicalInvestigationReport() {
     }
   };
 
-  const isReportApproved = signatures.investigator && signatures.sponsor;
-  const approvalDate = isReportApproved 
-    ? signatures.sponsor.date 
-    : null;
+  const isReportApproved = !!(signatures.investigator && signatures.sponsor);
+  const approvalDate = isReportApproved ? fmtDate(signatures.sponsor!.signedAt) : null;
 
-  const renderSection = (section: CIRSection) => {
-    return (
-      <div key={section.number} className="protocol-section">
-        <h2>{section.number}. {section.title}</h2>
-        {section.content.map((paragraph, idx) => (
-          <p key={idx} className="protocol-text">{paragraph}</p>
-        ))}
-        
-        {/* Add tables and charts for specific sections */}
-        {section.number === "6" && (
-          <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-            <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: '#1a1a1a' }}>
-              Table 1. Subject Disposition and Accountability
-            </p>
-            <table style={{ 
-              width: '100%', 
-              borderCollapse: 'collapse',
-              border: '1px solid #e5e7eb',
-              fontSize: '13px'
-            }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f9fafb' }}>
-                  <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Category</th>
-                  <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>N</th>
-                  <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>%</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Screened</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>156</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>100.0</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Enrolled</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>142</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>91.0</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Device Implanted</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>138</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>88.5</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Completed 12-month Follow-up</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>132</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>84.6</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Withdrawn / Discontinued</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>6</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>3.8</td>
-                </tr>
-                <tr style={{ backgroundColor: '#f9fafb' }}>
-                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>Deaths</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600 }}>4</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600 }}>2.6</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
+  // ── Reusable: static signature block inside the document ───────────────────
+  const DocSignatureBlock = ({
+    heading, name, roleTitle, sig,
+  }: {
+    heading: string;
+    name: string;
+    roleTitle: string;
+    sig?: SignatureRecord;
+  }) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ color: '#6b7280', fontSize: '10.5pt', marginBottom: '2px' }}>{heading}</div>
 
-        {section.number === "7" && (
-          <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-            <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: '#1a1a1a' }}>
-              Table 2. Baseline Demographics and Clinical Characteristics (N=138)
-            </p>
-            <table style={{ 
-              width: '100%', 
-              borderCollapse: 'collapse',
-              border: '1px solid #e5e7eb',
-              fontSize: '13px'
-            }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f9fafb' }}>
-                  <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Characteristic</th>
-                  <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Age, years (mean ± SD)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>62.4 ± 8.7</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Male, n (%)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>98 (71.0%)</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>BMI, kg/m² (mean ± SD)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>27.2 ± 4.1</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6', fontWeight: 500 }}>NYHA Class, n (%)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}></td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', paddingLeft: '24px', borderBottom: '1px solid #f3f4f6' }}>Class II</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>12 (8.7%)</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', paddingLeft: '24px', borderBottom: '1px solid #f3f4f6' }}>Class III</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>96 (69.6%)</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', paddingLeft: '24px', borderBottom: '1px solid #f3f4f6' }}>Class IV</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>30 (21.7%)</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>LVEF, % (mean ± SD)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>28.6 ± 6.4</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Ischemic cardiomyopathy, n (%)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>82 (59.4%)</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '10px 12px' }}>Prior cardiac surgery, n (%)</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right' }}>45 (32.6%)</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {section.subsections && section.subsections.map(subsection => (
-          <div key={subsection.number} className="subsection">
-            <h3>{subsection.number} {subsection.title}</h3>
-            {subsection.content.map((paragraph, idx) => (
-              <p key={idx} className="protocol-text">{paragraph}</p>
-            ))}
-            
-            {/* Add Adverse Events Table */}
-            {subsection.number === "9.1" && (
-              <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-                <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: '#1a1a1a' }}>
-                  Table 3. Summary of Adverse Events
-                </p>
-                <table style={{ 
-                  width: '100%', 
-                  borderCollapse: 'collapse',
-                  border: '1px solid #e5e7eb',
-                  fontSize: '13px'
-                }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#f9fafb' }}>
-                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Event Category</th>
-                      <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Events (n)</th>
-                      <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Subjects (%)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>All Adverse Events</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>347</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>118 (85.5%)</td>
-                    </tr>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Device-Related AE</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>42</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>38 (27.5%)</td>
-                    </tr>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Procedure-Related AE</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>28</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>26 (18.8%)</td>
-                    </tr>
-                    <tr style={{ backgroundColor: '#f3f4f6' }}>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>Serious Adverse Events</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>36</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>32 (23.2%)</td>
-                    </tr>
-                    <tr style={{ backgroundColor: '#f3f4f6' }}>
-                      <td style={{ padding: '10px 12px' }}>Device-Related SAE</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>8</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>8 (5.8%)</td>
-                    </tr>
-                  </tbody>
-                </table>
-                
-                {/* Bar Chart for AE Distribution */}
-                <div style={{ marginTop: '32px' }}>
-                  <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', color: '#1a1a1a' }}>
-                    Figure 1. Distribution of Adverse Events by System Organ Class
-                  </p>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={[
-                      { category: 'Cardiac', events: 89 },
-                      { category: 'Infections', events: 54 },
-                      { category: 'Vascular', events: 42 },
-                      { category: 'Respiratory', events: 38 },
-                      { category: 'Renal', events: 31 },
-                      { category: 'GI', events: 28 },
-                      { category: 'Other', events: 65 }
-                    ]} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="category" tick={{ fontSize: 12 }} />
-                      <YAxis tick={{ fontSize: 12 }} label={{ value: 'Number of Events', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} />
-                      <Tooltip />
-                      <Bar dataKey="events" fill="#6b7280" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            )}
-
-            {/* Add Primary Endpoint Chart */}
-            {subsection.number === "10.1" && (
-              <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-                <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', color: '#1a1a1a' }}>
-                  Figure 2. Kaplan-Meier Curve: Freedom from Primary Endpoint (Death or MACE)
-                </p>
-                <ResponsiveContainer width="100%" height={350}>
-                  <LineChart data={[
-                    { month: 0, survival: 100 },
-                    { month: 1, survival: 98.5 },
-                    { month: 2, survival: 97.1 },
-                    { month: 3, survival: 95.6 },
-                    { month: 6, survival: 92.8 },
-                    { month: 9, survival: 90.2 },
-                    { month: 12, survival: 87.7 }
-                  ]} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis 
-                      dataKey="month" 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Months Post-Implantation', position: 'insideBottom', offset: -5, style: { fontSize: 12 } }}
-                    />
-                    <YAxis 
-                      tick={{ fontSize: 12 }}
-                      domain={[80, 100]}
-                      label={{ value: 'Event-Free Survival (%)', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }}
-                    />
-                    <Tooltip />
-                    <Legend wrapperStyle={{ fontSize: '12px' }} />
-                    <Line 
-                      type="stepAfter" 
-                      dataKey="survival" 
-                      stroke="#374151" 
-                      strokeWidth={2.5}
-                      dot={{ fill: '#374151', r: 4 }}
-                      name="Freedom from Death/MACE"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-                
-                <p style={{ fontSize: '13px', color: '#64748b', marginTop: '12px', fontStyle: 'italic' }}>
-                  Primary endpoint (composite of all-cause mortality and major adverse cardiovascular events) at 12 months: 87.7% event-free survival (95% CI: 82.1–93.3%)
-                </p>
-              </div>
-            )}
-
-            {/* Add Secondary Endpoints Table */}
-            {subsection.number === "10.2" && (
-              <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-                <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: '#1a1a1a' }}>
-                  Table 4. Secondary Endpoint Results at 12 Months
-                </p>
-                <table style={{ 
-                  width: '100%', 
-                  borderCollapse: 'collapse',
-                  border: '1px solid #e5e7eb',
-                  fontSize: '13px'
-                }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#f9fafb' }}>
-                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Endpoint</th>
-                      <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Baseline</th>
-                      <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>12 Months</th>
-                      <th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>p-value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>6-Minute Walk Distance (m)</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>248 ± 67</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>362 ± 84</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>&lt;0.001</td>
-                    </tr>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>LVEF (%)</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>28.6 ± 6.4</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>38.2 ± 7.1</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>&lt;0.001</td>
-                    </tr>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>NT-proBNP (pg/mL)</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>4,280 ± 2,145</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>1,840 ± 986</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>&lt;0.001</td>
-                    </tr>
-                    <tr>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>KCCQ Overall Score</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>42.3 ± 12.8</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>68.7 ± 15.2</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', borderBottom: '1px solid #f3f4f6' }}>&lt;0.001</td>
-                    </tr>
-                    <tr>
-                      <td style={{ padding: '10px 12px' }}>HF Hospitalizations (per patient-year)</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>2.8 ± 1.4</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>0.6 ± 0.8</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>&lt;0.001</td>
-                    </tr>
-                  </tbody>
-                </table>
-                
-                {/* Bar Chart for Functional Improvement */}
-                <div style={{ marginTop: '32px' }}>
-                  <p style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', color: '#1a1a1a' }}>
-                    Figure 3. NYHA Functional Class Distribution: Baseline vs. 12 Months
-                  </p>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={[
-                      { class: 'NYHA I', baseline: 0, month12: 18 },
-                      { class: 'NYHA II', baseline: 12, month12: 76 },
-                      { class: 'NYHA III', baseline: 96, month12: 34 },
-                      { class: 'NYHA IV', baseline: 30, month12: 4 }
-                    ]} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="class" tick={{ fontSize: 12 }} />
-                      <YAxis tick={{ fontSize: 12 }} label={{ value: 'Number of Subjects', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} />
-                      <Tooltip />
-                      <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      <Bar dataKey="baseline" fill="#9ca3af" name="Baseline" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="month12" fill="#4b5563" name="12 Months" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  return (
-    <div>
-      {/* Top Navigation Menu */}
-      <nav style={{
-        backgroundColor: '#fff',
-        borderBottom: '1px solid #e5e7eb',
-        padding: '0 48px',
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 100,
+      {/* Signature line */}
+      <div style={{
+        borderBottom: `1px solid ${sig ? '#374151' : '#d1d5db'}`,
+        minHeight: '36px',
+        marginBottom: '4px',
         display: 'flex',
-        justifyContent: 'center'
+        alignItems: 'flex-end',
+        paddingBottom: '4px',
       }}>
-        <div style={{
-          display: 'flex',
-          gap: '32px',
-          alignItems: 'center',
-          height: '56px'
-        }}>
-          <a href="#" style={{ fontSize: '14px', color: '#94a3b8', textDecoration: 'none', fontWeight: 400 }}>
-            Project setup
-          </a>
-          <a href="#" style={{ fontSize: '14px', color: '#94a3b8', textDecoration: 'none', fontWeight: 400 }}>
-            Protocol authoring
-          </a>
-          <a href="#" style={{ fontSize: '14px', color: '#94a3b8', textDecoration: 'none', fontWeight: 400 }}>
-            Protocol review
-          </a>
-          <a href="#" style={{ fontSize: '14px', color: '#94a3b8', textDecoration: 'none', fontWeight: 400 }}>
-            Protocol approval
-          </a>
-          <a href="#" style={{ fontSize: '14px', color: '#94a3b8', textDecoration: 'none', fontWeight: 400 }}>
-            Report authoring
-          </a>
-          <a href="#" style={{ fontSize: '14px', color: '#94a3b8', textDecoration: 'none', fontWeight: 400 }}>
-            Report review
-          </a>
-          <a href="#" style={{ fontSize: '18.2px', color: '#0f172a', textDecoration: 'none', fontWeight: 600 }}>
-            Report approval
-          </a>
-        </div>
-      </nav>
-
-      <div className="app-container" style={{ marginTop: '56px' }}>
-        {/* Sidebar - Help Panel */}
-        {showSidebar && (
-          <aside className="help-sidebar" style={{ top: '56px', height: 'calc(100vh - 56px)' }}>
-            <div className="sidebar-header">
-              <Info size={20} />
-              <h3>Final Clinical Investigation Report for Regulatory Submission</h3>
-            </div>
-            
-            <div className="sidebar-content">
-              <p className="sidebar-intro">
-                This is the final, print-ready version of the Clinical Investigation Report (CIR). 
-                Following review and e-signature by the Coordinating Investigator and Sponsor Representative, 
-                export this document as a PDF for submission to:
-              </p>
-              
-              <div className="sidebar-list">
-                <div className="sidebar-item">
-                  <strong>Competent Authorities</strong>
-                  <span>(e.g., national regulatory agencies) as part of EU MDR post-investigation reporting</span>
-                </div>
-                
-                <div className="sidebar-item">
-                  <strong>Notified Bodies</strong>
-                  <span>for inclusion in the Technical Documentation and Clinical Evaluation</span>
-                </div>
-                
-                <div className="sidebar-item">
-                  <strong>Ethics Committees / IRBs</strong>
-                  <span>as required for study closure and final reporting</span>
-                </div>
-                
-                <div className="sidebar-item">
-                  <strong>Sponsor Records and Trial Master File (TMF)</strong>
-                  <span>as the official record of study results</span>
-                </div>
-                
-                <div className="sidebar-item">
-                  <strong>Investigational Sites</strong>
-                  <span>for inclusion in the Investigator Site File (ISF)</span>
-                </div>
-              </div>
-              
-              <p className="sidebar-note">
-                Ensure that all analyses are finalized, all sections are complete, and both required signatures are applied before final export.
-              </p>
-            </div>
-          </aside>
-        )}
-
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          {/* Header Above Document */}
-          <div style={{ 
-            backgroundColor: '#e5e7eb',
-            padding: '48px',
-            display: 'flex',
-            justifyContent: 'center'
-          }}>
-            <div style={{
-              border: '1px solid #d1d5db',
-              borderRadius: '0',
-              padding: '32px 48px',
-              backgroundColor: '#ffffff',
-              textAlign: 'center',
-              maxWidth: '800px',
-              width: '100%'
-            }}>
-              <h1 style={{ 
-                fontSize: '20pt', 
-                fontWeight: 600, 
-                color: '#1f2937', 
-                margin: '0 0 8px 0',
-                letterSpacing: '-0.01em',
-                lineHeight: 1.3
-              }}>
-                Final Report Document for Regulatory Submission
-              </h1>
-              <p style={{ 
-                fontSize: '12pt', 
-                color: '#6b7280', 
-                margin: 0,
-                fontWeight: 400,
-                lineHeight: 1.5
-              }}>
-                Final, read-only report document prepared for regulatory submission
-              </p>
-            </div>
-          </div>
-
-          <div className="document-area" style={{ marginTop: 0 }}>
-            <div className="protocol-document">
-              {/* Title Page */}
-              <div className="protocol-page">
-                <div className="title-page">
-                  <h1 className="document-title">
-                    Clinical Investigation Report for the Implantable Cardiac Support Device
-                  </h1>
-
-                  <div className="title-metadata">
-                    <p><strong>Study Title:</strong> Clinical Investigation Report for the Implantable Cardiac Support Device</p>
-                    <p><strong>Short Title:</strong> CARDIA-SUPPORT-2026</p>
-                    <p><strong>Protocol ID:</strong> CIP-2024-MED-0847</p>
-                    <p><strong>Protocol Version:</strong> Version 1.3</p>
-                    <p><strong>Report Version:</strong> Version 1.0</p>
-                    <p><strong>Report Date:</strong> [DD Month YYYY]</p>
-                    <p><strong>Sponsor:</strong> CardiaFlow Medical Technologies GmbH<br />Technologiepark 15, 80992 München, Germany</p>
-                    <p><strong>Coordinating Investigator:</strong> Dr. Helena Schmit<br />University Heart Center Hamburg</p>
-                  </div>
-                </div>
-
-                <div className="page-number">Page 1</div>
-              </div>
-
-              {/* Content Pages */}
-              <div className="protocol-page">
-                {cirData.slice(0, 3).map(section => renderSection(section))}
-                <div className="page-number">Page 2</div>
-              </div>
-
-              <div className="protocol-page">
-                {cirData.slice(3, 5).map(section => renderSection(section))}
-                <div className="page-number">Page 3</div>
-              </div>
-
-              <div className="protocol-page">
-                {cirData.slice(5, 8).map(section => renderSection(section))}
-                <div className="page-number">Page 4</div>
-              </div>
-
-              <div className="protocol-page">
-                {cirData.slice(8, 10).map(section => renderSection(section))}
-                <div className="page-number">Page 5</div>
-              </div>
-
-              <div className="protocol-page">
-                {cirData.slice(10, 14).map(section => renderSection(section))}
-                <div className="page-number">Page 6</div>
-              </div>
-
-              <div className="protocol-page">
-                {cirData.slice(14, 18).map(section => renderSection(section))}
-
-                {/* Report Approval Status */}
-                {isReportApproved && (
-                  <div className="protocol-status-header" style={{ marginTop: '48px' }}>
-                    <div className="status-primary">✓ Report Approved and Signed</div>
-                    <div className="status-secondary">
-                      This Clinical Investigation Report has been reviewed and electronically signed by all required parties
-                    </div>
-                    <div className="approval-metadata">
-                      <span>Approval Date: {approvalDate}</span>
-                      <span>Report Version: 1.0</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Signature Section */}
-                <div className="signature-block">
-                  <h2 style={{ marginBottom: '32px' }}>Report Approval Signatures</h2>
-                  
-                  <div style={{ display: 'flex', gap: '32px', marginBottom: '48px' }}>
-                    {/* Coordinating Investigator Signature */}
-                    <div style={{ flex: 1 }}>
-                      <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '8px' }}>
-                        Coordinating Principal Investigator
-                      </p>
-                      <p style={{ fontSize: '15px', fontWeight: 500, color: '#1a1a1a', marginBottom: '16px' }}>
-                        Dr. Helena Schmit<br />
-                        <span style={{ fontSize: '13px', fontWeight: 400, color: '#64748b' }}>University Heart Center Hamburg</span>
-                      </p>
-                      
-                      {signatures.investigator ? (
-                        <div>
-                          <div style={{
-                            border: '1px solid #e5e7eb',
-                            borderRadius: '8px',
-                            padding: '16px',
-                            backgroundColor: '#f9fafb',
-                            marginBottom: '8px'
-                          }}>
-                            <img 
-                              src={signatures.investigator.signature} 
-                              alt="Investigator Signature" 
-                              style={{ width: '100%', maxWidth: '200px', height: 'auto' }}
-                            />
-                          </div>
-                          <p style={{ fontSize: '13px', color: '#16a34a', fontWeight: 500, margin: 0 }}>
-                            ✓ Signed by {signatures.investigator.name} on {signatures.investigator.date}
-                          </p>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={() => handleSign('investigator')}
-                          style={{
-                            padding: '10px 20px',
-                            backgroundColor: '#fff',
-                            border: '1px solid #d1d5db',
-                            borderRadius: '6px',
-                            fontSize: '14px',
-                            fontWeight: 400,
-                            color: '#1a1a1a',
-                            cursor: 'pointer',
-                            width: '100%',
-                            textAlign: 'center'
-                          }}
-                        >
-                          Click to Sign
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Sponsor Representative Signature */}
-                    <div style={{ flex: 1 }}>
-                      <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '8px' }}>
-                        Sponsor Representative
-                      </p>
-                      <p style={{ fontSize: '15px', fontWeight: 500, color: '#1a1a1a', marginBottom: '16px' }}>
-                        CardiaFlow Medical Technologies GmbH<br />
-                        <span style={{ fontSize: '13px', fontWeight: 400, color: '#64748b' }}>Clinical Affairs Director</span>
-                      </p>
-                      
-                      {signatures.sponsor ? (
-                        <div>
-                          <div style={{
-                            border: '1px solid #e5e7eb',
-                            borderRadius: '8px',
-                            padding: '16px',
-                            backgroundColor: '#f9fafb',
-                            marginBottom: '8px'
-                          }}>
-                            <img 
-                              src={signatures.sponsor.signature} 
-                              alt="Sponsor Signature" 
-                              style={{ width: '100%', maxWidth: '200px', height: 'auto' }}
-                            />
-                          </div>
-                          <p style={{ fontSize: '13px', color: '#16a34a', fontWeight: 500, margin: 0 }}>
-                            ✓ Signed by {signatures.sponsor.name} on {signatures.sponsor.date}
-                          </p>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={() => handleSign('sponsor')}
-                          style={{
-                            padding: '10px 20px',
-                            backgroundColor: '#fff',
-                            border: '1px solid #d1d5db',
-                            borderRadius: '6px',
-                            fontSize: '14px',
-                            fontWeight: 400,
-                            color: '#1a1a1a',
-                            cursor: 'pointer',
-                            width: '100%',
-                            textAlign: 'center'
-                          }}
-                        >
-                          Click to Sign
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="page-number">Page 7</div>
-              </div>
-
-              {/* Footer Line */}
-              <div className="document-footer-line">
-                Clinical Investigation Report | CIP-2024-MED-0847 | Report Version 1.0 | 22 February 2026 | CardiaFlow Medical Technologies GmbH | Confidential
-              </div>
-
-              {/* Report Finalization Panel */}
-              <div style={{ 
-                padding: '48px', 
-                backgroundColor: '#fff', 
-                borderTop: '1px solid #e5e7eb',
-                marginTop: '48px'
-              }}>
-                <h2 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '24px', color: '#1a1a1a' }}>
-                  Report Finalization
-                </h2>
-
-                {/* Info Banner */}
-                <div style={{
-                  padding: '20px 24px',
-                  backgroundColor: '#f8f9fa',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  marginBottom: '32px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
-                }}>
-                  <p style={{ color: '#475569', fontSize: '14px', margin: 0 }}>
-                    Discovered an error? You can still make changes before finalizing.
-                  </p>
-                  <button style={{
-                    padding: '8px 16px',
-                    backgroundColor: '#fff',
-                    border: '1px solid #cbd5e1',
-                    borderRadius: '6px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#475569',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}>
-                    <Info size={16} />
-                    Request Changes
-                  </button>
-                </div>
-
-                {/* Signature Status */}
-                <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '16px', color: '#1a1a1a' }}>
-                  Signature Status
-                </h3>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '32px' }}>
-                  {/* Coordinating Principal Investigator */}
-                  <div style={{
-                    padding: '20px 24px',
-                    backgroundColor: signatures.investigator ? '#fff' : '#f9fafb',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <div>
-                      <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 4px 0' }}>
-                        Coordinating Principal Investigator
-                      </p>
-                      <p style={{ fontSize: '15px', fontWeight: 500, color: '#1a1a1a', margin: 0 }}>
-                        {signatures.investigator ? signatures.investigator.name : 'Dr. Helena Schmit'}
-                      </p>
-                    </div>
-                    <div style={{
-                      padding: '6px 16px',
-                      backgroundColor: signatures.investigator ? '#dbeafe' : '#f3f4f6',
-                      borderRadius: '6px',
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      color: signatures.investigator ? '#1e40af' : '#6b7280'
-                    }}>
-                      {signatures.investigator ? 'Signed' : 'Pending'}
-                    </div>
-                  </div>
-
-                  {/* Sponsor Representative */}
-                  <div style={{
-                    padding: '20px 24px',
-                    backgroundColor: signatures.sponsor ? '#fff' : '#f9fafb',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <div>
-                      <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 4px 0' }}>
-                        Sponsor Representative
-                      </p>
-                      <p style={{ fontSize: '15px', fontWeight: 500, color: '#1a1a1a', margin: 0 }}>
-                        {signatures.sponsor ? signatures.sponsor.name : 'Dr. Sarah Chen'}
-                      </p>
-                    </div>
-                    <div style={{
-                      padding: '6px 16px',
-                      backgroundColor: signatures.sponsor ? '#dbeafe' : '#f3f4f6',
-                      borderRadius: '6px',
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      color: signatures.sponsor ? '#1e40af' : '#6b7280'
-                    }}>
-                      {signatures.sponsor ? 'Signed' : 'Pending'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', justifyContent: 'flex-end' }}>
-                  <button 
-                    onClick={isReportApproved ? handleExportPDF : undefined}
-                    style={{
-                      padding: '12px 20px',
-                      backgroundColor: '#fff',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      fontWeight: 600,
-                      color: isReportApproved ? '#000000' : '#4b5563',
-                      cursor: isReportApproved ? 'pointer' : 'not-allowed',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      justifyContent: 'center'
-                    }}
-                    disabled={!isReportApproved}
-                  >
-                    <Lock size={16} />
-                    Export Locked PDF
-                  </button>
-                </div>
-
-                <p style={{ 
-                  fontSize: '13px', 
-                  color: '#64748b', 
-                  textAlign: 'right',
-                  margin: 0
-                }}>
-                  Report generation is available only after report approval and signature completion.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Signature Modal */}
-        {showSignatureModal && signingAs && (
-          <SignatureModal
-            role={signingAs === 'investigator' ? 'Coordinating Investigator' : 'Sponsor Representative'}
-            onComplete={handleSignatureComplete}
-            onCancel={() => {
-              setShowSignatureModal(false);
-              setSigningAs(null);
-            }}
-          />
+        {sig ? (
+          <span style={{ color: '#111827', fontSize: '11pt', fontStyle: 'italic', letterSpacing: '0.02em' }}>
+            ✓ {sig.signerName}
+          </span>
+        ) : (
+          <span style={{ color: '#d1d5db', fontSize: '10pt' }}>[Signature]</span>
         )}
       </div>
+
+      <div style={{ color: '#111827', fontSize: '11pt', fontWeight: 600 }}>{name}</div>
+      <div style={{ color: '#6b7280', fontSize: '10pt', fontStyle: 'italic' }}>{roleTitle}</div>
+
+      <div style={{ color: sig ? '#374151' : '#9ca3af', fontSize: '10.5pt', marginTop: '4px' }}>
+        <span style={{ color: '#6b7280', fontWeight: 500 }}>Date: </span>
+        {sig ? fmtDate(sig.signedAt) : '_______________________'}
+      </div>
+
+      {/* Document hash for integrity verification */}
+      {sig && (
+        <div style={{ color: '#9ca3af', fontSize: '8.5pt', marginTop: '4px', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+          SHA-256: {sig.documentHash.slice(0, 16)}…
+        </div>
+      )}
+    </div>
+  );
+
+  const sponsorDisplayName = projectData?.data?.projectData?.sponsor
+    || projectData?.data?.roles?.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name
+    || '[Sponsor]';
+  const deviceDisplayName = projectData?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim() || '[Device Name]';
+  const targetMarketsDisplay = (projectData?.data?.projectData?.targetMarkets || []).join(', ') || 'EU';
+  const protocolIdDisplay = projectData?.data?.protocol?.protocolId || '[Protocol ID]';
+  const studyTitleDisplay = projectData?.name || 'Clinical Investigation Report';
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+      <WorkflowProgressIndicator currentStep="report-approval" />
+
+      <div style={{ background: '#e5e7eb', flex: 1, overflowY: 'auto', padding: '40px 20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
+
+          {/* ── Header ──────────────────────────────────────────────────── */}
+          <div style={{ width: '210mm', marginBottom: '32px' }}>
+            <div style={{ background: '#fafafa', borderBottom: '1px solid #e5e7eb', padding: '32px 60px' }}>
+              <h1 style={{ color: '#1f2937', fontSize: '20pt', fontWeight: 600, margin: '0 0 8px', letterSpacing: '-0.01em', lineHeight: 1.3 }}>
+                {isReportApproved ? 'Approved Clinical Investigation Report' : 'Clinical Investigation Report'}
+              </h1>
+              <p style={{ color: '#6b7280', fontSize: '12pt', margin: 0, lineHeight: 1.5 }}>
+                {isReportApproved
+                  ? 'Final, read-only report document prepared for regulatory submission'
+                  : 'Review and e-sign to finalize for regulatory submission'}
+              </p>
+              {isLoading && <p style={{ color: '#9ca3af', fontSize: '11pt', marginTop: '8px' }}>Loading project data…</p>}
+            </div>
+          </div>
+
+          {/* ── Document pages ──────────────────────────────────────────── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '210mm', margin: '0 auto' }}>
+
+            {/* PAGE 1: Title Page */}
+            <div className="protocol-page" style={pageStyle}>
+              {isReportApproved && (
+                <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: '6px', padding: '12px 16px', marginBottom: '24px' }}>
+                  <div style={{ color: '#1e40af', fontWeight: 600, fontSize: '11pt' }}>Approved Clinical Investigation Report</div>
+                  <div style={{ color: '#3b82f6', fontSize: '10pt' }}>Read-only snapshot generated after final sign-off</div>
+                  <div style={{ color: '#6b7280', fontSize: '10pt', marginTop: '4px' }}>
+                    {protocolIdDisplay} · Report Version 1.0 · Approved: {approvalDate}
+                  </div>
+                </div>
+              )}
+              <section style={{ paddingTop: '80px', textAlign: 'left' }}>
+                <h1 style={{ color: '#111827', fontSize: '22pt', fontWeight: 600, marginBottom: '48px', letterSpacing: '-0.02em', lineHeight: 1.3 }}>
+                  {studyTitleDisplay}
+                </h1>
+                <div style={{ borderTop: '1px solid #e5e7eb', marginTop: '48px', paddingTop: '32px' }}>
+                  {[
+                    { label: 'Study Title', value: studyTitleDisplay },
+                    { label: 'Short Title', value: projectData?.id || '[Short Title]' },
+                    { label: 'Protocol ID', value: protocolIdDisplay },
+                    { label: 'Report Version', value: 'Version 1.0' },
+                    { label: 'Report Date', value: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) },
+                    { label: 'Sponsor', value: sponsorDisplayName },
+                    { label: 'Coordinating Investigator', value: investigatorName },
+                    { label: 'Target Markets', value: targetMarketsDisplay },
+                    { label: 'Device', value: deviceDisplayName },
+                  ].map(({ label, value }) => (
+                    <p key={label} style={{ color: '#111827', margin: '14px 0', fontSize: '11pt', lineHeight: 1.6 }}>
+                      <strong style={{ color: '#6b7280', fontWeight: 500, display: 'inline-block', minWidth: '200px' }}>{label}:</strong>
+                      {value}
+                    </p>
+                  ))}
+                </div>
+              </section>
+              <div style={pageNumStyle}>Page 1</div>
+            </div>
+
+            {/* PAGE 2: Report Synopsis */}
+            <div className="protocol-page" style={pageStyle}>
+              <section style={{ marginBottom: '40px' }}>
+                <h2 style={h2Style}>Report Synopsis</h2>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', overflow: 'hidden', margin: '24px 0' }}>
+                  {[
+                    { label: 'Study Title', value: studyTitleDisplay },
+                    { label: 'Protocol ID', value: protocolIdDisplay },
+                    { label: 'Device', value: deviceDisplayName },
+                    { label: 'Sponsor', value: sponsorDisplayName },
+                    { label: 'Coordinating Investigator', value: investigatorName },
+                    { label: 'Target Markets', value: targetMarketsDisplay },
+                    { label: 'Report Date', value: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) },
+                  ].map(({ label, value }, i, arr) => (
+                    <div key={label} style={{ display: 'grid', gridTemplateColumns: '180px 1fr', borderBottom: i < arr.length - 1 ? '1px solid #e5e7eb' : 'none' }}>
+                      <div style={{ background: '#f9fafb', borderRight: '1px solid #e5e7eb', padding: '14px 16px', color: '#6b7280', fontWeight: 500 }}>{label}</div>
+                      <div style={{ padding: '14px 16px', color: '#374151' }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <div style={pageNumStyle}>Page 2</div>
+            </div>
+
+            {/* PAGE 3: Table of Contents */}
+            <div className="protocol-page" style={pageStyle}>
+              <section style={{ marginBottom: '40px' }}>
+                <h2 style={h2Style}>Table of Contents</h2>
+                <div style={{ margin: '24px 0' }}>
+                  {reportSections.length > 0 ? reportSections.map((s: any, i: number) => (
+                    <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px dotted #e5e7eb' }}>
+                      <span style={{ fontSize: '13px' }}>{i + 1}. {s.title}</span>
+                      <span style={{ fontSize: '13px', color: '#6b7280' }}>{i + 4}</span>
+                    </div>
+                  )) : (
+                    <p style={{ ...paraStyle, color: '#9ca3af', fontStyle: 'italic' }}>
+                      Report sections will appear here once generated in Make Report.
+                    </p>
+                  )}
+                </div>
+              </section>
+              <div style={pageNumStyle}>Page 3</div>
+            </div>
+
+            {/* Report section pages */}
+            {reportSections.length > 0 ? reportSections.map((section: any, idx: number) => (
+              <div key={section.id} className="protocol-page" style={pageStyle}>
+                <section style={{ marginBottom: '40px' }}>
+                  <h2 style={h2Style}>{idx + 1}. {section.title}</h2>
+                  <div
+                    dangerouslySetInnerHTML={{ __html: section.content.replace(/```html\n?/g, '').replace(/```\n?/g, '') }}
+                    style={{ fontSize: '13px', lineHeight: '1.8', color: '#1a1a1a', fontFamily: 'Georgia, serif' }}
+                  />
+                </section>
+                <div style={pageNumStyle}>Page {idx + 4}</div>
+              </div>
+            )) : (
+              <div className="protocol-page" style={pageStyle}>
+                <section style={{ marginBottom: '40px' }}>
+                  <h2 style={h2Style}>Report Sections</h2>
+                  <p style={{ ...paraStyle, color: '#9ca3af', fontStyle: 'italic' }}>
+                    Report sections will appear here once generated in Make Report.
+                    Please complete the Make Report step first.
+                  </p>
+                </section>
+                <div style={pageNumStyle}>Page 4</div>
+              </div>
+            )}
+
+            {/* ── SIGNATURE PAGE — static fields, no buttons ────────────── */}
+            <div className="protocol-page" style={pageStyle}>
+              <section style={{ marginBottom: '40px' }}>
+                <h2 style={h2Style}>Signatures</h2>
+                <div style={{ marginTop: '32px' }}>
+                  <p style={paraStyle}>
+                    I have read this Clinical Investigation Report and confirm it accurately reflects the
+                    conduct and results of the clinical investigation in accordance with ISO 14155:2020, EU MDR,
+                    applicable regulatory requirements, and Good Clinical Practice principles.
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '48px', marginTop: '48px' }}>
+                    <DocSignatureBlock
+                      heading="Coordinating Principal Investigator"
+                      name={investigatorName}
+                      roleTitle="Principal Investigator"
+                      sig={signatures.investigator}
+                    />
+                    <DocSignatureBlock
+                      heading="Sponsor Representative"
+                      name={sponsorName}
+                      roleTitle="Clinical Affairs VP"
+                      sig={signatures.sponsor}
+                    />
+                  </div>
+                </div>
+              </section>
+              <div style={pageNumStyle}>Page {reportSections.length + 4}</div>
+            </div>
+
+            {/* Footer */}
+            <div style={{ color: '#9ca3af', textAlign: 'center', background: '#fff', borderTop: '1px solid #e5e7eb', padding: '24px 60px', fontSize: '10pt', lineHeight: 1.5 }}>
+              This document was system-generated and locked on{' '}
+              {approvalDate || new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}.
+            </div>
+
+            {/* ── Report Finalization panel ───────────────────────────── */}
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '32px', maxWidth: '700px', margin: '0 auto' }}>
+              {/* Info banner */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', marginBottom: '32px' }}>
+                <span style={{ fontSize: '14px', color: '#374151' }}>Discovered an error? You can still make changes before finalizing.</span>
+                <button onClick={handleRequestChanges} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', background: '#fff', cursor: 'pointer', fontSize: '13px', color: '#374151' }}>
+                  <Info size={16} style={{ color: '#6b7280' }} />
+                  Request Changes
+                </button>
+              </div>
+
+              <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#111827', marginBottom: '16px' }}>Required Signatures</h3>
+
+              {[
+                { slotKey: 'investigator' as const, label: 'COORDINATING PRINCIPAL INVESTIGATOR', name: investigatorName, roleTitle: 'Principal Investigator', sig: signatures.investigator },
+                { slotKey: 'sponsor' as const, label: 'SPONSOR REPRESENTATIVE', name: sponsorName, roleTitle: 'Clinical Affairs VP', sig: signatures.sponsor },
+              ].map(({ slotKey, label, name, roleTitle, sig }) => (
+                <div key={slotKey} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '20px', marginBottom: '12px', background: '#fff' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>{label}</div>
+                      <div style={{ fontSize: '15px', fontWeight: 600, color: '#111827' }}>{name}</div>
+                      <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '2px' }}>{roleTitle}</div>
+                      {sig && <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>Signed {new Date(sig.signedAt).toLocaleString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>}
+                    </div>
+                    {sig ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: '#16a34a', fontSize: '20px' }}>✓</span>
+                        <span style={{ padding: '4px 12px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', fontSize: '13px', color: '#15803d', fontWeight: 500 }}>Signed</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleSignClick(slotKey)}
+                        disabled={saving}
+                        style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 500 }}
+                      >
+                        Click to Sign
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {/* Export */}
+              <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button
+                  onClick={handleExportPDF}
+                  disabled={!isReportApproved}
+                  style={{ padding: '10px 20px', background: !isReportApproved ? '#9ca3af' : '#1d4ed8', color: '#fff', border: 'none', borderRadius: '6px', cursor: !isReportApproved ? 'not-allowed' : 'pointer', fontSize: '14px', fontWeight: 500 }}
+                >
+                  Export Locked PDF
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {confirmingAs && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '32px', maxWidth: '520px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#111827', marginBottom: '8px' }}>Sign Clinical Investigation Report</h3>
+            <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '24px' }}>
+              Signing as: <strong>{confirmingAs === 'investigator' ? investigatorName : sponsorName}</strong> ({confirmingAs === 'investigator' ? 'Principal Investigator' : 'Clinical Affairs VP'})
+            </p>
+
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Document Hash</div>
+              <code style={{ fontSize: '12px', color: '#374151', fontFamily: 'monospace' }}>{hashPreview}</code>
+              <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', lineHeight: '1.5' }}>
+                This cryptographic hash uniquely identifies the document content at the time of signing, in compliance with EU MDR 2017/745 and 21 CFR Part 11.
+              </p>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '6px' }}>
+                Type your full name to confirm: <span style={{ color: '#6b7280', fontWeight: 400 }}>({expectedName})</span>
+              </label>
+              <input
+                type="text"
+                value={confirmNameInput}
+                onChange={e => setConfirmNameInput(e.target.value)}
+                placeholder={expectedName}
+                style={{ width: '100%', padding: '10px 12px', border: `1px solid ${nameMatches && confirmNameInput ? '#16a34a' : '#d1d5db'}`, borderRadius: '6px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+              />
+              {confirmNameInput && !nameMatches && (
+                <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '4px' }}>Name does not match. Please type exactly: {expectedName}</p>
+              )}
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '24px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={confirmChecked} onChange={e => setConfirmChecked(e.target.checked)} style={{ marginTop: '2px', width: '16px', height: '16px', flexShrink: 0 }} />
+              <span style={{ fontSize: '13px', color: '#374151', lineHeight: '1.5' }}>
+                I confirm that I have reviewed this Clinical Investigation Report and that my electronic signature constitutes a legally binding signature in accordance with EU MDR 2017/745 and 21 CFR Part 11.
+              </span>
+            </label>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button onClick={() => { setConfirmingAs(null); setConfirmNameInput(''); setConfirmChecked(false); }} style={{ padding: '10px 20px', border: '1px solid #d1d5db', borderRadius: '6px', background: '#fff', cursor: 'pointer', fontSize: '14px', color: '#374151' }}>
+                Cancel
+              </button>
+              <button onClick={handleConfirmSign} disabled={!canSign} style={{ padding: '10px 20px', background: canSign ? '#2563eb' : '#9ca3af', color: '#fff', border: 'none', borderRadius: '6px', cursor: canSign ? 'pointer' : 'not-allowed', fontSize: '14px', fontWeight: 500 }}>
+                {saving ? 'Signing...' : 'Sign Document'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRequestChangesDialog && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '32px', maxWidth: '480px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#111827', marginBottom: '8px' }}>Request Changes to Report</h3>
+            <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '20px' }}>
+              Describe what needs to be corrected. This will be logged in the audit trail and the document will be returned to review.
+            </p>
+            <textarea
+              value={requestChangesComment}
+              onChange={e => setRequestChangesComment(e.target.value)}
+              placeholder="Describe the required changes..."
+              rows={4}
+              style={{ width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', resize: 'vertical', boxSizing: 'border-box', outline: 'none' }}
+            />
+            {!requestChangesComment.trim() && (
+              <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '4px' }}>A comment is required before requesting changes.</p>
+            )}
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>
+              <button
+                onClick={() => { setShowRequestChangesDialog(false); setRequestChangesComment(''); }}
+                style={{ padding: '10px 20px', border: '1px solid #d1d5db', borderRadius: '6px', background: '#fff', cursor: 'pointer', fontSize: '14px', color: '#374151' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitRequestChanges}
+                disabled={!requestChangesComment.trim() || requestChangesSubmitting}
+                style={{ padding: '10px 20px', background: requestChangesComment.trim() && !requestChangesSubmitting ? '#dc2626' : '#9ca3af', color: '#fff', border: 'none', borderRadius: '6px', cursor: requestChangesComment.trim() && !requestChangesSubmitting ? 'pointer' : 'not-allowed', fontSize: '14px', fontWeight: 500 }}
+              >
+                {requestChangesSubmitting ? 'Submitting...' : 'Request Changes & Return to Review'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

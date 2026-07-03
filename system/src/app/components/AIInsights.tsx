@@ -82,7 +82,7 @@ export function AIInsights({ projects, items }: AIInsightsProps) {
   const getInsightIcon = (type: string) => {
     switch (type) {
       case 'critical':
-        return <AlertCircle className="h-4 w-4 text-red-600" />;
+        return <AlertCircle className="h-4 w-4 text-rose-700" />;
       case 'warning':
         return <Clock className="h-4 w-4 text-orange-600" />;
       case 'suggestion':
@@ -95,7 +95,7 @@ export function AIInsights({ projects, items }: AIInsightsProps) {
   const getInsightStyle = (type: string) => {
     switch (type) {
       case 'critical':
-        return 'border-red-200 bg-red-50';
+        return 'border-rose-200 bg-rose-50';
       case 'warning':
         return 'border-orange-200 bg-orange-50';
       case 'suggestion':

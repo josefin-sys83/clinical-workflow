@@ -1,15 +1,23 @@
-import { JwtAuthGuard, Roles, RolesGuard } from '../auth';
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { MeService } from './me.service';
 
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard)
 @ApiTags('me')
 @Controller('/api/me')
 export class MeController {
+  constructor(private readonly meService: MeService) {}
+
   @Get()
-  me() {
-    // placeholder until real auth is wired (Entra/Keycloak/Auth0)
-    return { id: 'user-dev', name: 'Dev User', roles: ['admin'] };
+  getMe(@Req() req: any) {
+    const u = req.user;
+    return { id: u.userId, name: u.name, roles: u.roles, company_id: u.companyId ?? null };
+  }
+
+  @Get('actions')
+  getActions(@Req() req: any) {
+    return this.meService.getActions(req.user.userId);
   }
 }

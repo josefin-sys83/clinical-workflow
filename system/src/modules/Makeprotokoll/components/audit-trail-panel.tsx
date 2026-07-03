@@ -91,7 +91,7 @@ export function AuditTrailPanel() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-slate-900">Audit & Traceability</h3>
-        <div className="flex items-center gap-1.5 px-2 py-1 bg-green-100 text-green-700 text-xs rounded border border-green-200">
+        <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200">
           <Shield className="w-3 h-3" />
           <span className="font-medium">Active</span>
         </div>

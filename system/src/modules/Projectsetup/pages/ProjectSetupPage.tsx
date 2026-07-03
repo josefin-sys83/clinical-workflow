@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Lock, CheckCircle2, Circle, Info, X, UserPlus, History } from 'lucide-react';
-import { WORKFLOW_STEPS, buildWorkflowPath } from '@/shared/workflow/steps';
+import { Lock, CheckCircle2, Circle, Info, X, UserPlus, History, AlertCircle } from 'lucide-react';
+import { transitionWorkflow } from '@/shared/services/workflowService';
 import { AuditLog } from '../components/AuditLog';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { LockedStateContainer } from '../components/LockedStateContainer';
+import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
+import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+import { theme } from '@/app/theme';
 
 interface Role {
   title: string;
@@ -20,9 +24,12 @@ interface ProjectData {
   sponsor: string;
   deviceName: string;
   indication: string;
+  deviceCategory: string;
+  intendedUse: string;
   targetMarkets: string[];
-  plannedStudyStart: string;
-  targetSubmissionReadiness: string;
+  ethicsSubmissionTarget: string;
+  firstPatientInTarget: string;
+  regulatorySubmissionTarget: string;
 }
 
 interface AuditLogEntry {
@@ -36,6 +43,17 @@ interface AuditLogEntry {
   newValue?: string;
 }
 
+const DEFAULT_ROLES: Role[] = [
+  { title: 'Project Manager', assignedTo: [], status: 'pending', mandatory: true, locked: false, description: 'Responsible for overall study governance, timeline ownership, and coordination of all required roles.' },
+  { title: 'Medical Writer', assignedTo: [], status: 'pending', mandatory: true, description: 'Responsible for drafting and maintaining clinical protocol documentation.' },
+  { title: 'Protocol Lead', assignedTo: [], status: 'pending', mandatory: true, description: 'Accountable for clinical and scientific integrity of the protocol.' },
+  { title: 'Principal Investigator', assignedTo: [], status: 'pending', mandatory: true, description: 'Leads clinical investigation execution and ensures subject safety at the investigation site.' },
+  { title: 'Statistician', assignedTo: [], status: 'pending', mandatory: true, description: 'Responsible for statistical methodology and sample size justification.' },
+  { title: 'Regulatory Affairs', assignedTo: [], status: 'pending', mandatory: true, description: 'Ensures compliance with applicable regulatory frameworks.' },
+  { title: 'Quality Assurance', assignedTo: [], status: 'pending', mandatory: true, description: 'Ensures quality management compliance and audit readiness.' },
+  { title: 'Clinical Affairs VP', assignedTo: [], status: 'pending', mandatory: true, description: 'Provides executive clinical strategy oversight and holds final approval authority for protocol documents.' },
+];
+
 export function ProjectSetupPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -47,25 +65,25 @@ export function ProjectSetupPage() {
     sponsor: '',
     deviceName: '',
     indication: '',
+    deviceCategory: '',
+    intendedUse: '',
     targetMarkets: [],
-    plannedStudyStart: '',
-    targetSubmissionReadiness: '',
+    ethicsSubmissionTarget: '',
+    firstPatientInTarget: '',
+    regulatorySubmissionTarget: '',
   });
 
-  const [roles, setRoles] = useState<Role[]>([
-    { title: 'Project Manager', assignedTo: [], status: 'pending', mandatory: true, locked: false, description: 'Responsible for overall study governance, timeline ownership, and coordination of all required roles.' },
-    { title: 'Medical Writer', assignedTo: [], status: 'pending', mandatory: true, description: 'Responsible for drafting and maintaining clinical protocol documentation.' },
-    { title: 'Protocol Lead', assignedTo: [], status: 'pending', mandatory: true, description: 'Accountable for clinical and scientific integrity of the protocol.' },
-    { title: 'Statistician', assignedTo: [], status: 'pending', mandatory: true, description: 'Responsible for statistical methodology and sample size justification.' },
-    { title: 'Regulatory Affairs', assignedTo: [], status: 'pending', mandatory: true, description: 'Ensures compliance with applicable regulatory frameworks.' },
-    { title: 'Quality Assurance', assignedTo: [], status: 'pending', mandatory: true, description: 'Ensures quality management compliance and audit readiness.' },
-  ]);
+  const [roles, setRoles] = useState<Role[]>(DEFAULT_ROLES);
 
+  const { protocolFinalized, isLocked: protocolIsLocked, latestAmendment } = useProtocolStatus(projectId);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [hoveredRole, setHoveredRole] = useState<number | null>(null);
   const [tooltipField, setTooltipField] = useState<string | null>(null);
   const [auditTrail, setAuditTrail] = useState<AuditLogEntry[]>([]);
   const [isAuditTrailOpen, setIsAuditTrailOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const previousProjectDataRef = useRef<ProjectData>(projectData);
   const previousRolesRef = useRef<Role[]>(roles);
   const isInitialMount = useRef(true);
@@ -97,16 +115,46 @@ export function ProjectSetupPage() {
     setIsSetupComplete(identityComplete && rolesComplete);
   }, [projectData, roles]);
 
-  // Load saved data from backend on mount
+  // Load saved data from backend on mount. Merge backend roles with DEFAULT_ROLES so that
+  // any roles added after initial setup still appear (backward-compatible with older projects).
   useEffect(() => {
     if (!projectId) return;
-    fetch(`${window.location.origin.replace('-5173.', '-3001.')}/api/projects/${projectId}`)
-      .then(r => r.json())
-      .then(project => {
-        if (project.data?.projectData) setProjectData(project.data.projectData);
-        if (project.data?.roles) setRoles(project.data.roles);
+    setLoadError(null);
+    fetch(`/api/projects/${projectId}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`Request failed with status ${r.status}`);
+        return r.json();
       })
-      .catch(() => {});
+      .then(project => {
+        if (project.data?.projectData) {
+          const pd = project.data.projectData;
+          setProjectData({
+            projectName: pd.projectName || '',
+            sponsor: pd.sponsor || '',
+            deviceName: pd.deviceName || '',
+            indication: pd.indication || '',
+            deviceCategory: pd.deviceCategory || '',
+            intendedUse: pd.intendedUse || '',
+            targetMarkets: pd.targetMarkets || [],
+            ethicsSubmissionTarget: pd.ethicsSubmissionTarget || pd.plannedStudyStart || '',
+            firstPatientInTarget: pd.firstPatientInTarget || '',
+            regulatorySubmissionTarget: pd.regulatorySubmissionTarget || pd.targetSubmissionReadiness || '',
+          });
+        }
+        if (project.data?.roles) {
+          const saved: Role[] = project.data.roles;
+          // Merge: keep saved role data, but add any DEFAULT_ROLES not yet in the saved list
+          const merged = DEFAULT_ROLES.map(def => {
+            const match = saved.find(s => s.title === def.title);
+            return match ? match : def;
+          });
+          setRoles(merged);
+        }
+      })
+      .catch((e) => {
+        console.error('Failed to load project', e);
+        setLoadError('Failed to load saved project data. Fields below may be blank or out of date — please refresh the page to try again.');
+      });
   }, [projectId]);
 
   const handleInputChange = (field: keyof ProjectData, value: string) => {
@@ -190,10 +238,18 @@ export function ProjectSetupPage() {
 
   const maxStep = parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0');
 
+  const phase1Steps = [
+    { id: '1', label: 'Setup', status: 'active' as const, path: `/projects/${projectId}/workflow/project-setup` },
+    { id: '2', label: 'Synopsis', status: (maxStep >= 2 ? 'completed' : 'locked') as 'completed' | 'locked', path: `/projects/${projectId}/workflow/synopsis` },
+    { id: '3', label: 'Scope & Intended Use', status: (maxStep >= 3 ? 'completed' : 'locked') as 'completed' | 'locked', path: `/projects/${projectId}/workflow/scope` },
+  ];
+
   const handleCompleteSetup = async () => {
     logAudit({ domain: 'Approval', action: 'Project Setup completed successfully', details: 'All requirements met. Unlocking Synopsis phase.' });
+    setSaveError(null);
+    setIsSaving(true);
     try {
-      await fetch(`${window.location.origin.replace('-5173.', '-3001.')}/api/projects/${projectId}`, {
+      const response = await fetch(`/api/projects/${projectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -202,69 +258,78 @@ export function ProjectSetupPage() {
           data: { projectData, roles },
         }),
       });
+      if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
     } catch (e) {
       console.error('Failed to save project', e);
+      setSaveError('Failed to save project, please try again.');
+      setIsSaving(false);
+      return;
     }
+    setIsSaving(false);
+    transitionWorkflow({ projectId: projectId!, stepId: 'project-setup', to: 'approved' }).catch(() => {});
     const current = parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0');
     if (current < 2) localStorage.setItem(`maxStep_${projectId}`, '2');
     navigate(`/projects/${projectId}/workflow/synopsis`);
   };
 
+  const calculateComplexity = (data: ProjectData): string => {
+    let points = 0;
+    const markets = data.targetMarkets || [];
+    if (markets.includes('EU')) points += 3;
+    if (markets.includes('US')) points += 3;
+    if (markets.includes('UK')) points += 2;
+    if (markets.includes('Japan')) points += 3;
+    if (markets.includes('China')) points += 4;
+    if (markets.includes('Canada')) points += 1;
+    if (markets.includes('Australia')) points += 1;
+    if (points <= 4) return 'Låg';
+    if (points <= 8) return 'Medel';
+    if (points <= 13) return 'Hög';
+    return 'Mycket hög';
+  };
+
   return (
     <div className="flex h-screen bg-slate-50">
-      <aside className="w-80 bg-white border-r border-slate-200 flex flex-col z-40">
-        <nav className="flex-1 p-4 overflow-y-auto">
-          <div className="mb-4 px-3">
-            <h2 className="text-sm font-semibold text-slate-900">Workflow Steps</h2>
-          </div>
-          {(['project', 'protocol', 'report'] as const).map((domain) => {
-            const domainSteps = WORKFLOW_STEPS.filter((s) => s.domain === domain);
-            const domainLabel = domain === 'project' ? 'Project' : domain === 'protocol' ? 'Protocol' : 'Report';
-            return (
-              <div key={domain} className="mb-4">
-                <div className="mb-1 px-3">
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{domainLabel}</div>
-                </div>
-                <div className="space-y-0.5">
-                  {domainSteps.map((step) => {
-                    const stepIndex = WORKFLOW_STEPS.indexOf(step);
-                    const isActive = step.id === 'project-setup';
-                    const isLocked = stepIndex > Math.max(maxStep, 1);
-                    const href = step.id === 'dashboard' ? '/dashboard' : projectId ? buildWorkflowPath(projectId, step.id) : '#';
-                    return (
-                      <div
-                        key={step.id}
-                        onClick={() => !isLocked && !isActive && navigate(href)}
-                        style={{ cursor: isLocked ? 'not-allowed' : isActive ? 'default' : 'pointer' }}
-                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                          isActive ? 'bg-blue-50 border border-blue-200' : isLocked ? 'opacity-50' : 'hover:bg-slate-50 border border-transparent'
-                        }`}
-                      >
-                        <div className="flex-shrink-0">
-                          {isLocked ? (
-                            <Lock className="w-4 h-4 text-slate-400" />
-                          ) : isActive ? (
-                            <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center">
-                              <div className="w-2 h-2 rounded-full bg-white" />
-                            </div>
-                          ) : stepIndex < maxStep ? (
-                            <CheckCircle2 className="w-4 h-4 text-blue-500" />
-                          ) : (
-                            <Circle className="w-4 h-4 text-slate-400" />
-                          )}
-                        </div>
-                        <span className={`text-sm ${isActive ? 'font-medium text-blue-900' : isLocked ? 'text-slate-400' : 'text-slate-700'}`}>
-                          {step.label}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+      <aside className="w-80 bg-white border-r border-slate-200 flex-shrink-0 overflow-y-auto flex flex-col">
+        <div className="p-6 flex-1">
+          <h2 className="text-sm font-semibold text-slate-900 mb-4">Workflow Steps</h2>
+          <nav className="space-y-4">
+            <div>
+              <div className="mb-2">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Project setup</span>
               </div>
-            );
-          })}
-        </nav>
-        <div className="p-4 border-t border-slate-200 bg-slate-50">
+              <div className="space-y-1">
+                {phase1Steps.map((step, index) => (
+                  <div
+                    key={step.id}
+                    onClick={() => step.status !== 'locked' && step.status !== 'active' && step.path && navigate(step.path)}
+                    className={`flex items-center gap-3 transition-colors ${
+                      step.status === 'active'
+                        ? 'bg-blue-50 border border-blue-200 rounded-lg p-3'
+                        : step.status === 'completed'
+                        ? 'px-3 py-2 rounded-md text-slate-700 hover:bg-slate-50 cursor-pointer'
+                        : 'px-3 py-2 rounded-md text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="flex-shrink-0">
+                      {step.status === 'completed' && <CheckCircle2 className="w-5 h-5 text-blue-600" />}
+                      {step.status === 'active' && (
+                        <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-medium">
+                          {index + 1}
+                        </div>
+                      )}
+                      {step.status === 'locked' && <Lock className="w-5 h-5 text-slate-300" />}
+                    </div>
+                    <span className={`text-sm ${step.status === 'active' ? 'font-medium text-blue-900' : ''}`}>
+                      {step.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </nav>
+        </div>
+        <div className="bg-slate-50 border-t border-slate-200 p-4">
           <div className="text-xs text-slate-600">
             <div className="font-medium mb-1">System Information</div>
             <div>Version 2.4.1</div>
@@ -274,6 +339,15 @@ export function ProjectSetupPage() {
       </aside>
 
       <main className="flex-1 overflow-y-auto">
+        <MilestoneBanner projectId={projectId!} currentStepId="project-setup" />
+        {protocolFinalized && (
+          <div className="mx-6 mt-4">
+            <ProtocolFinalizedBanner
+              projectId={projectId!}
+              latestAmendment={latestAmendment}
+            />
+          </div>
+        )}
         <div className="bg-white border-b border-slate-200 px-6 py-4">
           <div className="max-w-6xl mx-auto flex items-center justify-between">
             <Breadcrumb currentStep="project_setup" />
@@ -281,6 +355,16 @@ export function ProjectSetupPage() {
           </div>
         </div>
 
+        {loadError && (
+          <div className="max-w-6xl mx-auto px-6 pt-4">
+            <div className={`flex items-center gap-2 p-3 ${theme.status.error} rounded-md text-sm`}>
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              {loadError}
+            </div>
+          </div>
+        )}
+
+        <div className={protocolIsLocked ? 'pointer-events-none opacity-50 select-none' : ''}>
         <div className="max-w-6xl mx-auto px-6 pt-6">
           <div className="flex items-center gap-8 pb-6 border-b border-slate-200">
             <div>
@@ -299,23 +383,55 @@ export function ProjectSetupPage() {
             </div>
             <div className="grid grid-cols-2 gap-6">
               <div>
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Project Name <span className="text-red-600">*</span></label>
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Project Name <span className="text-rose-700">*</span></label>
                 <input type="text" value={projectData.projectName} onChange={(e) => handleInputChange('projectName', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" placeholder="Enter project name" />
               </div>
               <div>
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Sponsor (Legal Entity) <span className="text-red-600">*</span></label>
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Sponsor (Legal Entity) <span className="text-rose-700">*</span></label>
                 <input type="text" value={projectData.sponsor} onChange={(e) => handleInputChange('sponsor', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" placeholder="Enter sponsor name" />
               </div>
               <div>
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Device Name <span className="text-red-600">*</span></label>
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Device Name <span className="text-rose-700">*</span></label>
                 <input type="text" value={projectData.deviceName} onChange={(e) => handleInputChange('deviceName', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" placeholder="e.g., CardioAssist LVAD System" />
               </div>
               <div>
                 <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Intended Medical Indication</label>
                 <input type="text" value={projectData.indication} onChange={(e) => handleInputChange('indication', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" placeholder="e.g., advanced heart failure" />
               </div>
+              <div className="grid grid-cols-2 gap-6 col-span-2 mt-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Device Category</label>
+                  <select
+                    value={projectData.deviceCategory}
+                    onChange={(e) => handleInputChange('deviceCategory', e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+                  >
+                    <option value="">Select device category...</option>
+                    <option value="samd">Software as a Medical Device (SaMD)</option>
+                    <option value="ai-ml">AI-enabled / Machine Learning Device</option>
+                    <option value="simd">Software in a Medical Device (SiMD)</option>
+                    <option value="ivd">In Vitro Diagnostic (IVD)</option>
+                    <option value="aimd">Active Implantable Medical Device (AIMD)</option>
+                    <option value="implantable">Implantable Medical Device</option>
+                    <option value="non-implantable">Non-implantable Medical Device</option>
+                    <option value="active">Active Medical Device</option>
+                    <option value="combination">Combination Product</option>
+                    <option value="accessory">Accessory to Medical Device</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Intended Use</label>
+                  <input
+                    type="text"
+                    value={projectData.intendedUse}
+                    onChange={(e) => handleInputChange('intendedUse', e.target.value)}
+                    placeholder="e.g. AI-assisted detection of diabetic retinopathy..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                  />
+                </div>
+              </div>
               <div className="col-span-2">
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Target Markets <span className="text-red-600">*</span></label>
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">Target Markets <span className="text-rose-700">*</span></label>
                 <div className="flex flex-wrap gap-2 mb-2">
                   {['EU', 'US', 'UK', 'Canada', 'Australia', 'Japan', 'China'].map((market) => (
                     <button key={market} type="button" onClick={() => handleMarketToggle(market)} className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${projectData.targetMarkets.includes(market) ? 'bg-slate-100 border-slate-400 text-slate-900 font-medium' : 'bg-white border-slate-300 text-slate-700 hover:border-slate-400'}`}>
@@ -407,20 +523,41 @@ export function ProjectSetupPage() {
             </div>
           </section>
 
-          {/* Section 3: Timeline */}
+          {/* Section 3: Project Milestones */}
           <section className="bg-white border border-slate-200 rounded-lg p-6">
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold text-slate-900 mb-1">Timeline Ownership</h3>
-              <p className="text-sm text-slate-600">The Project Manager owns the timeline.</p>
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-slate-900 mb-1">Project Milestones</h3>
+              <p className="text-sm text-slate-600">Enter your three external anchor dates. The system automatically calculates when each workflow step must start based on project complexity.</p>
             </div>
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Planned Study Start Date</label>
-                <input type="date" value={projectData.plannedStudyStart} onChange={(e) => handleInputChange('plannedStudyStart', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" />
+            <div className="mb-4 p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
+              <div className="flex items-start gap-3">
+                <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
+                  AI
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-purple-900 mb-1">AI-calculated complexity</div>
+                  <p className="text-xs text-purple-700">Based on target markets, device category, and study scope.</p>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Target Submission Readiness Date</label>
-                <input type="date" value={projectData.targetSubmissionReadiness} onChange={(e) => handleInputChange('targetSubmissionReadiness', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" />
+            </div>
+            <div className="mb-4 flex items-center gap-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2">
+              <span>Estimated complexity: <strong className="text-slate-900">{calculateComplexity(projectData)}</strong></span>
+            </div>
+            <div className="grid grid-cols-3 gap-6">
+              <div className="flex flex-col">
+                <label className="block text-sm font-medium text-slate-700 mb-1">Ethics Submission Target</label>
+                <p className="text-xs text-slate-500 mb-2 flex-1">When you plan to submit to ethics committee</p>
+                <input type="date" value={projectData.ethicsSubmissionTarget} onChange={(e) => handleInputChange('ethicsSubmissionTarget', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" />
+              </div>
+              <div className="flex flex-col">
+                <label className="block text-sm font-medium text-slate-700 mb-1">First Patient In (FPI) Target</label>
+                <p className="text-xs text-slate-500 mb-2 flex-1">Planned date for first enrolled patient</p>
+                <input type="date" value={projectData.firstPatientInTarget} onChange={(e) => handleInputChange('firstPatientInTarget', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" />
+              </div>
+              <div className="flex flex-col">
+                <label className="block text-sm font-medium text-slate-700 mb-1">Regulatory Submission Target</label>
+                <p className="text-xs text-slate-500 mb-2 flex-1">Final deadline for regulatory submission</p>
+                <input type="date" value={projectData.regulatorySubmissionTarget} onChange={(e) => handleInputChange('regulatorySubmissionTarget', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" />
               </div>
             </div>
           </section>
@@ -448,16 +585,25 @@ export function ProjectSetupPage() {
           </section>
 
           {/* Primary Action */}
-          <div className="flex items-center justify-between p-6 bg-white border border-slate-200 rounded-lg">
-            <div>
-              <div className="font-medium text-slate-900">Ready to proceed?</div>
-              <div className="text-sm text-slate-600 mt-1">{isSetupComplete ? 'All requirements met.' : 'Complete all required fields and role assignments to proceed.'}</div>
+          <div className="p-6 bg-white border border-slate-200 rounded-lg">
+            {saveError && (
+              <div className={`flex items-center gap-2 p-3 mb-4 ${theme.status.error} rounded-md text-sm`}>
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                {saveError}
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-medium text-slate-900">Ready to proceed?</div>
+                <div className="text-sm text-slate-600 mt-1">{isSetupComplete ? 'All requirements met.' : 'Complete all required fields and role assignments to proceed.'}</div>
+              </div>
+              <button disabled={!isSetupComplete || isSaving} onClick={handleCompleteSetup} className={`px-6 py-3 rounded-lg font-medium transition-all ${isSetupComplete && !isSaving ? `${theme.button.primary} shadow-sm hover:shadow` : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                {isSaving ? 'Saving...' : 'Complete Setup'}
+              </button>
             </div>
-            <button disabled={!isSetupComplete} onClick={handleCompleteSetup} className={`px-6 py-3 rounded-lg font-medium transition-all ${isSetupComplete ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
-              Complete Setup
-            </button>
           </div>
         </div>
+        </div>{/* end protocolFinalized overlay */}
       </main>
 
       <AuditLog entries={auditTrail} onExport={handleExportAuditTrail} isOpen={isAuditTrailOpen} onToggle={() => setIsAuditTrailOpen(!isAuditTrailOpen)} />

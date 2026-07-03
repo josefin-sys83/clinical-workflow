@@ -24,7 +24,7 @@ export function GlobalHeader({
       case 'Draft': return 'bg-slate-100 text-slate-700 border-slate-300';
       case 'In Review': return 'bg-blue-50 text-blue-700 border-blue-300';
       case 'Reopened': return 'bg-amber-50 text-amber-700 border-amber-300';
-      case 'Locked': return 'bg-green-50 text-green-700 border-green-300';
+      case 'Locked': return 'bg-blue-50 text-blue-700 border-blue-200';
     }
   };
 
@@ -58,9 +58,9 @@ export function GlobalHeader({
             <span className="text-slate-600">Role:</span>{' '}
             <span className="font-medium text-slate-900">{currentUserRole}</span>
           </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-300 rounded text-xs">
-            <Shield className="w-3.5 h-3.5 text-green-600" />
-            <span className="text-green-700 font-medium">Logging ON</span>
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded text-xs">
+            <Shield className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="text-blue-700 font-medium">Logging ON</span>
           </div>
           <button
             onClick={onViewAuditTrail}

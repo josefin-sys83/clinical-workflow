@@ -49,7 +49,7 @@ export function ReferencedDocumentsPanel({ documents, sectionId }: ReferencedDoc
         );
       case 'not-available':
         return (
-          <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 text-xs rounded flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
             Not Available
           </span>

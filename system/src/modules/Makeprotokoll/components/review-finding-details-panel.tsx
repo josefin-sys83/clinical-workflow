@@ -181,7 +181,7 @@ export function ReviewFindingDetailsPanel({ findingId, onClose, onOpenSection }:
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'Blocker':
-        return 'text-red-700 bg-red-50 border-red-200';
+        return 'text-rose-700 bg-rose-50 border-rose-200';
       case 'High':
         return 'text-orange-700 bg-orange-50 border-orange-200';
       case 'Medium':
@@ -209,7 +209,7 @@ export function ReviewFindingDetailsPanel({ findingId, onClose, onOpenSection }:
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Resolved':
-        return 'bg-green-100 text-green-800 border-green-200';
+        return 'bg-blue-50 text-blue-700 border-blue-200';
       case 'In Progress':
         return 'bg-blue-100 text-blue-800 border-blue-200';
       default:
@@ -321,7 +321,7 @@ export function ReviewFindingDetailsPanel({ findingId, onClose, onOpenSection }:
               </button>
             </div>
             <div className="text-sm text-slate-700 bg-white border border-orange-300 rounded p-3 font-mono leading-relaxed">
-              <span className={finding.severity === 'Blocker' ? 'bg-red-100 border-l-2 border-red-500 px-2 py-1 inline-block' : 'bg-orange-100 border-l-2 border-orange-500 px-2 py-1 inline-block'}>
+              <span className={finding.severity === 'Blocker' ? 'bg-rose-50 border-l-2 border-rose-500 px-2 py-1 inline-block' : 'bg-orange-100 border-l-2 border-orange-500 px-2 py-1 inline-block'}>
                 "{finding.protocolLocation.excerpt}"
               </span>
             </div>
@@ -335,8 +335,8 @@ export function ReviewFindingDetailsPanel({ findingId, onClose, onOpenSection }:
               Comparison (Inline Diff)
             </div>
             <div className="border border-slate-200 rounded-lg overflow-hidden">
-              <div className="bg-red-50 border-b border-red-200 p-3">
-                <div className="text-xs font-semibold text-red-800 mb-1.5 flex items-center gap-1.5">
+              <div className="bg-rose-50 border-b border-rose-200 p-3">
+                <div className="text-xs font-semibold text-rose-800 mb-1.5 flex items-center gap-1.5">
                   <div className="w-1 h-1 rounded-full bg-red-600" />
                   Protocol (Current)
                 </div>
@@ -346,13 +346,13 @@ export function ReviewFindingDetailsPanel({ findingId, onClose, onOpenSection }:
                   </span>
                 </div>
               </div>
-              <div className="bg-green-50 p-3">
-                <div className="text-xs font-semibold text-green-800 mb-1.5 flex items-center gap-1.5">
-                  <div className="w-1 h-1 rounded-full bg-green-600" />
+              <div className="bg-blue-50 p-3">
+                <div className="text-xs font-semibold text-blue-700 mb-1.5 flex items-center gap-1.5">
+                  <div className="w-1 h-1 rounded-full bg-indigo-600" />
                   {finding.detectedSources[0].source}
                 </div>
                 <div className="text-sm font-mono text-slate-700 leading-relaxed">
-                  <span className="bg-green-200 px-1">
+                  <span className="bg-blue-100 px-1">
                     {finding.detectedSources[0].excerpt}
                   </span>
                 </div>
@@ -403,7 +403,7 @@ export function ReviewFindingDetailsPanel({ findingId, onClose, onOpenSection }:
           <button className="flex-1 px-4 py-2 text-sm border border-slate-300 text-slate-700 bg-white rounded-lg hover:bg-slate-50 transition-colors font-medium">
             Mark In Progress
           </button>
-          <button className="flex-1 px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium">
+          <button className="flex-1 px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium">
             Mark Resolved
           </button>
         </div>
