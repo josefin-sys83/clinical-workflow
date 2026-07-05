@@ -86,6 +86,8 @@ interface ReportContentProps {
   isReportBlocked?: boolean;
   onInitiateAmendment?: () => void;
   scrollTrigger?: number;
+  /** Id of the section currently awaiting an AI-generated draft from the backend. */
+  generatingSectionId?: string | null;
 }
 
 export function ReportContent({
@@ -121,6 +123,7 @@ export function ReportContent({
   isReportBlocked,
   onInitiateAmendment,
   scrollTrigger,
+  generatingSectionId,
 }: ReportContentProps) {
   const { projectId } = useParams();
   const apiBase = '';
@@ -182,6 +185,11 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
     if (forceAnalyzeVersion > 0) {
       analyzedSectionsRef.current = {};
     }
+
+    // Mark fingerprints synchronously (before any async work) so a StrictMode
+    // double-invoke of this effect sees them already recorded and no-ops,
+    // and collect only the sections that actually need (re-)analysis.
+    const toAnalyze: { id: string; title: string; content: string }[] = [];
     sections.forEach(s => {
       const isAppendices = s.id === 'section-appendices';
       const hasContent = !!s.content?.trim();
@@ -192,9 +200,21 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         : `${s.content.length}:${s.content.slice(0, 80)}`;
       if (analyzedSectionsRef.current[s.id] !== fingerprint) {
         analyzedSectionsRef.current[s.id] = fingerprint;
-        analyzeSectionWithAI(s.id, s.title, s.content);
+        toAnalyze.push({ id: s.id, title: s.title, content: s.content });
       }
     });
+    if (toAnalyze.length === 0) return;
+
+    // Batched (not all-at-once) so a first load with many sections needing
+    // analysis doesn't fire a large burst of concurrent requests against the
+    // same rate-limited Azure OpenAI deployment.
+    const ANALYZE_BATCH_SIZE = 3;
+    (async () => {
+      for (let i = 0; i < toAnalyze.length; i += ANALYZE_BATCH_SIZE) {
+        const batch = toAnalyze.slice(i, i + ANALYZE_BATCH_SIZE);
+        await Promise.all(batch.map(item => analyzeSectionWithAI(item.id, item.title, item.content)));
+      }
+    })();
   }, [sections, forceAnalyzeVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getAssetIcon = (type: string) => {
@@ -783,6 +803,14 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                       console.log('View document:', docName);
                     }}
                   />
+
+                  {/* AI draft generation in progress (real backend AI call) */}
+                  {generatingSectionId === section.id && !hasContent && !section.aiDraft && (
+                    <div className="mb-4 flex items-center gap-2 text-[#6B7280]" style={{ fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
+                      <span className="inline-block w-3.5 h-3.5 border-2 border-[#D1D5DB] border-t-[#2563EB] rounded-full animate-spin" />
+                      Generating AI draft…
+                    </div>
+                  )}
 
                   {/* AI-Generated Draft Banner */}
                   {section.aiDraft && !hasContent && canEdit(section) && (

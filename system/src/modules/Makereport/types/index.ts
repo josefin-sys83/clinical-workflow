@@ -150,18 +150,6 @@ export interface SectionComment {
   regarding?: string;
 }
 
-export interface AuditLogEntry {
-  id: string;
-  sectionId?: string; // Optional section reference
-  timestamp: string; // ISO format
-  action: string; // Primary action description (e.g., "Section locked for regulatory submission")
-  user?: User; // User who performed the action
-  role?: string; // Role of the user at time of action
-  affected?: string; // What was affected (e.g., "Section 4.1 (entire)")
-  description?: string; // Detailed description in italics
-  domain?: 'Project' | 'Role' | 'Scope' | 'Requirement' | 'Content' | 'Review' | 'Approval'; // For categorization
-}
-
 export interface DataAsset {
   id: string;
   type: 'table' | 'graph' | 'statistical-output';
@@ -186,11 +174,6 @@ export interface ProtocolSection {
   id: string;
   title: string;
   content: string;
-}
-
-export interface ReportState {
-  overallState: 'draft' | 'under-review' | 'approved' | 'locked';
-  auditLog: AuditLogEntry[];
 }
 
 export interface CompletenessElement {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle2, Circle, FileText, Upload, Lock, Sparkles, AlertCircle } from 'lucide-react';
+import { CheckCircle2, Circle, MinusCircle, FileText, Upload, Lock, Sparkles, AlertCircle } from 'lucide-react';
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate, useParams } from 'react-router-dom';
 import { postAudit } from '@/shared/api/audit';
@@ -14,7 +14,7 @@ import { AIInsightBadge } from '@/shared/components/AIInsightBadge';
 interface ReadinessItem {
   id: string;
   label: string;
-  status: 'complete' | 'needs-review' | 'missing';
+  status: 'complete' | 'needs-review' | 'missing' | 'not-applicable';
   reason?: string;
 }
 
@@ -54,6 +54,10 @@ export function SynopsisPage() {
     { id: '13', label: 'No obvious feasibility blockers identified', status: 'missing' },
     { id: '14', label: 'Internal consistency verified', status: 'missing' },
     { id: '15', label: 'Key sections identifiable for downstream use', status: 'missing' },
+    { id: '16', label: 'Risk management approach indicated', status: 'missing' },
+    { id: '17', label: 'DMC/CEC oversight considered', status: 'missing' },
+    { id: '18', label: 'Primary treatment-effect / estimand indicated', status: 'missing' },
+    { id: '19', label: 'Multi-region practice variance considered', status: 'missing' },
   ]);
 
   const maxStep = parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0');
@@ -133,14 +137,14 @@ export function SynopsisPage() {
       const updatedChecklist = readinessChecklist.map(item => {
         const result = results.find((r: any) => String(r.id) === String(item.id));
         if (!result) return item;
-        const status: 'complete' | 'needs-review' | 'missing' =
-          result.status === 'complete' ? 'complete' : 'missing';
+        const status: 'complete' | 'needs-review' | 'missing' | 'not-applicable' =
+          result.status === 'complete' || result.status === 'not-applicable' ? result.status : 'missing';
         return { ...item, status, reason: result.reason };
       });
       // Mark item 1 as complete since file is uploaded
       updatedChecklist[0] = { ...updatedChecklist[0], status: 'complete', reason: 'Document uploaded successfully' };
 
-      const passedCount = updatedChecklist.filter(i => i.status === 'complete').length;
+      const passedCount = updatedChecklist.filter(i => i.status === 'complete' || i.status === 'not-applicable').length;
       await postAudit(projectId!, 'synopsis.ai.analysis.completed', `AI analysis completed: ${passedCount} of ${updatedChecklist.length} criteria passed`, 'synopsis', 'unknown', { fileName: file.name, passedCriteria: passedCount, totalCriteria: updatedChecklist.length });
 
       setReadinessChecklist(updatedChecklist);
@@ -155,7 +159,7 @@ export function SynopsisPage() {
     }
   };
 
-  const allChecked = readinessChecklist.every(item => item.status === 'complete');
+  const allChecked = readinessChecklist.every(item => item.status === 'complete' || item.status === 'not-applicable');
 
   const handleCompleteSynopsis = async () => {
     if (allChecked) {
@@ -313,7 +317,7 @@ export function SynopsisPage() {
                   </div>
                   {aiReviewComplete ? (
                     <p className="text-sm text-slate-500 mt-1">
-                      {`${readinessChecklist.filter(i => i.status === 'complete').length} of ${readinessChecklist.length} criteria met`}
+                      {`${readinessChecklist.filter(i => i.status === 'complete' || i.status === 'not-applicable').length} of ${readinessChecklist.length} criteria met`}
                     </p>
                   ) : (
                     <AIInsightBadge
@@ -326,17 +330,22 @@ export function SynopsisPage() {
                 <div className="space-y-3 mb-4">
                   {readinessChecklist.map((item) => (
                     <div key={item.id} className={`flex items-start gap-3 p-4 rounded-lg border ${
-                      item.status === 'complete' ? 'border-blue-100 bg-blue-50' : 'border-slate-200 bg-slate-50'
+                      item.status === 'complete' ? 'border-blue-100 bg-blue-50' : item.status === 'not-applicable' ? 'border-slate-100 bg-slate-50' : 'border-slate-200 bg-slate-50'
                     }`}>
                       <div className="flex-shrink-0 mt-0.5">
                         {item.status === 'complete' ? (
                           <CheckCircle2 className="w-5 h-5 text-blue-600" />
+                        ) : item.status === 'not-applicable' ? (
+                          <MinusCircle className="w-5 h-5 text-slate-400" />
                         ) : (
                           <Circle className="w-5 h-5 text-slate-400" />
                         )}
                       </div>
                       <div>
                         <span className="text-sm font-medium text-slate-700">{item.label}</span>
+                        {item.status === 'not-applicable' && (
+                          <span className="ml-2 text-xs font-medium text-slate-400 uppercase">Not applicable</span>
+                        )}
                         {item.reason && (
                           <p className="text-xs text-slate-500 mt-0.5">{item.reason}</p>
                         )}

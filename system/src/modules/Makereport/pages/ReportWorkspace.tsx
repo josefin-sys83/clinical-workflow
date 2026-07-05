@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
-import { ReportSection, DataAsset, UploadedFile, User, AuditLogEntry, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus } from '../types';
+import { ReportSection, DataAsset, UploadedFile, User, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus } from '../types';
 import { ReportNavigation } from '../components/ReportNavigation';
 import { WorkflowProgressIndicator } from '../components/WorkflowProgressIndicator';
 import { ReportContent } from '../components/ReportContent';
@@ -12,8 +12,7 @@ import { ProtocolAmendmentModal } from '../components/ProtocolAmendmentModal';
 import { ProtocolAmendmentsList } from '../components/ProtocolAmendmentsList';
 import { AmendmentModal } from '../../Makeprotokoll/components/AmendmentModal';
 
-import { initialReportSections, mockProtocolSections, mockUsers, mockAuditLog, mockCompletenessStatus } from '../data/mockData';
-import { generateSectionDraft } from '../services/aiService';
+import { initialReportSections, mockProtocolSections, mockUsers, mockCompletenessStatus } from '../data/mockData';
 import { validateReportContent } from '../services/validationService';
 import { generateAssetNarrative } from '../services/narrativeService';
 import { InsertedAsset } from '../types';
@@ -21,6 +20,7 @@ import { Clock } from 'lucide-react';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+import { createProjectAuditEvent } from '@/shared/services/auditService';
 
 function userFromRole(rawRoles: any[], roleTitle: string): User {
   const role = rawRoles.find((r: any) => r.title === roleTitle);
@@ -28,28 +28,17 @@ function userFromRole(rawRoles: any[], roleTitle: string): User {
   if (!person) return { id: roleTitle, name: 'Unassigned', email: '', role: roleTitle };
   return { id: person.email || person.name, name: person.name, email: person.email || '', role: roleTitle };
 }
- 
-// Helper function to create audit log entries
-function createAuditEntry(
-  domain: AuditLogEntry['domain'],
-  action: string,
-  user: User | 'System',
-  details?: string,
-  newValue?: string
-): AuditLogEntry {
-  const now = new Date();
-  const timestamp = `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  
-  return {
-    id: `audit-${Date.now()}-${Math.random()}`,
-    domain,
-    timestamp,
-    action,
-    userBy: user === 'System' ? 'System' : user.name,
-    userEmail: user === 'System' ? 'system@medtech.com' : user.email,
-    details,
-    newValue,
-  };
+
+// Logs a real, persisted audit event for this project (visible in the site-wide
+// Audit Trail) instead of the old local-only, never-rendered mock-seeded log.
+function logReportAuditEvent(
+  projectId: string | undefined,
+  type: 'lifecycle_transition' | 'note',
+  summary: string,
+  details?: string
+) {
+  if (!projectId) return;
+  createProjectAuditEvent({ projectId, domain: 'report', stepId: 'report-make', type, summary, details }).catch(() => {});
 }
 
 export function ReportWorkspace() {
@@ -63,17 +52,19 @@ export function ReportWorkspace() {
   const [apiSectionDefs, setApiSectionDefs] = useState<Array<{ id: string; title: string; number: number }>>([]);
   const [targetMarkets, setTargetMarkets] = useState<string[]>([]);
 
-  const [sections, setSections] = useState<ReportSection[]>(initialReportSections);
+  // Starts empty (not the mock scaffold) so no fabricated section content, owner,
+  // or reviewer names are ever shown, even briefly, before the real fetch resolves.
+  const [sections, setSections] = useState<ReportSection[]>([]);
+  const [sectionsLoading, setSectionsLoading] = useState(true);
   const [dataAssets, setDataAssets] = useState<DataAsset[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [currentSection, setCurrentSection] = useState<string>(sections[0]?.id ?? '');
+  const [currentSection, setCurrentSection] = useState<string>('');
   const [scrollTrigger, setScrollTrigger] = useState(0);
 
   const navigateToSection = (sectionId: string) => {
     setCurrentSection(sectionId);
     setScrollTrigger(n => n + 1);
   };
-  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>(mockAuditLog);
   const [showDeviations, setShowDeviations] = useState(false);
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
   const [showAmendmentsList, setShowAmendmentsList] = useState(false);
@@ -207,32 +198,35 @@ export function ReportWorkspace() {
         } as any;
       };
 
-      if (Array.isArray(savedSections) && savedSections.length > 0) {
-        // Full section array already in DB — filter to templateList IDs to drop stale/repurposed sections
-        setSections(
-          savedSections
-            .filter((section: ReportSection) => templateIds.has(section.id))
-            .map((section: ReportSection) => {
-              const scaffold = initialReportSections.find((s: any) => s.id === section.id);
-              return {
-                ...(scaffold ?? {}),
-                ...section,
-                roles,
-                comments: section.comments ?? [],
-                approvals: section.approvals ?? [],
-                insertedAssets: section.insertedAssets ?? [],
-                validationFindings: section.validationFindings ?? [],
-                completenessElements: section.completenessElements?.length ? section.completenessElements : (scaffold?.completenessElements ?? []),
-                guidance: section.guidance ?? getGuidanceForSection(section.id),
-              };
-            })
-        );
-      } else {
-        setSections(templateList.map(buildSection));
-      }
+      const finalSections: ReportSection[] =
+        Array.isArray(savedSections) && savedSections.length > 0
+          ? savedSections
+              // Full section array already in DB — filter to templateList IDs to drop stale/repurposed sections
+              .filter((section: ReportSection) => templateIds.has(section.id))
+              .map((section: ReportSection) => {
+                const scaffold = initialReportSections.find((s: any) => s.id === section.id);
+                return {
+                  ...(scaffold ?? {}),
+                  ...section,
+                  roles,
+                  comments: section.comments ?? [],
+                  approvals: section.approvals ?? [],
+                  insertedAssets: section.insertedAssets ?? [],
+                  validationFindings: section.validationFindings ?? [],
+                  completenessElements: section.completenessElements?.length ? section.completenessElements : (scaffold?.completenessElements ?? []),
+                  guidance: section.guidance ?? getGuidanceForSection(section.id),
+                };
+              })
+          : templateList.map(buildSection);
+
+      setSections(finalSections);
+      setCurrentSection(prev => prev || finalSections[0]?.id || '');
+      setSectionsLoading(false);
 
       runCrossConsistencyCheck();
-    }).catch(() => {});
+    }).catch(() => {
+      setSectionsLoading(false);
+    });
   }, [projectId]);
 
   // Re-run AI analysis on all sections when the Shell Refresh button is clicked
@@ -311,37 +305,44 @@ export function ReportWorkspace() {
 
   const currentUser: User = userFromRole(rawRoles, 'Medical Writer');
 
-  // Auto-generate AI draft when section is opened for the first time
+  const [generatingSectionId, setGeneratingSectionId] = useState<string | null>(null);
+  // Guards against duplicate concurrent generation requests for the same section
+  // (e.g. React StrictMode's double-invoked effect in dev).
+  const aiDraftRequestedRef = useRef<Set<string>>(new Set());
+
+  // Auto-generate an AI draft (real backend AI call) when a section is opened
+  // for the first time and has no content yet.
   useEffect(() => {
     const section = sections.find(s => s.id === currentSection);
-    if (section && !section.aiDraftGenerated && !section.content && !section.userEdited) {
-      // Generate AI draft
-      const draft = generateSectionDraft(
-        section,
-        mockProtocolSections,
-        dataAssets,
-        uploadedFiles,
-        sections
-      );
+    if (!section || section.aiDraftGenerated || section.content || section.userEdited) return;
+    if (aiDraftRequestedRef.current.has(section.id)) return;
+    aiDraftRequestedRef.current.add(section.id);
 
-      if (draft) {
-        setSections(sections.map(s => 
-          s.id === currentSection 
-            ? { ...s, aiDraft: draft, aiDraftGenerated: true }
-            : s
+    setGeneratingSectionId(section.id);
+    fetch(apiBase + '/api/projects/' + projectId + '/generate-report-section', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sectionId: section.id, sectionTitle: section.title, sectionNumber: section.order }),
+    })
+      .then(async r => {
+        const body = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(body?.message || `AI draft generation failed (HTTP ${r.status})`);
+        return body as { sectionId: string; content: string };
+      })
+      .then(result => {
+        if (!result?.content) return;
+        setSections(prev => prev.map(s =>
+          s.id === section.id ? { ...s, aiDraft: result.content, aiDraftGenerated: true } : s
         ));
-
-        // Add to audit log
-        const newEntry: AuditLogEntry = createAuditEntry(
-          'Content',
-          'AI-Assisted Draft Generated',
-          'System',
-          `AI generated draft content for ${section.title}`
-        );
-        setAuditLog([...auditLog, newEntry]);
-      }
-    }
-  }, [currentSection, sections, dataAssets, uploadedFiles, auditLog]);
+      })
+      .catch(err => {
+        console.error('AI draft generation failed', err);
+        setSections(prev => prev.map(s => s.id === section.id ? { ...s, aiDraftGenerated: true } : s));
+      })
+      .finally(() => {
+        setGeneratingSectionId(current => (current === section.id ? null : current));
+      });
+  }, [currentSection, sections, projectId]);
 
   const handleSectionUpdate = (sectionId: string, content: string) => {
     const section = sections.find(s => s.id === sectionId);
@@ -365,18 +366,13 @@ export function ReportWorkspace() {
         : s
     ));
     
-    // Add to audit log
     const hadAiDraft = section?.aiDraft;
-    
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'Content',
-      hadAiDraft ? 'Content Added with AI Assistance' : 'Content Edited',
-      currentUser,
-      hadAiDraft 
-        ? `Content added by ${currentUser.name} with AI assistance`
-        : 'Updated section content'
+    logReportAuditEvent(
+      projectId,
+      'note',
+      hadAiDraft ? 'Content added with AI assistance' : 'Content edited',
+      hadAiDraft ? `Content added by ${currentUser.name} with AI assistance` : 'Updated section content'
     );
-    setAuditLog([...auditLog, newEntry]);
     saveReportSectionState(sectionId, { content, userEdited: true });
   };
 
@@ -390,31 +386,19 @@ export function ReportWorkspace() {
           : s
       ));
       saveReportSectionState(sectionId, { content: acceptedContent, userEdited: true });
-
-      // Add to audit log
-      const newEntry: AuditLogEntry = createAuditEntry(
-        'Content',
-        'AI Draft Accepted',
-        currentUser,
-        `Content accepted by ${currentUser.name} with AI assistance`
-      );
-      setAuditLog([...auditLog, newEntry]);
+      logReportAuditEvent(projectId, 'note', 'AI draft accepted', `Content accepted by ${currentUser.name} with AI assistance`);
     }
   };
 
   const handleDismissAIDraft = (sectionId: string) => {
-    setSections(sections.map(s => 
+    setSections(sections.map(s =>
       s.id === sectionId ? { ...s, aiDraft: undefined } : s
     ));
-
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'Content',
-      'AI Draft Dismissed',
-      currentUser,
-      `AI draft dismissed by ${currentUser.name}`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    // The AI draft was already persisted as `content` server-side when generated
+    // (generate-report-section writes it immediately) — clear it so a dismissed
+    // draft doesn't silently reappear as real content on the next page load.
+    saveReportSectionState(sectionId, { content: '' });
+    logReportAuditEvent(projectId, 'note', 'AI draft dismissed', `AI draft dismissed by ${currentUser.name}`);
   };
 
   const handleAssetToggle = (assetId: string) => {
@@ -422,16 +406,9 @@ export function ReportWorkspace() {
       asset.id === assetId ? { ...asset, selected: !asset.selected } : asset
     ));
     
-    // Add to audit log
     const asset = dataAssets.find(a => a.id === assetId);
     if (asset) {
-      const newEntry: AuditLogEntry = createAuditEntry(
-        'Content',
-        asset.selected ? 'Asset Removed' : 'Asset Added',
-        currentUser,
-        `${asset.selected ? 'Removed' : 'Added'} ${asset.name}`
-      );
-      setAuditLog([...auditLog, newEntry]);
+      logReportAuditEvent(projectId, 'note', asset.selected ? 'Asset removed' : 'Asset added', `${asset.selected ? 'Removed' : 'Added'} ${asset.name}`);
     }
   };
 
@@ -451,14 +428,7 @@ export function ReportWorkspace() {
       s.id === sectionId ? { ...s, comments: [...s.comments, newComment] } : s
     ));
     
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'Review',
-      'Comment Added',
-      currentUser,
-      text
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'note', 'Comment added', text);
   };
 
   const handleInsertAsset = (sectionId: string, assetId: string) => {
@@ -489,14 +459,7 @@ export function ReportWorkspace() {
         : s
     ));
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'Content',
-      'Data Asset Inserted',
-      currentUser,
-      `Inserted ${asset.name} into ${section.title}`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'note', 'Data asset inserted', `Inserted ${asset.name} into ${section.title}`);
 
     // Run validation after insertion
     const updatedSection = { 
@@ -532,14 +495,7 @@ export function ReportWorkspace() {
         : s
     ));
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Data Asset Removed',
-      currentUser,
-      `Removed ${asset.name} from ${section.title}`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'note', 'Data asset removed', `Removed ${asset.name} from ${section.title}`);
 
     // Run validation after removal
     const updatedSection = {
@@ -575,14 +531,7 @@ export function ReportWorkspace() {
         : s
     ));
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'AI Narrative Accepted',
-      currentUser,
-      `Accepted AI-generated narrative for inserted asset`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'note', 'AI narrative accepted', 'Accepted AI-generated narrative for inserted asset');
   };
 
   const handleEditNarrative = (sectionId: string, insertedAssetId: string, text: string) => {
@@ -599,14 +548,7 @@ export function ReportWorkspace() {
         : s
     ));
 
-    // Add to audit log (only once when user finishes editing)
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Asset Narrative Edited',
-      currentUser,
-      `Edited narrative text for inserted asset`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'note', 'Asset narrative edited', 'Edited narrative text for inserted asset');
   };
 
   const getSectionStatus = (section: ReportSection): 'complete' | 'in-progress' | 'empty' => {
@@ -682,14 +624,7 @@ export function ReportWorkspace() {
     // Persist so approval survives page reload
     saveReportSectionState(sectionId, { approvals: updatedApprovals, state: newState });
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Section Approved',
-      currentUser,
-      comment || 'Section approved'
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section approved', comment || 'Section approved');
   };
 
   const handleRejectSection = (sectionId: string, approvalId: string, comment: string) => {
@@ -710,14 +645,7 @@ export function ReportWorkspace() {
     // Persist so rejection survives page reload
     saveReportSectionState(sectionId, { approvals: updatedApprovals, state: 'draft' });
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Section Rejected',
-      currentUser,
-      comment
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section rejected', comment);
   };
 
   const handleReviewDeviation = (deviationId: string, status: 'approved' | 'requires-amendment', comment: string) => {
@@ -727,14 +655,7 @@ export function ReportWorkspace() {
         : d
     ));
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'protocol',
-      status === 'approved' ? 'Deviation Approved' : 'Deviation Amendment Requested',
-      currentUser,
-      comment
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'lifecycle_transition', status === 'approved' ? 'Deviation approved' : 'Deviation amendment requested', comment);
   };
 
   const handleMarkSectionReady = (sectionId: string) => {
@@ -751,14 +672,7 @@ export function ReportWorkspace() {
     // Persist so ready-state survives page reload
     saveReportSectionState(sectionId, { state: 'under-review' });
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Section Marked Ready',
-      currentUser,
-      `Section "${section.title}" marked as ready for review`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section marked ready', `Section "${section.title}" marked as ready for review`);
   };
 
   const handleMoveSectionToDraft = (sectionId: string) => {
@@ -775,14 +689,7 @@ export function ReportWorkspace() {
     // Persist so draft-state survives page reload
     saveReportSectionState(sectionId, { state: 'draft' });
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Section Moved to Draft',
-      currentUser,
-      `Section "${section.title}" moved back to draft for edits`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section moved to draft', `Section "${section.title}" moved back to draft for edits`);
   };
 
   const handleEditSection = (sectionId: string) => {
@@ -804,14 +711,7 @@ export function ReportWorkspace() {
     // Persist so unlocked-state survives page reload
     saveReportSectionState(sectionId, { state: 'draft' });
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'report',
-      'Section Unlocked for Editing',
-      currentUser,
-      `Section "${section.title}" unlocked and moved to draft state for editing`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section unlocked for editing', `Section "${section.title}" unlocked and moved to draft state for editing`);
   };
 
   const handleCreateAmendment = (amendment: Omit<ProtocolAmendment, 'id' | 'createdAt' | 'createdBy'>) => {
@@ -824,14 +724,7 @@ export function ReportWorkspace() {
 
     setAmendments([...amendments, newAmendment]);
 
-    // Add to audit log
-    const newEntry: AuditLogEntry = createAuditEntry(
-      'protocol',
-      'Protocol Amendment Created',
-      currentUser,
-      `Created ${amendment.amendmentNumber}: ${amendment.protocolSection}`
-    );
-    setAuditLog([...auditLog, newEntry]);
+    logReportAuditEvent(projectId, 'note', 'Protocol amendment created', `Created ${amendment.amendmentNumber}: ${amendment.protocolSection}`);
   };
 
   const handleVerifyCompletenessElement = (elementId: string) => {
@@ -849,16 +742,9 @@ export function ReportWorkspace() {
       ),
     });
 
-    // Add to audit log
     const element = completenessStatus.elements.find(el => el.id === elementId);
     if (element) {
-      const newEntry: AuditLogEntry = createAuditEntry(
-        'report',
-        'Completeness Element Verified',
-        currentUser,
-        `Verified ISO 14155:2020 requirement: ${element.title}`
-      );
-      setAuditLog([...auditLog, newEntry]);
+      logReportAuditEvent(projectId, 'note', 'Completeness element verified', `Verified ISO 14155:2020 requirement: ${element.title}`);
     }
   };
 
@@ -912,6 +798,18 @@ export function ReportWorkspace() {
     }
     return scaffold?.guidance ?? { requiredElements: { reference: marketNote + samdNote, items: [], mustAlignWith: '' }, commonPitfalls: [], referencedDocuments: [] };
   };
+
+  if (sectionsLoading) {
+    return (
+      <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
+        <MilestoneBanner projectId={projectId!} currentStepId="report-make" />
+        <div className="flex-1 flex items-center justify-center gap-3 text-slate-500">
+          <div className="w-6 h-6 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin" />
+          <span className="text-sm">Loading report…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
@@ -968,6 +866,7 @@ export function ReportWorkspace() {
             onAddComment={handleAddComment}
             onAcceptAIDraft={handleAcceptAIDraft}
             onDismissAIDraft={handleDismissAIDraft}
+            generatingSectionId={generatingSectionId}
             onInsertAsset={handleInsertAsset}
             onRemoveAsset={handleRemoveAsset}
             onAcceptNarrative={handleAcceptNarrative}
@@ -984,14 +883,7 @@ export function ReportWorkspace() {
                   : s
               ));
               
-              // Add to audit log
-              const newEntry: AuditLogEntry = createAuditEntry(
-                'report',
-                'Comment Resolved',
-                currentUser,
-                `Comment marked as resolved`
-              );
-              setAuditLog([...auditLog, newEntry]);
+              logReportAuditEvent(projectId, 'note', 'Comment resolved', 'Comment marked as resolved');
             }}
             onApproveSection={handleApproveSection}
             onRejectSection={handleRejectSection}

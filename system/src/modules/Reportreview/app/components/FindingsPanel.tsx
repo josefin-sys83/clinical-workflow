@@ -17,6 +17,8 @@ interface FindingsPanelProps {
   onAddReply?: (commentId: string, replyText: string) => Promise<void>;
   /** The currently visible section id — used to label the comment modal. */
   activeSectionTitle?: string;
+  /** Name of the person who owns report section content, derived from project roles. */
+  sectionOwnerName?: string;
 }
 
 export function FindingsPanel({
@@ -29,6 +31,7 @@ export function FindingsPanel({
   onAddComment,
   onAddReply,
   activeSectionTitle,
+  sectionOwnerName,
 }: FindingsPanelProps) {
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
@@ -171,7 +174,7 @@ export function FindingsPanel({
 
                 <div className="flex items-center justify-between text-xs text-neutral-600 mb-3">
                   <span>Section owner</span>
-                  <span className="font-medium">Dr. Marcus Rivera</span>
+                  <span className="font-medium">{sectionOwnerName || 'Unassigned'}</span>
                 </div>
 
                 <div className="flex gap-2">

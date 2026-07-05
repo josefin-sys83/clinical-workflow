@@ -74,38 +74,61 @@ export class ProjectsService {
     // If data is provided, merge with existing data instead of overwriting.
     // Deep-merge one level so nested keys like `synopsis` are merged rather than replaced.
     if (patch.data) {
-      const existing = await this.get(id);
-      const existingData = existing.data || {};
-      const mergedData: any = { ...existingData };
-      for (const key of Object.keys(patch.data)) {
-        if (
-          patch.data[key] !== null &&
-          typeof patch.data[key] === 'object' &&
-          !Array.isArray(patch.data[key]) &&
-          existingData[key] !== null &&
-          typeof existingData[key] === 'object' &&
-          !Array.isArray(existingData[key])
-        ) {
-          mergedData[key] = { ...existingData[key], ...patch.data[key] };
-        } else {
-          mergedData[key] = patch.data[key];
+      // Read-modify-write on `data` is not atomic by itself: two concurrent PATCH
+      // requests could both read the same snapshot and the later write would
+      // silently discard the earlier one's changes. `SELECT ... FOR UPDATE` takes
+      // a row lock for the transaction, so a second concurrent call blocks until
+      // the first commits and then reads its already-merged result — serializing
+      // updates to the same project without changing the merge semantics above.
+      const client = await getPool().connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `select data from projects where id=$1 for update`,
+          [id],
+        );
+        if (!rows[0]) {
+          await client.query('ROLLBACK');
+          throw new NotFoundException('Project not found');
         }
+        const existingData = rows[0].data || {};
+        const mergedData: any = { ...existingData };
+        for (const key of Object.keys(patch.data)) {
+          if (
+            patch.data[key] !== null &&
+            typeof patch.data[key] === 'object' &&
+            !Array.isArray(patch.data[key]) &&
+            existingData[key] !== null &&
+            typeof existingData[key] === 'object' &&
+            !Array.isArray(existingData[key])
+          ) {
+            mergedData[key] = { ...existingData[key], ...patch.data[key] };
+          } else {
+            mergedData[key] = patch.data[key];
+          }
+        }
+        await client.query(
+          `update projects set
+            name=coalesce($2,name),
+            description=coalesce($3,description),
+            data=$4,
+            updated_at=$5
+           where id=$1`,
+          [id, patch.name ?? null, patch.description ?? null, JSON.stringify(mergedData), now],
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
       }
-      await getPool().query(
-        `update projects set 
-          name=coalesce($2,name), 
-          description=coalesce($3,description),
-          data=$4,
-          updated_at=$5 
-         where id=$1`,
-        [id, patch.name ?? null, patch.description ?? null, JSON.stringify(mergedData), now],
-      );
     } else {
       await getPool().query(
-        `update projects set 
-          name=coalesce($2,name), 
+        `update projects set
+          name=coalesce($2,name),
           description=coalesce($3,description),
-          updated_at=$4 
+          updated_at=$4
          where id=$1`,
         [id, patch.name ?? null, patch.description ?? null, now],
       );

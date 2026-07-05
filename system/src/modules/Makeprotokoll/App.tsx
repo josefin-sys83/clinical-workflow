@@ -39,6 +39,7 @@ export default function App() {
   const [roles, setRoles] = React.useState<any[]>([]);
   const [protocol, setProtocol] = React.useState<any>(null);
   const [generatingProtocol, setGeneratingProtocol] = React.useState(false);
+  const [protocolError, setProtocolError] = React.useState<string | null>(null);
 const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
@@ -71,43 +72,73 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   }, [apiBase, projectId]);
 
 
-  React.useEffect(() => {
+  const protocolLoadInFlightRef = useRef<string | null>(null);
+
+  const loadOrGenerateProtocol = React.useCallback(() => {
     if (!projectId) return;
+    // Guards against duplicate concurrent generation runs (e.g. React StrictMode's
+    // double-invoked effect in dev), which doubles AI request volume and can trip
+    // Azure OpenAI rate limits hard enough to exhaust the callAI retry budget.
+    if (protocolLoadInFlightRef.current === projectId) return;
+    protocolLoadInFlightRef.current = projectId;
+    const clearInFlight = () => {
+      if (protocolLoadInFlightRef.current === projectId) protocolLoadInFlightRef.current = null;
+    };
+    setProtocolError(null);
     fetch(apiBase + '/api/projects/' + projectId)
       .then(r => r.json())
       .then(p => {
         if (p.data && p.data.projectData) setProjectData(p.data.projectData);
         if (p.data && p.data.roles) setRoles(p.data.roles);
-        if (p.data && p.data.protocol) {
+        if (p.data?.protocol?.sections?.length) {
           setProtocol(p.data.protocol);
           p.data.protocol.sections?.forEach((s: any) => {
             if (s.content && s.approvalStatus !== 'approved')
               analyzeSectionWithAI(s.title, s.content, s.id);
           });
           runSynopsisConsistencyCheck();
+          clearInFlight();
         } else {
           setGeneratingProtocol(true);
           fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol', { method: 'POST' })
-            .then(r => r.json())
-            .then(result => {
-              if (result) {
-                setProtocol(result);
-                fetch(apiBase + '/api/projects/' + projectId, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ data: { protocol: result } })
-                });
-                result.sections?.forEach((s: any) => {
-                  if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
-                });
-                runSynopsisConsistencyCheck();
-              }
+            .then(async r => {
+              const body = await r.json().catch(() => null);
+              if (!r.ok) throw new Error(body?.message || `Protocol generation failed (HTTP ${r.status})`);
+              if (!body?.sections?.length) throw new Error('Protocol generation returned no sections');
+              return body;
             })
-            .catch(() => {})
-            .finally(() => setGeneratingProtocol(false));
+            .then(result => {
+              setProtocol(result);
+              fetch(apiBase + '/api/projects/' + projectId, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: { protocol: result } })
+              });
+              result.sections?.forEach((s: any) => {
+                if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
+              });
+              runSynopsisConsistencyCheck();
+            })
+            .catch((err: any) => {
+              console.error('Protocol generation failed', err);
+              setProtocolError(err?.message || 'Protocol generation failed. Please try again.');
+            })
+            .finally(() => {
+              setGeneratingProtocol(false);
+              clearInFlight();
+            });
         }
       })
-      .catch(() => {});
+      .catch((err: any) => {
+        console.error('Failed to load project', err);
+        setProtocolError('Failed to load project data. Please refresh the page.');
+        clearInFlight();
+      });
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  React.useEffect(() => {
+    if (!projectId) return;
+    loadOrGenerateProtocol();
     fetchAmendments();
     fetch(apiBase + '/api/projects/' + projectId + '/milestones')
       .then(r => r.json())
@@ -542,275 +573,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     approvalStatus: s.approvalStatus || 'draft',
     approvedBy: s.approvedBy || '',
     approvedAt: s.approvedAt || '',
-  })) || [
-    { 
-      id: '1', 
-      number: '1', 
-      title: 'Protocol Overview', 
-      status: 'complete', 
-      owner: 'Dr. Sarah Chen', 
-      updated: '2026-02-05 14:32', 
-      comments: 3, 
-      aiGenerated: false, 
-      reviewStatus: null, 
-      locked: true,
-      reviewCycle: 3,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Principal Investigator',
-      issues: [],
-      requiredElements: [
-        { id: 're1-1', name: 'Protocol title and version', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.2.2', verifiedBy: 'Dr. Helena Schmidt', verifiedDate: '2026-02-05' },
-        { id: 're1-2', name: 'Sponsor identification and contact', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.2.2', verifiedBy: 'Dr. Helena Schmidt', verifiedDate: '2026-02-05' },
-        { id: 're1-3', name: 'Principal investigator details', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.2.2', verifiedBy: 'Dr. Helena Schmidt', verifiedDate: '2026-02-05' },
-        { id: 're1-4', name: 'Protocol signature page', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.2.2', verifiedBy: 'Dr. Helena Schmidt', verifiedDate: '2026-02-05' },
-      ]
-    },
-    { 
-      id: '2', 
-      number: '2', 
-      title: 'Study Rationale & Objectives', 
-      status: 'complete', 
-      owner: 'Dr. Sarah Chen', 
-      updated: '2026-02-05 16:18', 
-      comments: 7, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 2,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Principal Investigator',
-      issues: [
-        {
-          id: 'i2-1',
-          severity: 'warning',
-          subsection: 'Primary Objective',
-          description: 'Primary objective statement should explicitly reference the 12-month timepoint to align with Section 4.8 sample size calculation and endpoint timing in Section 4.6.',
-          reference: 'ISO 14155:2020 § 6.4 - Objectives must be clearly measurable with defined timepoints',
-          raisedBy: 'Dr. Thomas Weber (Reviewer)',
-          raisedDate: '2026-02-06 10:30',
-          status: 'open',
-          dueDate: '7 days'
-        }
-      ],
-      requiredElements: [
-        { id: 're2-1', name: 'Clinical need and rationale', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.3', verifiedBy: 'Dr. Thomas Weber', verifiedDate: '2026-02-05' },
-        { id: 're2-2', name: 'Primary objective with measurable endpoint', status: 'partial' as const, reference: 'ISO 14155:2020 § 6.4' },
-        { id: 're2-3', name: 'Secondary objectives', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.4', verifiedBy: 'Dr. Thomas Weber', verifiedDate: '2026-02-05' },
-        { id: 're2-4', name: 'Risk-benefit assessment', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.3', verifiedBy: 'Dr. Thomas Weber', verifiedDate: '2026-02-05' },
-      ]
-    },
-    { 
-      id: '3', 
-      number: '3', 
-      title: 'Device Description & Intended Clinical Use', 
-      status: 'complete', 
-      owner: 'Dr. Marcus Rivera', 
-      updated: '2026-02-06 09:45', 
-      comments: 2, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 2,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Medical Device Specialist',
-      issues: [
-        {
-          id: 'i3-1',
-          severity: 'warning',
-          subsection: 'Clinical Context & User Environment',
-          description: 'Device classification statement present but rationale for Class III determination under Rule 8 should be expanded. Include explicit reference to cardiac contact duration and implantable nature.',
-          reference: 'EU MDR 2017/745 Annex VIII Rule 8 - Implantable devices in contact with the heart',
-          raisedBy: 'System Validation',
-          raisedDate: '2026-02-06 12:15',
-          status: 'open',
-          dueDate: '5 days'
-        }
-      ],
-      requiredElements: [
-        { id: 're3-1', name: 'Device name and manufacturer', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.5.2', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-06' },
-        { id: 're3-2', name: 'Device classification per EU MDR', status: 'partial' as const, reference: 'EU MDR 2017/745 Article 51' },
-        { id: 're3-3', name: 'Intended purpose and indications', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.5.2', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-06' },
-        { id: 're3-4', name: 'Device specifications and variants', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.5.2', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-06' },
-      ]
-    },
-    { 
-      id: '4', 
-      number: '4', 
-      title: 'Study Design', 
-      status: 'complete', 
-      owner: 'Dr. Sarah Chen', 
-      updated: '2026-02-06 11:20', 
-      comments: 5, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 2,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Principal Investigator',
-      issues: [],
-      requiredElements: [
-        { id: 're4-1', name: 'Study type and design', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.6.2', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-06' },
-        { id: 're4-2', name: 'Study duration and timelines', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.6.2', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-06' },
-        { id: 're4-3', name: 'Number of subjects and sites', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.6.2', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-06' },
-        { id: 're4-4', name: 'Randomization and blinding (if applicable)', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.6.2', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-06' },
-      ]
-    },
-    { 
-      id: '5', 
-      number: '5', 
-      title: 'Subject Eligibility Criteria', 
-      status: 'draft', 
-      owner: 'Dr. Marcus Rivera', 
-      updated: '2026-02-07 13:55', 
-      comments: 12, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 1,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Medical Device Specialist',
-      issues: [
-        {
-          id: 'i5-1',
-          severity: 'blocker',
-          subsection: 'Inclusion Criteria & Sample Size Alignment',
-          description: 'Cross-section consistency check failed: Section 4.8 specifies N=120 target enrollment with 6-month enrollment period. Current inclusion criteria (age ≥65, severe AS, intermediate risk, anatomical constraints) may yield insufficient recruitment pool across 8 sites. Provide recruitment feasibility analysis or adjust criteria/timeline.',
-          reference: 'Conflicts with Section 4.4 (Study Scope) and Section 4.8 (Sample Size). ISO 14155:2020 § 6.6 requires feasible eligibility criteria.',
-          raisedBy: 'System Consistency Check',
-          raisedDate: '2026-02-07 14:20',
-          status: 'open',
-          dueDate: '2 days'
-        },
-        {
-          id: 'i5-2',
-          severity: 'warning',
-          subsection: 'Exclusion Criteria',
-          description: 'Exclusion criterion "LVEF <30%" should be cross-referenced with device Instructions for Use (IFU). Verify this threshold matches IFU contraindications to ensure protocol-IFU consistency.',
-          reference: 'EU MDR Article 62(4)(a) - Protocol must align with intended use and contraindications',
-          raisedBy: 'Dr. Thomas Weber (Reviewer)',
-          raisedDate: '2026-02-07 15:45',
-          status: 'open',
-          dueDate: '4 days'
-        }
-      ],
-      requiredElements: [
-        { id: 're5-1', name: 'Inclusion criteria', status: 'partial' as const, reference: 'ISO 14155:2020 § 6.6.3' },
-        { id: 're5-2', name: 'Exclusion criteria', status: 'partial' as const, reference: 'ISO 14155:2020 § 6.6.3' },
-        { id: 're5-3', name: 'Recruitment feasibility assessment', status: 'missing' as const, reference: 'ISO 14155:2020 § 6.6.3' },
-        { id: 're5-4', name: 'Screening and enrollment procedures', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.6.3', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-07' },
-      ]
-    },
-    { 
-      id: '6', 
-      number: '6', 
-      title: 'Study Procedures & Assessments', 
-      status: 'draft', 
-      owner: 'Dr. Elena Kowalski', 
-      updated: '2026-02-07 16:10', 
-      comments: 8, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 1,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Clinical Operations Lead',
-      issues: [
-        {
-          id: 'i6-1',
-          severity: 'blocker',
-          subsection: 'Assessment Timing & Endpoint Windows',
-          description: 'Primary endpoint defined as "12 months" in Section 4.2, but assessment window not specified here. Define visit window (e.g., 12 months ±14 days) and specify how assessments outside window will be handled in statistical analysis.',
-          reference: 'Conflicts with Section 4.2 (Objectives) and Section 4.8 (Statistical Considerations). ISO 14155:2020 § 6.8 requires clear assessment timing.',
-          raisedBy: 'System Consistency Check',
-          raisedDate: '2026-02-07 17:30',
-          status: 'open',
-          dueDate: '3 days'
-        }
-      ],
-      requiredElements: [
-        { id: 're6-1', name: 'Schedule of assessments (visit timeline)', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.8', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-07' },
-        { id: 're6-2', name: 'Visit windows and tolerances', status: 'missing' as const, reference: 'ISO 14155:2020 § 6.8' },
-        { id: 're6-3', name: 'Clinical assessments per visit', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.8', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-07' },
-        { id: 're6-4', name: 'Laboratory and imaging procedures', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.8', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-07' },
-      ]
-    },
-    { 
-      id: '7', 
-      number: '7', 
-      title: 'Safety Monitoring & Reporting', 
-      status: 'draft', 
-      owner: 'Dr. Marcus Rivera', 
-      updated: '2026-02-08 08:22', 
-      comments: 4, 
-      aiGenerated: false, 
-      reviewStatus: null,
-      reviewCycle: 1,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Medical Device Specialist',
-      issues: [],
-      requiredElements: [
-        { id: 're7-1', name: 'Adverse event definitions (per ISO 14155)', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.9', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-08' },
-        { id: 're7-2', name: 'Serious adverse event reporting timelines', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.9', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-08' },
-        { id: 're7-3', name: 'Data Safety Monitoring Board (DSMB) charter', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.9', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-08' },
-        { id: 're7-4', name: 'Stopping rules and criteria', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.9', verifiedBy: 'Dr. Marcus Rivera', verifiedDate: '2026-02-08' },
-      ]
-    },
-    { 
-      id: '8', 
-      number: '8', 
-      title: 'Statistical Considerations', 
-      status: 'draft', 
-      owner: 'Dr. Elena Kowalski', 
-      updated: '2026-02-08 10:15', 
-      comments: 0, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 1,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Clinical Operations Lead',
-      issues: [],
-      requiredElements: [
-        { id: 're8-1', name: 'Sample size calculation with justification', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.10', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-08' },
-        { id: 're8-2', name: 'Statistical analysis plan overview', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.10', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-08' },
-        { id: 're8-3', name: 'Handling of missing data', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.10', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-08' },
-        { id: 're8-4', name: 'Interim analysis plan (if applicable)', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.10', verifiedBy: 'Dr. Elena Kowalski', verifiedDate: '2026-02-08' },
-      ]
-    },
-    { 
-      id: '9', 
-      number: '9', 
-      title: 'Ethics & Regulatory Considerations', 
-      status: 'draft', 
-      owner: 'Dr. Sarah Chen', 
-      updated: '2026-02-08 11:45', 
-      comments: 2, 
-      aiGenerated: true, 
-      reviewStatus: null,
-      reviewCycle: 1,
-      reviewer: 'Dr. Thomas Weber',
-      approver: 'Dr. Helena Schmidt',
-      approverRole: 'VP Clinical Affairs',
-      ownerRole: 'Principal Investigator',
-      issues: [],
-      requiredElements: [
-        { id: 're9-1', name: 'Ethics committee approval plan', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.12', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-08' },
-        { id: 're9-2', name: 'Informed consent process', status: 'complete' as const, reference: 'ISO 14155:2020 § 6.12', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-08' },
-        { id: 're9-3', name: 'Data protection and confidentiality', status: 'complete' as const, reference: 'EU MDR Article 71 / GDPR', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-08' },
-        { id: 're9-4', name: 'Regulatory authority notification strategy', status: 'complete' as const, reference: 'EU MDR Article 62', verifiedBy: 'Dr. Sarah Chen', verifiedDate: '2026-02-08' },
-      ]
-    },
-  ];
+  })) || [];
 
   // Helper function to get section status visualization
   const getSectionStatusIcon = (section: typeof protocolSections[0]) => {
@@ -898,7 +661,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     count + (section.issues?.filter(i => i.severity === 'warning' && i.status === 'open').length || 0), 0
   );
   const allOpenIssuesCount = totalBlockers + totalWarnings;
-  const allSectionsComplete = protocolSections.every(s =>
+  const allSectionsComplete = protocolSections.length > 0 && protocolSections.every(s =>
     s.approvalStatus === 'approved' || s.status === 'approved'
   );
   const incompleteSections = protocolSections
@@ -1065,6 +828,21 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     </div>
                   )}
 
+                  {protocolError && (
+                    <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700 flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        <span>{protocolError}</span>
+                      </div>
+                      <button
+                        onClick={loadOrGenerateProtocol}
+                        className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded flex-shrink-0"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
                   {/* AI Disclaimer */}
                   <div className="p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
                     <div className="flex items-start gap-2">
@@ -1079,29 +857,49 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  {protocolSections.map((section) => (
-                    <ProtocolSection
-                      key={section.id}
-                      section={section}
-                      targetMarkets={projectData?.targetMarkets || []}
-                      deviceCategory={projectData?.deviceCategory || ''}
-                      isExpanded={expandedSections.includes(section.id)}
-                      onToggle={() => toggleSection(section.id)}
-                      onNavigate={() => navigateToSection(section.id)}
-                      ref={el => sectionRefs.current[section.id] = el}
-                      isHighlighted={highlightedSection === section.id}
-                      isReviewMode={isReviewMode}
-                      onSaved={(newContent, prevContent, reason) => handleSectionSaved(section.id, newContent, prevContent, reason)}
-                      onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
-                      onAddComment={(content, type) => handleAddComment(section.id, content, type)}
-                      onResolveComment={(commentId) => handleResolveComment(section.id, commentId)}
-                      onApprove={(comment) => handleApproveSection(section.id, comment)}
-                      onUnlock={(reason) => handleUnlockSection(section.id, reason)}
-                      deadline={protocolMakeDeadline}
-                    />
-                  ))}
-                </div>
+                {generatingProtocol ? (
+                  <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-500">
+                    <div className="w-8 h-8 border-2 border-purple-300 border-t-purple-600 rounded-full animate-spin" />
+                    <p className="text-sm">Generating protocol sections with AI...</p>
+                  </div>
+                ) : protocolSections.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-500 border border-dashed border-slate-300 rounded-lg">
+                    <FileText className="w-8 h-8 text-slate-300" />
+                    <p className="text-sm">
+                      {protocolError ? 'No protocol sections available.' : 'No protocol sections yet.'}
+                    </p>
+                    <button
+                      onClick={loadOrGenerateProtocol}
+                      className="mt-1 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-xs rounded transition-colors"
+                    >
+                      Generate Protocol
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {protocolSections.map((section) => (
+                      <ProtocolSection
+                        key={section.id}
+                        section={section}
+                        targetMarkets={projectData?.targetMarkets || []}
+                        deviceCategory={projectData?.deviceCategory || ''}
+                        isExpanded={expandedSections.includes(section.id)}
+                        onToggle={() => toggleSection(section.id)}
+                        onNavigate={() => navigateToSection(section.id)}
+                        ref={el => sectionRefs.current[section.id] = el}
+                        isHighlighted={highlightedSection === section.id}
+                        isReviewMode={isReviewMode}
+                        onSaved={(newContent, prevContent, reason) => handleSectionSaved(section.id, newContent, prevContent, reason)}
+                        onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
+                        onAddComment={(content, type) => handleAddComment(section.id, content, type)}
+                        onResolveComment={(commentId) => handleResolveComment(section.id, commentId)}
+                        onApprove={(comment) => handleApproveSection(section.id, comment)}
+                        onUnlock={(reason) => handleUnlockSection(section.id, reason)}
+                        deadline={protocolMakeDeadline}
+                      />
+                    ))}
+                  </div>
+                )}
 
                 {protocolSections.length > 0 && approvedCount > 0 ? (
                   <div className="mt-4 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg flex items-center gap-2">

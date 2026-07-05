@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ReviewHeader } from '../components/ReviewHeader';
 import { ReportContent } from '../components/ReportContent';
@@ -10,6 +10,15 @@ import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+
+// Derive a person from the project's assigned roles rather than hardcoding a name.
+// Mirrors the same helper in Makereport/pages/ReportWorkspace.tsx.
+function userFromRole(rawRoles: any[], roleTitle: string): { name: string; email: string; role: string } {
+  const role = rawRoles.find((r: any) => r.title === roleTitle);
+  const person = role?.assignedTo?.[0];
+  if (!person) return { name: 'Unassigned', email: '', role: roleTitle };
+  return { name: person.name, email: person.email || '', role: roleTitle };
+}
 
 export default function ReviewPage() {
   const navigate = useNavigate();
@@ -30,6 +39,13 @@ export default function ReviewPage() {
   const [reportData, setReportData] = useState<any>(null);
   const [comments, setComments] = useState<any[]>([]);
 
+  // The reviewer acting on this page — "Protocol Lead" is the reviewer role
+  // assigned when the report was created (see Makereport/ReportWorkspace.tsx).
+  const currentReviewer = useMemo(() => userFromRole(roles, 'Protocol Lead'), [roles]);
+  // Report content is owned by the "Medical Writer" role across all sections
+  // (there's no per-section owner in the current data model).
+  const sectionOwner = useMemo(() => userFromRole(roles, 'Medical Writer'), [roles]);
+
   const [activeSection, setActiveSection] = useState<string>('');
   const [showAuditTrail, setShowAuditTrail] = useState(false);
 
@@ -43,7 +59,13 @@ export default function ReviewPage() {
       setRoles(p.data?.roles || []);
       setReportData(p.data);
 
-      const savedSections = p.data?.report?.sections || {};
+      // report.sections is sometimes persisted as an array (see Makereport's
+      // saveReportSectionState) and sometimes as an id-keyed object — normalize
+      // to id-keyed so lookups below don't silently key off array indices.
+      const rawSections = p.data?.report?.sections || {};
+      const savedSections: Record<string, any> = Array.isArray(rawSections)
+        ? Object.fromEntries(rawSections.map((s: any) => [s.id, s]))
+        : rawSections;
       const titleMap: Record<string, string> = {};
       (sectionMeta?.sections || []).forEach((s: any) => { titleMap[s.id] = s.title; });
 
@@ -54,7 +76,7 @@ export default function ReviewPage() {
 
       const sectionList = Object.entries(savedSections).map(([id, data]: [string, any]) => ({
         id,
-        title: titleMap[id] || id,
+        title: titleMap[id] || data.title || id,
         // ReportContent/SectionOverview only distinguish 'approved' from everything else
         status: (data.state === 'approved' || data.state === 'locked') ? 'approved' : 'warning',
         content: data.content || '',
@@ -116,7 +138,7 @@ export default function ReviewPage() {
           const updatedFinding = {
             ...finding,
             acceptedRisk: true,
-            acceptedBy: 'Dr. Sarah Chen',
+            acceptedBy: currentReviewer.name,
             acceptedAt: new Date(),
           };
 
@@ -127,8 +149,8 @@ export default function ReviewPage() {
             domain: 'Review' as const,
             timestamp: `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
             action: `${finding.severity === 'blocker' ? 'Blocker' : 'Warning'} risk accepted for ${finding.location}`,
-            userBy: 'Dr. Sarah Chen',
-            userEmail: 'sarah.chen@medtech.com',
+            userBy: currentReviewer.name,
+            userEmail: currentReviewer.email,
             details: finding.description,
           };
           setAuditEntries((prev) => [auditEntry, ...prev]);
@@ -190,8 +212,8 @@ export default function ReviewPage() {
     if (!projectId || !activeSection || !content.trim()) return;
     const comment = {
       id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      author: 'Reviewer',
-      authorRole: 'Medical Writer',
+      author: currentReviewer.name,
+      authorRole: currentReviewer.role,
       content,
       type,
       timestamp: new Date().toISOString(),
@@ -233,7 +255,7 @@ export default function ReviewPage() {
     if (!projectId || !replyText.trim()) return;
     const reply = {
       id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      author: 'Reviewer',
+      author: currentReviewer.name,
       content: replyText,
       timestamp: new Date().toISOString(),
     };
@@ -276,6 +298,8 @@ export default function ReviewPage() {
               sections={sections}
               onSectionVisible={setActiveSection}
               findings={findings}
+              projectData={reportData?.projectData}
+              protocolId={reportData?.protocol?.protocolId}
             />
 
             <ReviewFooter
@@ -298,6 +322,7 @@ export default function ReviewPage() {
             onAddComment={handleAddComment}
             onAddReply={handleAddReply}
             activeSectionTitle={sections.find((s: any) => s.id === activeSection)?.title}
+            sectionOwnerName={sectionOwner.name}
           />
         </div>
       </div>

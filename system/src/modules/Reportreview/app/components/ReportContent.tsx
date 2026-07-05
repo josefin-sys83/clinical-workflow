@@ -7,9 +7,11 @@ interface ReportContentProps {
   sections: ReportSection[];
   onSectionVisible: (sectionId: string) => void;
   findings: RegulatoryFinding[];
+  projectData?: { projectName?: string; deviceName?: string };
+  protocolId?: string;
 }
 
-export function ReportContent({ sections, onSectionVisible, findings }: ReportContentProps) {
+export function ReportContent({ sections, onSectionVisible, findings, projectData, protocolId }: ReportContentProps) {
   const sectionRefs = useRef<{ [key: string]: HTMLElement | null }>({});
 
   useEffect(() => {
@@ -118,11 +120,13 @@ export function ReportContent({ sections, onSectionVisible, findings }: ReportCo
             Clinical Investigation Report
           </h1>
           <p className="text-neutral-600">
-            CARDIA-SUPPORT-2026 | Implantable Cardiac Support Device
+            {projectData?.projectName}{projectData?.deviceName ? ` | ${projectData.deviceName}` : ''}
           </p>
-          <p className="text-sm text-neutral-500 mt-1">
-            Protocol: CIP-2024-MED-0847 | Study Period: January 2024 – December 2025
-          </p>
+          {protocolId && (
+            <p className="text-sm text-neutral-500 mt-1">
+              Protocol: {protocolId}
+            </p>
+          )}
         </div>
 
         <div className="space-y-12">

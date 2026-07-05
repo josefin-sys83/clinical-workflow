@@ -47,7 +47,8 @@ export class AiService {
           { role: 'system', content: prompt.slice(0, delimiterIdx) },
           { role: 'user', content: prompt.slice(delimiterIdx + this.PROMPT_CONTENT_DELIMITER.length) },
         ];
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const response = await fetch(
           `${this.endpoint}openai/deployments/${this.deployment}/chat/completions?api-version=${this.apiVersion}`,
@@ -63,43 +64,63 @@ export class AiService {
           }
         );
         if (response.status === 429) {
-          if (attempt < 2) {
+          if (attempt < maxAttempts - 1) {
+            // Azure OpenAI sends Retry-After on 429s; honor it instead of guessing at a backoff.
+            const retryAfterHeader = response.headers.get('retry-after');
+            const retryAfterMs = retryAfterHeader ? parseFloat(retryAfterHeader) * 1000 : 2000 * (attempt + 1);
+            await new Promise(resolve => setTimeout(resolve, retryAfterMs));
+            continue;
+          }
+          console.error(`[AI] callAI exhausted all ${maxAttempts} retries after repeated 429 rate-limit responses, returning empty response`);
+          return '';
+        }
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => '');
+          if (attempt < maxAttempts - 1) {
             await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
             continue;
           }
-          console.error('[AI] callAI exhausted all retries, returning empty response');
+          console.error(`[AI] callAI exhausted all ${maxAttempts} retries, last response status ${response.status}: ${errorBody.slice(0, 500)}`);
           return '';
         }
         const data = await response.json();
         const content = data.choices?.[0]?.message?.content || '';
-        if (!content && attempt < 2) {
+        if (!content && attempt < maxAttempts - 1) {
           await new Promise(resolve => setTimeout(resolve, 2000));
           continue;
         }
         return content;
-      } catch {
-        if (attempt < 2) {
+      } catch (err) {
+        if (attempt < maxAttempts - 1) {
           await new Promise(resolve => setTimeout(resolve, 2000));
           continue;
         }
-        console.error('[AI] callAI exhausted all retries, returning empty response');
+        console.error(`[AI] callAI exhausted all ${maxAttempts} retries, last error:`, err);
         return '';
       }
     }
-    console.error('[AI] callAI exhausted all retries, returning empty response');
+    console.error(`[AI] callAI exhausted all ${maxAttempts} retries, returning empty response`);
     return '';
   }
 
-  async analyzeSynopsis(text: string): Promise<any[]> {
-    const prompt = `You are a MedTech regulatory expert. Analyze this clinical study synopsis and check each of the 14 criteria below.
+  async analyzeSynopsis(text: string, targetMarkets: string[] = []): Promise<any[]> {
+    const uniqueMarkets = Array.from(new Set((targetMarkets || []).filter(Boolean)));
+    const isMultiRegion = uniqueMarkets.length > 1;
+    const prompt = `You are a MedTech regulatory expert. Analyze this clinical study synopsis and check each of the 18 criteria below.
 
 Synopsis text:
 ${text.slice(0, 15000)}
 
-CRITERION DEFINITIONS:
-- Criterion 9 (Key assumptions documented): The synopsis must EXPLICITLY STATE the key assumptions underlying the study design and statistical analysis. Look for: assumed disease prevalence, assumed device performance (sensitivity/specificity), assumed screen failure rate, assumed image quality adequacy rate, assumed inter-rater agreement, assumed independence of observations, assumed demographic subgroup distribution. A synopsis that only implies these assumptions without stating them explicitly does NOT meet this criterion.
+Target markets for this investigation: ${uniqueMarkets.length ? uniqueMarkets.join(', ') : 'not specified'}
 
-Check these 14 criteria and return ONLY a JSON array. Each object MUST include the "id" field exactly as shown:
+CRITERION DEFINITIONS:
+- Criterion 9 (Key assumptions documented): The synopsis meets this criterion if it contains a clearly labeled section or statement (e.g. "Key Assumptions", "Assumptions") that explicitly lists one or more assumptions underlying the study design, methodology, or statistical analysis. The specific assumption topics vary by study type (e.g. diagnostic imaging, wearable monitoring, drug trials) and any explicitly stated assumptions relevant to the study should count — do not require a fixed set of topics. A synopsis that only implies assumptions without stating them, or has no assumptions section at all, does NOT meet this criterion.
+- Criterion 16 (Risk management approach indicated): The synopsis meets this criterion if it shows any awareness of investigation-specific residual risk considerations relevant to this study's population and/or device — e.g. a statement addressing risks particular to this investigation, how such risks will be identified, monitored, or mitigated, or a reference to a risk management process tailored to this study. A full risk management file or formal risk analysis is NOT required at synopsis stage — a general, study-specific indication that risk was considered is sufficient. Generic boilerplate that does not engage with the specific study, device, or population, or a synopsis with no risk-related statement at all, does NOT meet this criterion.
+- Criterion 17 (DMC/CEC oversight considered): The synopsis meets this criterion if it either (a) indicates that a Data Monitoring Committee (DMC/DSMB) and/or Clinical Events Committee (CEC), or an equivalent independent oversight body, is planned for the investigation, OR (b) explicitly states or clearly implies a rationale for not having such a committee (e.g. because the study is low-risk, single-site, of limited scale/duration, or oversight is handled through another named mechanism). This criterion should be marked as missing ONLY when oversight structure is not mentioned at all AND the synopsis indicates (or does not rule out) that the study is multi-site or otherwise higher-risk in nature. If oversight is unmentioned but the synopsis indicates a low-risk, single-site study, treat this as meeting the criterion by reasonable inference, and note the inference in the reason field.
+- Criterion 18 (Primary treatment-effect / estimand indicated): The synopsis meets this criterion if its primary endpoint description implies a clear treatment-effect definition — i.e. it is reasonably clear what is being measured, in whom (which population or subgroup), and under what conditions (e.g. timing, handling of intercurrent events such as dropout or rescue treatment), even if only implicitly stated. A full ISO 14155 Annex K estimand framework (explicit, separately labeled population/variable/intercurrent-event-strategy/population-summary specification) is NOT required at synopsis stage — only a precursor-level indication that the treatment effect of interest has been conceptually defined. A primary endpoint that is merely named with no indication of what/whom/under-what-conditions does NOT meet this criterion.
+- Criterion 19 (Multi-region practice variance considered): This criterion applies ONLY if more than one distinct target market/region is listed above. Based on the target markets listed above, this criterion is currently ${isMultiRegion ? 'APPLICABLE — evaluate it normally as complete or missing' : 'NOT APPLICABLE — you MUST set its status to "not-applicable" regardless of synopsis content, and give a brief reason such as "Only one target market specified."'}. When applicable, the synopsis meets this criterion if it shows any awareness that clinical practice, standard of care, or procedural/regulatory context may differ across the listed target markets — a full comparative analysis is not required, just an indication that such variance was considered for this study's specific markets.
+
+Check these 18 criteria and return ONLY a JSON array. Each object MUST include the "id" field exactly as shown:
 {"id":"2","criterion":"Study rationale defined","status":"complete"|"missing","reason":"..."}
 {"id":"3","criterion":"Study objectives stated","status":"complete"|"missing","reason":"..."}
 {"id":"4","criterion":"Target population described","status":"complete"|"missing","reason":"..."}
@@ -114,6 +135,10 @@ Check these 14 criteria and return ONLY a JSON array. Each object MUST include t
 {"id":"13","criterion":"No obvious feasibility blockers identified","status":"complete"|"missing","reason":"..."}
 {"id":"14","criterion":"Internal consistency verified","status":"complete"|"missing","reason":"..."}
 {"id":"15","criterion":"Key sections identifiable for downstream use","status":"complete"|"missing","reason":"..."}
+{"id":"16","criterion":"Risk management approach indicated","status":"complete"|"missing","reason":"..."}
+{"id":"17","criterion":"DMC/CEC oversight considered","status":"complete"|"missing","reason":"..."}
+{"id":"18","criterion":"Primary treatment-effect / estimand indicated","status":"complete"|"missing","reason":"..."}
+{"id":"19","criterion":"Multi-region practice variance considered","status":"complete"|"missing"|"not-applicable","reason":"..."}
 
 Return ONLY the JSON array. No markdown, no explanation.`;
 

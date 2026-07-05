@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
@@ -266,12 +266,15 @@ export class ProjectsController {
       text = file.buffer.toString('utf-8');
     }
     console.log('[analyzeSynopsis] extracted text length:', text.length, '| preview:', text.slice(0, 300));
-    const results = await this.ai.analyzeSynopsis(text);
+
+    const existing = await this.projects.get(projectId);
+    const existingSynopsis = existing?.data?.synopsis || {};
+    const targetMarkets = existing?.data?.projectData?.targetMarkets || existing?.data?.scope?.targetMarkets || [];
+
+    const results = await this.ai.analyzeSynopsis(text, targetMarkets);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
 
     // Persist extracted text and checklist so downstream steps (protocol generation, complexity) can use them
-    const existing = await this.projects.get(projectId);
-    const existingSynopsis = existing?.data?.synopsis || {};
     await this.projects.update(projectId, {
       data: {
         synopsis: {
@@ -313,7 +316,21 @@ export class ProjectsController {
     const deviceCategory = scope?.deviceCategory || '';
     const intendedUse = scope?.intendedUse || '';
 
-    const protocol = await this.ai.generateProtocol(projectData, roles, synopsisText, scope);
+    let protocol: any;
+    try {
+      protocol = await this.ai.generateProtocol(projectData, roles, synopsisText, scope);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[generateProtocol] failed for project ${projectId}:`, err);
+      await this.audit.create(projectId, {
+        type: 'protocol.generation_failed',
+        message: `Protocol generation failed: ${message}`,
+        stepId: 'protocol-make',
+        actorUserId: 'system',
+        metadataJson: JSON.stringify({ error: message, failedAt: new Date().toISOString() })
+      });
+      throw new InternalServerErrorException(`Protocol generation failed: ${message}`);
+    }
     if (!protocol) return null;
 
     // Batched (not all-at-once) to avoid tripping Azure OpenAI rate limits.
@@ -777,7 +794,13 @@ export class ProjectsController {
     const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
     const existingReport = project?.data?.report || {};
-    const existingSections = existingReport.sections || {};
+    // report.sections is sometimes persisted as an array rather than an id-keyed
+    // object — normalize so the spread below doesn't corrupt it into a hybrid
+    // array-plus-extra-key object.
+    const rawExistingSections = existingReport.sections || {};
+    const existingSections: Record<string, any> = Array.isArray(rawExistingSections)
+      ? Object.fromEntries(rawExistingSections.map((s: any) => [s.id, s]))
+      : rawExistingSections;
 
     // Same context resolution as generate-report
     const inferredFromRequirements: string[] = (scope?.requirements || [])
