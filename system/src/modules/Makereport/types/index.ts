@@ -28,15 +28,6 @@ export interface ValidationFinding {
   dueDate?: string; // ISO date string
 }
 
-export interface SectionApproval {
-  id: string;
-  sectionId: string;
-  approver: User;
-  status: 'pending' | 'approved' | 'rejected';
-  timestamp: string;
-  comment?: string;
-}
-
 export interface ProtocolDeviation {
   id: string;
   deviationType: 'major' | 'minor';
@@ -117,7 +108,6 @@ export interface ReportSection {
   aiDraftGenerated?: boolean;
   userEdited?: boolean;
   insertedAssets: InsertedAsset[];
-  approvals: SectionApproval[];
   linkedSAPSections?: string[];
   linkedProtocolSections?: string[];
   deviations?: ProtocolDeviation[];

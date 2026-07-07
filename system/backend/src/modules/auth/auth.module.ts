@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { RolesGuard } from './roles.guard';
+import { requireJwtSecret } from '../../common/require-jwt-secret';
 
 @Module({
   imports: [
@@ -14,7 +15,7 @@ import { RolesGuard } from './roles.guard';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET', 'dev-secret-change-me'),
+        secret: requireJwtSecret(config),
         signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN', '8h') },
       }),
     }),

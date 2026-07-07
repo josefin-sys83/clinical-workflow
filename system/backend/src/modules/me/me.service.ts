@@ -80,7 +80,13 @@ export type RequiredAction = {
 
 @Injectable()
 export class MeService {
-  async getActions(userId: string): Promise<RequiredAction[]> {
+  async getEmail(userId: string): Promise<string | null> {
+    const pool = getPool();
+    const { rows } = await pool.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [userId]);
+    return rows[0]?.email ?? null;
+  }
+
+  async getActions(userId: string, companyId?: string | null, isSuperadmin?: boolean): Promise<RequiredAction[]> {
     const pool = getPool();
 
     const { rows: userRows } = await pool.query<{ email: string }>(
@@ -90,13 +96,27 @@ export class MeService {
     if (!userRows[0]) return [];
     const userEmail = userRows[0].email.toLowerCase();
 
-    const { rows: projects } = await pool.query<{ id: string; name: string; data: any }>(
-      `SELECT id, name, data FROM projects WHERE status = 'active'`,
-    );
+    // Scoped by company_id (superadmins see across all companies, matching
+    // ProjectsService.list()) and selecting only data->'roles' instead of the full
+    // `data` blob — this endpoint is hit on every dashboard load, and `data` can carry
+    // MB-scale embedded content (protocol/report sections, base64 synopsis files) that
+    // has nothing to do with computing required actions.
+    const { rows: projects } = isSuperadmin
+      ? await pool.query<{ id: string; name: string; roles: any }>(
+          `SELECT id, name, data->'roles' AS roles FROM projects WHERE status = 'active'`,
+        )
+      : await pool.query<{ id: string; name: string; roles: any }>(
+          `SELECT id, name, data->'roles' AS roles FROM projects WHERE status = 'active' AND company_id = $1`,
+          [companyId ?? null],
+        );
 
-    const { rows: stepStateRows } = await pool.query<{ project_id: string; step_id: string; state: string }>(
-      `SELECT project_id, step_id, state FROM workflow_step_state`,
-    );
+    const projectIds = projects.map((p) => p.id);
+    const { rows: stepStateRows } = projectIds.length
+      ? await pool.query<{ project_id: string; step_id: string; state: string }>(
+          `SELECT project_id, step_id, state FROM workflow_step_state WHERE project_id = ANY($1::text[])`,
+          [projectIds],
+        )
+      : { rows: [] as { project_id: string; step_id: string; state: string }[] };
 
     const stateByKey = new Map<string, string>();
     for (const row of stepStateRows) {
@@ -108,7 +128,7 @@ export class MeService {
 
     for (const project of projects) {
       const roles: Array<{ title: string; assignedTo?: Array<{ email: string }> }> =
-        project.data?.roles ?? [];
+        project.roles ?? [];
 
       const userRoleTitles = roles
         .filter(r => r.assignedTo?.some(a => a.email?.toLowerCase() === userEmail))

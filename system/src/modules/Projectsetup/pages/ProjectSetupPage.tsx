@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Lock, CheckCircle2, Circle, Info, X, UserPlus, History, AlertCircle } from 'lucide-react';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { AuditLog } from '../components/AuditLog';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { LockedStateContainer } from '../components/LockedStateContainer';
@@ -266,7 +266,7 @@ export function ProjectSetupPage() {
       return;
     }
     setIsSaving(false);
-    transitionWorkflow({ projectId: projectId!, stepId: 'project-setup', to: 'approved' }).catch(() => {});
+    advanceWorkflowStep({ projectId: projectId!, stepId: 'project-setup', to: 'approved' });
     const current = parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0');
     if (current < 2) localStorage.setItem(`maxStep_${projectId}`, '2');
     navigate(`/projects/${projectId}/workflow/synopsis`);

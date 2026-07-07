@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { ProjectAccessGuard } from '../auth/project-access.guard';
+import { WorkflowActionRolesGuard } from './workflow-action-roles.guard';
 import { TransitionDto } from './dto';
 import { WorkflowService } from './workflow.service';
 
-// No auth guards — workflow endpoints are accessed by the same unauthenticated
-// frontend that calls /api/projects. JWT is not yet wired end-to-end.
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, ProjectAccessGuard)
 @ApiTags('workflow')
 @Controller('/api/projects/:projectId/workflow')
 export class WorkflowController {
@@ -16,6 +19,7 @@ export class WorkflowController {
   }
 
   @Post('/:stepId/transition')
+  @UseGuards(WorkflowActionRolesGuard)
   transition(
     @Param('projectId') projectId: string,
     @Param('stepId') stepId: string,

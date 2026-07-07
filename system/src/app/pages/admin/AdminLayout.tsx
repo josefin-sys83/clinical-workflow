@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Building2, ShieldCheck, LogOut, Users } from 'lucide-react';
-import { clearToken } from '@/shared/auth/token';
+import { logout } from '@/shared/auth/token';
 
 const NAV = [
   { label: 'Companies', href: '/admin/companies',  icon: Building2 },
@@ -12,7 +12,7 @@ export function AdminLayout() {
   const navigate = useNavigate();
 
   const handleLogout = () => {
-    clearToken();
+    void logout();
     navigate('/login');
   };
 

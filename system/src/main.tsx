@@ -4,6 +4,9 @@ import { PublicClientApplication } from '@azure/msal-browser';
 import { MsalProvider } from '@azure/msal-react';
 import App from './app/App.tsx';
 import './styles/index.css';
+import { installAuthFetch } from './shared/auth/installAuthFetch';
+
+installAuthFetch();
 
 const msalConfig = {
   auth: {

@@ -386,6 +386,7 @@ export function AmendmentFormPage() {
     if (!confirmingAs || !projectId) return;
     const signerName = confirmingAs === 'amendment-lead' ? protocolLeadName : clinicalVPName;
     const signerEmail = confirmingAs === 'amendment-lead' ? protocolLeadEmail : clinicalVPEmail;
+    const roleTitle   = confirmingAs === 'amendment-lead' ? protocolLeadTitle : clinicalVPTitle;
     const which = confirmingAs;
 
     setConfirmingAs(null);
@@ -399,6 +400,7 @@ export function AmendmentFormPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           role: which,
+          roleTitle,
           signerName,
           signerEmail,
           signerUserId: signerEmail || signerName,

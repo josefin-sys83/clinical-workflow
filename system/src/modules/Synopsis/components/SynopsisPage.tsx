@@ -3,7 +3,7 @@ import { CheckCircle2, Circle, MinusCircle, FileText, Upload, Lock, Sparkles, Al
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate, useParams } from 'react-router-dom';
 import { postAudit } from '@/shared/api/audit';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { theme } from '@/app/theme';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
@@ -167,7 +167,7 @@ export function SynopsisPage() {
       if (maxStep < 3) localStorage.setItem(`maxStep_${projectId}`, '3');
       await saveToBackend({ uploadedFileName, readinessChecklist, aiReviewComplete, synopsisStatus: 'completed' });
       await postAudit(projectId!, 'synopsis.step.completed', 'Synopsis step completed — all readiness criteria met', 'synopsis', 'unknown', { uploadedFileName, passedCriteria: readinessChecklist.filter(i => i.status === 'complete').length });
-      transitionWorkflow({ projectId: projectId!, stepId: 'synopsis', to: 'approved' }).catch(() => {});
+      advanceWorkflowStep({ projectId: projectId!, stepId: 'synopsis', to: 'approved' });
       navigate(`/projects/${projectId}/workflow/scope`);
     } else {
       alert('Please complete all readiness checklist items before proceeding.');

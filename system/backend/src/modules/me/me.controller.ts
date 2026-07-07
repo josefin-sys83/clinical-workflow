@@ -11,13 +11,14 @@ export class MeController {
   constructor(private readonly meService: MeService) {}
 
   @Get()
-  getMe(@Req() req: any) {
+  async getMe(@Req() req: any) {
     const u = req.user;
-    return { id: u.userId, name: u.name, roles: u.roles, company_id: u.companyId ?? null };
+    const email = await this.meService.getEmail(u.userId);
+    return { id: u.userId, name: u.name, email, roles: u.roles, company_id: u.companyId ?? null };
   }
 
   @Get('actions')
   getActions(@Req() req: any) {
-    return this.meService.getActions(req.user.userId);
+    return this.meService.getActions(req.user.userId, req.user.companyId, req.user.isSuperadmin);
   }
 }

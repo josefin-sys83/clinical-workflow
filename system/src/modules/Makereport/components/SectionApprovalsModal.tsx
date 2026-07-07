@@ -1,238 +1,76 @@
-import { X, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import { SectionApproval, User } from '../types';
+import { useState } from 'react';
 
 interface SectionApprovalsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  sectionNumber: string;
   sectionTitle: string;
-  approvals: SectionApproval[];
-  currentUser: User;
-  onApprove: (approvalId: string, comment?: string) => void;
-  onReject: (approvalId: string, comment: string) => void;
+  requiredApproverName?: string;
+  reviewerName?: string;
+  onApprove: (comment: string) => Promise<void> | void;
 }
 
 export function SectionApprovalsModal({
   isOpen,
   onClose,
+  sectionNumber,
   sectionTitle,
-  approvals,
-  currentUser,
+  requiredApproverName,
+  reviewerName,
   onApprove,
-  onReject,
 }: SectionApprovalsModalProps) {
+  const [comment, setComment] = useState('');
+  const [loading, setLoading] = useState(false);
+
   if (!isOpen) return null;
 
-  const pendingApprovals = approvals.filter(a => a.status === 'pending');
-  const completedApprovals = approvals.filter(a => a.status !== 'pending');
-  const canApprove = pendingApprovals.some(a => a.approver.id === currentUser.id);
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return <CheckCircle2 className="w-4 h-4 text-[#10B981]" />;
-      case 'rejected':
-        return <XCircle className="w-4 h-4 text-[#DC2626]" />;
-      default:
-        return <Clock className="w-4 h-4 text-[#F59E0B]" />;
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return { label: 'Approved', color: '#10B981' };
-      case 'rejected':
-        return { label: 'Rejected', color: '#DC2626' };
-      default:
-        return { label: 'Pending', color: '#F59E0B' };
-    }
-  };
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded border border-[#E5E7EB] w-full max-w-2xl max-h-[80vh] flex flex-col shadow-lg">
-        {/* Header */}
-        <div className="px-5 py-4 border-b border-[#E5E7EB] flex items-center justify-between">
-          <div>
-            <h2 
-              className="text-[#111827]"
-              style={{ fontSize: '15px', fontWeight: 600, fontFamily: 'system-ui, sans-serif' }}
-            >
-              Section Approvals
-            </h2>
-            <p 
-              className="text-[#6B7280] mt-1"
-              style={{ fontSize: '12px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
-            >
-              {sectionTitle}
-            </p>
+    <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
+      <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem'}}>
+          <div style={{width: '1.25rem', height: '1.25rem', borderRadius: '50%', backgroundColor: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </div>
+          <h2 style={{margin: 0, fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Approve Section</h2>
+        </div>
+        <p style={{margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#64748b'}}>
+          Section {sectionNumber}: <strong>{sectionTitle}</strong>
+        </p>
+        {(requiredApproverName || reviewerName) && (
+          <p style={{margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#64748b'}}>
+            {requiredApproverName && <>Required Approver: <strong>{requiredApproverName}</strong></>}
+            {requiredApproverName && reviewerName && ' · '}
+            {reviewerName && <>Reviewer: <strong>{reviewerName}</strong></>}
+          </p>
+        )}
+        <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
+          Approving marks this section as reviewed and compliant. Add an optional comment.
+        </p>
+        <textarea
+          autoFocus
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Optional approval comment (e.g. Reviewed against ISO 14155:2020 §6.3, content verified)"
+          style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+        />
+        <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
           <button
-            onClick={onClose}
-            className="text-[#6B7280] hover:text-[#111827] transition-colors"
+            disabled={loading}
+            onClick={() => { onClose(); setComment(''); }}
+            style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
           >
-            <X className="w-5 h-5" />
+            Cancel
           </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {/* Pending Approvals */}
-          {pendingApprovals.length > 0 && (
-            <div className="mb-6">
-              <h3 
-                className="text-[#111827] mb-3"
-                style={{ fontSize: '13px', fontWeight: 600, fontFamily: 'system-ui, sans-serif' }}
-              >
-                Pending Approvals ({pendingApprovals.length})
-              </h3>
-              <div className="space-y-3">
-                {pendingApprovals.map(approval => {
-                  const isCurrentUserApprover = approval.approver.id === currentUser.id;
-                  const badge = getStatusBadge(approval.status);
-                  
-                  return (
-                    <div 
-                      key={approval.id}
-                      className="border border-[#FEF3C7] bg-[#FFFBEB] rounded p-3"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          {getStatusIcon(approval.status)}
-                          <span 
-                            className="text-[#111827]"
-                            style={{ fontSize: '13px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
-                          >
-                            {approval.approver.name}
-                          </span>
-                          <span 
-                            className="px-2 py-0.5 rounded text-white"
-                            style={{ 
-                              fontSize: '10px', 
-                              fontWeight: 500,
-                              fontFamily: 'system-ui, sans-serif',
-                              backgroundColor: badge.color
-                            }}
-                          >
-                            {badge.label}
-                          </span>
-                        </div>
-                        {isCurrentUserApprover && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => onApprove(approval.id)}
-                              className="px-3 py-1 bg-[#10B981] text-white rounded hover:bg-[#059669] transition-colors"
-                              style={{ fontSize: '11px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => {
-                                const comment = prompt('Reason for rejection:');
-                                if (comment) onReject(approval.id, comment);
-                              }}
-                              className="px-3 py-1 border border-[#DC2626] text-[#DC2626] rounded hover:bg-[#FEF2F2] transition-colors"
-                              style={{ fontSize: '11px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <div 
-                        className="text-[#6B7280]"
-                        style={{ fontSize: '11px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
-                      >
-                        {approval.approver.email}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Completed Approvals */}
-          {completedApprovals.length > 0 && (
-            <div>
-              <h3 
-                className="text-[#111827] mb-3"
-                style={{ fontSize: '13px', fontWeight: 600, fontFamily: 'system-ui, sans-serif' }}
-              >
-                Completed Approvals ({completedApprovals.length})
-              </h3>
-              <div className="space-y-3">
-                {completedApprovals.map(approval => {
-                  const badge = getStatusBadge(approval.status);
-                  
-                  return (
-                    <div 
-                      key={approval.id}
-                      className="border border-[#E5E7EB] bg-[#F9FAFB] rounded p-3"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          {getStatusIcon(approval.status)}
-                          <span 
-                            className="text-[#111827]"
-                            style={{ fontSize: '13px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
-                          >
-                            {approval.approver.name}
-                          </span>
-                          <span 
-                            className="px-2 py-0.5 rounded text-white"
-                            style={{ 
-                              fontSize: '10px', 
-                              fontWeight: 500,
-                              fontFamily: 'system-ui, sans-serif',
-                              backgroundColor: badge.color
-                            }}
-                          >
-                            {badge.label}
-                          </span>
-                        </div>
-                        <span 
-                          className="text-[#9CA3AF]"
-                          style={{ fontSize: '11px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
-                        >
-                          {new Date(approval.timestamp).toLocaleString()}
-                        </span>
-                      </div>
-                      {approval.comment && (
-                        <div 
-                          className="text-[#6B7280] mt-2 pl-6"
-                          style={{ fontSize: '12px', lineHeight: '1.5', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
-                        >
-                          {approval.comment}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {approvals.length === 0 && (
-            <div className="text-center py-8">
-              <p 
-                className="text-[#9CA3AF]"
-                style={{ fontSize: '13px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}
-              >
-                No approvals configured for this section
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-5 py-4 border-t border-[#E5E7EB] bg-[#F9FAFB]">
           <button
-            onClick={onClose}
-            className="px-4 py-2 bg-[#2563EB] text-white rounded hover:bg-[#1D4ED8] transition-colors w-full"
-            style={{ fontSize: '13px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
+            disabled={loading}
+            onClick={async () => {
+              setLoading(true);
+              try { await onApprove(comment.trim()); }
+              finally { setLoading(false); setComment(''); onClose(); }
+            }}
+            style={{padding: '0.5rem 1rem', backgroundColor: loading ? '#93c5fd' : '#2563eb', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 500}}
           >
-            Close
+            {loading ? 'Approving…' : 'Approve Section'}
           </button>
         </div>
       </div>

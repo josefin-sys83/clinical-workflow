@@ -137,6 +137,18 @@ export class DocumentsService {
     return { id, fileName, contentType, sha256 };
   }
 
+  // Compensation for finalize(): the artifact insert and the workflow transition that's
+  // supposed to accompany it live in two separate services/connections, so they can't
+  // share one DB transaction without a larger refactor. If the transition fails after
+  // the artifact was already committed, the controller calls this to remove the
+  // now-orphaned row rather than leaving a permanent artifact behind a failed finalize.
+  async deleteArtifact(args: { projectId: string; docType: DocType; artifactId: string }): Promise<void> {
+    await getPool().query(
+      `delete from document_artifact where project_id = $1 and doc_type = $2 and id = $3`,
+      [args.projectId, args.docType, args.artifactId],
+    );
+  }
+
   async verify(args: { projectId: string; artifactId: string; verifierUserId?: string }) {
     const a = await this.get({ projectId: args.projectId, artifactId: args.artifactId });
     const computed = createHash('sha256').update(a.bytes).digest('hex');
@@ -390,33 +402,48 @@ export class DocumentsService {
     );
     if (!arows[0]) throw new BadRequestException('Release artifact not found for this project/docType');
 
-    const { rows: cntRows } = await getPool().query(
-      `select count(*)::int as n from document_addendum where release_artifact_id = $1`,
-      [args.releaseArtifactId],
-    );
-    const n = Number(cntRows[0]?.n ?? 0);
-    const letter = this.indexToLetter(n);
-
+    // Like generateProjectId()/create() in ProjectsService: counting existing rows
+    // without locking means two concurrent creates can compute the same letter. The
+    // ux_addendum_letter_per_release unique index is the real race guard — on a
+    // collision (23505) recompute against the now-updated count and retry instead of
+    // surfacing a raw 500.
     const id = randomUUID();
     const now = new Date();
-    await getPool().query(
-      `insert into document_addendum (
-        id, project_id, doc_type, release_artifact_id, letter, title, description, change_reason,
-        status, created_by_user_id, created_at, updated_at
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$10)`,
-      [
-        id,
-        args.projectId,
-        args.docType,
-        args.releaseArtifactId,
-        letter,
-        args.title,
-        args.description ?? null,
-        args.changeReason,
-        args.actorUserId ?? null,
-        now,
-      ],
-    );
+    const maxAttempts = 5;
+    let letter = '';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const { rows: cntRows } = await getPool().query(
+        `select count(*)::int as n from document_addendum where release_artifact_id = $1`,
+        [args.releaseArtifactId],
+      );
+      const n = Number(cntRows[0]?.n ?? 0);
+      letter = this.indexToLetter(n);
+
+      try {
+        await getPool().query(
+          `insert into document_addendum (
+            id, project_id, doc_type, release_artifact_id, letter, title, description, change_reason,
+            status, created_by_user_id, created_at, updated_at
+          ) values ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$10)`,
+          [
+            id,
+            args.projectId,
+            args.docType,
+            args.releaseArtifactId,
+            letter,
+            args.title,
+            args.description ?? null,
+            args.changeReason,
+            args.actorUserId ?? null,
+            now,
+          ],
+        );
+        break;
+      } catch (err: any) {
+        if (err?.code === '23505' && attempt < maxAttempts) continue;
+        throw err;
+      }
+    }
 
     // Create reviewer approval slot (same role requirements as the system currently supports).
     await getPool().query(

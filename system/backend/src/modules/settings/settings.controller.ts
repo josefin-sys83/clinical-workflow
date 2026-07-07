@@ -38,7 +38,7 @@ export class SettingsController {
   @Post('company/users')
   inviteUser(
     @Req() req: any,
-    @Body() body: { name: string; email: string; password: string; system_role?: string },
+    @Body() body: { name: string; email: string; system_role?: string },
   ) {
     if (!req.user.roles?.includes('admin')) throw new ForbiddenException();
     if (!req.user.companyId) throw new ForbiddenException('No company associated');
@@ -46,7 +46,6 @@ export class SettingsController {
       req.user.companyId,
       body.name,
       body.email,
-      body.password,
       body.system_role ?? 'author',
     );
   }

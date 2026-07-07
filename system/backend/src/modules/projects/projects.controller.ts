@@ -1,16 +1,21 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
-import { CreateProjectDto } from './dto';
+import { CreateProjectDto, UpdateProjectDto, UpdateSectionContentDto } from './dto';
 import { ProjectsService } from './projects.service';
 import { AiService } from '../ai/ai.service';
 import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
-import { AdminService } from '../admin/admin.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { ProjectAccessGuard } from '../auth/project-access.guard';
+import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
+import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
+import { SYNOPSIS_UPLOAD_OPTIONS, getSafeDownloadHeaders } from '../../common/upload-security';
 
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, ProjectAccessGuard)
 @ApiTags('projects')
 @Controller('/api/projects')
 export class ProjectsController {
@@ -20,14 +25,17 @@ export class ProjectsController {
     private readonly audit: AuditService,
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
-    private readonly adminService: AdminService,
   ) {}
 
   @Get()
-  list() { return this.projects.list(); }
+  list(@Req() req: any) {
+    return this.projects.list(req.user?.companyId, req.user?.isSuperadmin);
+  }
 
   @Get('/completed')
-  listCompleted() { return this.projects.listCompleted(); }
+  listCompleted(@Req() req: any) {
+    return this.projects.listCompleted(req.user?.companyId, req.user?.isSuperadmin);
+  }
 
   @Get('/:projectId/report-sections')
   async getReportSections(@Param('projectId') projectId: string) {
@@ -62,21 +70,24 @@ export class ProjectsController {
   get(@Param('projectId') projectId: string) { return this.projects.get(projectId); }
 
   @Post()
-  @UseGuards(JwtAuthGuard)
   async create(@Body() dto: CreateProjectDto, @Req() req: any) {
+    // Plan-limit enforcement and last-active touch happen inside projects.create()
+    // itself now, under the same locked transaction as the insert — see
+    // AdminService.enforceProjectLimit() for why that's required to close the race.
     const companyId: string | undefined = req.user?.companyId;
-    if (companyId) {
-      await this.adminService.enforceProjectLimit(companyId);
-      await this.adminService.touchLastActive(companyId);
-    }
-    return this.projects.create(dto);
+    return this.projects.create(dto, companyId);
   }
 
   @Patch('/:projectId')
-  async update(@Param('projectId') projectId: string, @Body() body: { name?: string; description?: string; data?: any }) {
+  async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectDto) {
     const existing = await this.projects.get(projectId);
-    // Check if scope is locked (protocol has been finalized)
-    if (body.data?.scope) {
+    // Check if scope is locked (protocol has been finalized). Callers that save
+    // unrelated data (e.g. report section state) commonly round-trip the full
+    // project `data` blob, so `scope` is present but unchanged — only block when
+    // the incoming scope actually differs from what's stored, not merely present.
+    const scopeChanged = body.data?.scope !== undefined &&
+      JSON.stringify(body.data.scope) !== JSON.stringify(existing?.data?.scope);
+    if (scopeChanged) {
       const workflowSteps = await this.workflow.getSnapshot(projectId);
       const protocolFinal = workflowSteps?.steps?.['protocol-pdf']?.state === 'final';
       if (protocolFinal) {
@@ -114,6 +125,37 @@ export class ProjectsController {
         metadataJson: JSON.stringify({ projectName: body.name, description: body.description })
       });
     }
+
+    // This endpoint accepts an arbitrary `data` blob, so a caller can silently overwrite
+    // or delete any nested field (e.g. clearing protocol.amendments) without it ever
+    // showing up in the audit trail — the blocks above only cover `roles` and `name`
+    // specifically. Log one diff-summary entry per call covering every top-level `data`
+    // key that actually changed, so the audit trail reflects every write through this
+    // endpoint, not just the ones a dedicated code path happened to call out.
+    if (body.data) {
+      const changedKeys: string[] = [];
+      const summaries: string[] = [];
+      const changes: Record<string, { before: any; after: any }> = {};
+      for (const key of Object.keys(body.data)) {
+        const before = existing?.data?.[key];
+        const after = result?.data?.[key];
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          changedKeys.push(key);
+          summaries.push(summarizeFieldChange(key, before, after));
+          changes[key] = { before, after };
+        }
+      }
+      if (changedKeys.length > 0) {
+        await this.audit.create(projectId, {
+          type: 'project.data.updated',
+          message: `Project data updated: ${summaries.join('; ')}`,
+          stepId: 'project-setup',
+          actorUserId: 'unknown',
+          metadataJson: JSON.stringify({ changedKeys, changes }),
+        });
+      }
+    }
+
     return result;
   }
 
@@ -123,13 +165,31 @@ export class ProjectsController {
     @Param('projectId') projectId: string,
     @Body() body: {
       role: string;
-      signerName: string;
-      signerEmail: string;
-      signerUserId: string;
+      roleTitle: string;
       documentHash: string;
     },
     @Req() req: any,
   ) {
+    // Identity (who is signing) always comes from the authenticated session —
+    // never from the request body — so a caller can't sign/approve as someone
+    // else. `role` is the UI slot key ('investigator'/'sponsor') used purely for
+    // storage/restore; `roleTitle` is the actual project role title, cross-checked
+    // against the project's real role assignments so a user can't claim a role
+    // they don't hold.
+    const userId: string | undefined = req.user?.userId;
+    const identity = userId ? await this.projects.getUserIdentity(userId) : null;
+    if (!identity) throw new UnauthorizedException('Unable to resolve signer identity');
+
+    const project = await this.projects.get(projectId);
+    const projectRoles: any[] = project?.data?.roles || [];
+    const claimedRole = projectRoles.find((r: any) =>
+      r.title === body.roleTitle &&
+      (r.assignedTo || []).some((p: any) => p.email?.toLowerCase() === identity.email?.toLowerCase())
+    );
+    if (!claimedRole) {
+      throw new ForbiddenException(`You are not assigned to the "${body.roleTitle}" role on this project`);
+    }
+
     const id = randomUUID();
     const signedAt = new Date().toISOString();
 
@@ -144,16 +204,15 @@ export class ProjectsController {
       id,
       projectId,
       role: body.role,
-      signerName: body.signerName,
-      signerEmail: body.signerEmail,
-      signerUserId: body.signerUserId,
+      signerName: identity.name,
+      signerEmail: identity.email,
+      signerUserId: identity.id,
       documentHash: body.documentHash,
       signedAt,
       ipAddress,
     };
 
     // Append to signatures array (preserves previous signatures on the same document)
-    const project = await this.projects.get(projectId);
     const existing: any[] = Array.isArray(project.data?.signatures) ? project.data.signatures : [];
     // Remove any prior signature for the same role so there is at most one per slot
     const filtered = existing.filter((s: any) => s.role !== body.role);
@@ -164,15 +223,16 @@ export class ProjectsController {
     // Regulatory audit record — full metadata for tamper-evident trail
     await this.audit.create(projectId, {
       type: 'protocol.signed',
-      message: `Protocol electronically signed by ${body.signerName} (${body.role})`,
+      message: `Protocol electronically signed by ${identity.name} (${body.roleTitle})`,
       stepId: 'protocol-pdf',
-      actorUserId: body.signerUserId,
+      actorUserId: identity.id,
       metadataJson: JSON.stringify({
         signatureId: id,
-        signerName: body.signerName,
-        signerEmail: body.signerEmail,
-        signerUserId: body.signerUserId,
+        signerName: identity.name,
+        signerEmail: identity.email,
+        signerUserId: identity.id,
         role: body.role,
+        roleTitle: body.roleTitle,
         documentHash: body.documentHash,
         signedAt,
         ipAddress,
@@ -186,13 +246,17 @@ export class ProjectsController {
   async updateSection(
     @Param('projectId') projectId: string,
     @Param('sectionId') sectionId: string,
-    @Body() body: { content: string; approvalStatus?: string; approvedBy?: string; approvedAt?: string; userId?: string; userName?: string; previousContent?: string; reason?: string }
+    @Body() body: UpdateSectionContentDto,
   ) {
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol;
     if (!protocol) return null;
     const now = new Date().toISOString();
     const section = protocol.sections.find((s: any) => s.id === sectionId);
+    // Section content is rendered client-side via dangerouslySetInnerHTML, so it must
+    // never be stored as raw, attacker-controlled HTML — sanitize on the way in rather
+    // than trusting the frontend to sanitize on the way out.
+    const sanitizedContent = sanitizeSectionHtml(body.content);
     // Spread DB section first (preserves all fields), then apply content update.
     // If the caller explicitly sends approval fields, apply those too so that saving
     // content can never silently clear an already-approved status.
@@ -201,7 +265,7 @@ export class ProjectsController {
     if (body.approvedBy !== undefined) approvalOverrides.approvedBy = body.approvedBy;
     if (body.approvedAt !== undefined) approvalOverrides.approvedAt = body.approvedAt;
     const sections = protocol.sections.map((s: any) =>
-      s.id === sectionId ? { ...s, ...approvalOverrides, content: body.content, updatedAt: now } : s
+      s.id === sectionId ? { ...s, ...approvalOverrides, content: sanitizedContent, updatedAt: now } : s
     );
     await this.projects.update(projectId, {
       data: { ...project.data, protocol: { ...protocol, sections } }
@@ -209,7 +273,7 @@ export class ProjectsController {
 
     // Detect structural additions/removals for summary annotation
     const prevContent = body.previousContent || '';
-    const newContent = body.content;
+    const newContent = sanitizedContent;
     const hasTable = (s: string) => /^\|.+\|/m.test(s);
     const hasImage = (s: string) => /!\[.*?\]\(.*?\)/.test(s);
     const structuralNotes: string[] = [];
@@ -232,7 +296,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/synopsis-file')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', SYNOPSIS_UPLOAD_OPTIONS))
   async uploadSynopsisFile(@Param('projectId') projectId: string, @UploadedFile() file: any) {
     if (!file) throw new BadRequestException('No file uploaded');
     await this.projects.saveSynopsisFile(projectId, file.originalname, file.buffer, file.mimetype ?? 'application/octet-stream');
@@ -242,13 +306,18 @@ export class ProjectsController {
   @Get('/:projectId/synopsis-file')
   async getSynopsisFile(@Param('projectId') projectId: string, @Res() res: any) {
     const file = await this.projects.getSynopsisFile(projectId);
-    res.setHeader('Content-Type', file.mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`);
+    // Never trust the stored/uploaded mimetype for how the browser should render this —
+    // only a real .pdf is ever served inline; everything else is forced to attachment +
+    // application/octet-stream so an uploaded HTML/script file can't execute as a page.
+    const { contentType, contentDisposition } = getSafeDownloadHeaders(file.fileName);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', contentDisposition);
     res.send(file.bytes);
   }
 
   @Post('/:projectId/analyze-synopsis')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseGuards(AiThrottlerGuard)
+  @UseInterceptors(FileInterceptor('file', SYNOPSIS_UPLOAD_OPTIONS))
   async analyzeSynopsis(@Param('projectId') projectId: string, @UploadedFile() file: any) {
     if (!file) throw new BadRequestException('No file uploaded');
     let text = '';
@@ -290,6 +359,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/derive-scope')
+  @UseGuards(AiThrottlerGuard)
   async deriveScope(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
     const synopsisText = project?.data?.synopsis?.extractedText;
@@ -298,12 +368,14 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/analyze-scope')
+  @UseGuards(AiThrottlerGuard)
   async analyzeScope(@Param('projectId') projectId: string, @Body() body: { prompt: string }) {
     const results = await this.ai.analyzeScope(body.prompt);
     return results;
   }
 
   @Post('/:projectId/generate-protocol')
+  @UseGuards(AiThrottlerGuard)
   async generateProtocol(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
     const projectData = project?.data?.projectData || {};
@@ -320,6 +392,9 @@ export class ProjectsController {
     try {
       protocol = await this.ai.generateProtocol(projectData, roles, synopsisText, scope);
     } catch (err) {
+      // The real error (whatever an AI integration happens to throw — could include
+      // upstream response bodies, internal URLs, etc.) is logged and audited
+      // server-side only. The client always gets the same generic, predefined message.
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[generateProtocol] failed for project ${projectId}:`, err);
       await this.audit.create(projectId, {
@@ -329,9 +404,16 @@ export class ProjectsController {
         actorUserId: 'system',
         metadataJson: JSON.stringify({ error: message, failedAt: new Date().toISOString() })
       });
-      throw new InternalServerErrorException(`Protocol generation failed: ${message}`);
+      throw new InternalServerErrorException('Protocol generation failed. Please try again or contact support if the problem persists.');
     }
     if (!protocol) return null;
+
+    // AI-generated section content is returned directly to the caller here and is
+    // later persisted verbatim via updateSection()/PATCH — sanitize at the source so
+    // a prompt-injected or hallucinated HTML response can't reach dangerouslySetInnerHTML.
+    protocol.sections = (protocol.sections || []).map((s: any) =>
+      s && typeof s.content === 'string' ? { ...s, content: sanitizeSectionHtml(s.content) } : s
+    );
 
     // Batched (not all-at-once) to avoid tripping Azure OpenAI rate limits.
     const REQUIRED_ELEMENTS_BATCH_SIZE = 3;
@@ -363,6 +445,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/analyze-section')
+  @UseGuards(AiThrottlerGuard)
   async analyzeSection(
     @Param('projectId') projectId: string,
     @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] }
@@ -372,6 +455,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/analyze-sections')
+  @UseGuards(AiThrottlerGuard)
   async analyzeSections(
     @Param('projectId') projectId: string,
     @Body() body: { sectionIds?: string[] } = {},
@@ -416,6 +500,11 @@ export class ProjectsController {
 
     const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt);
 
+    // A failed AI call/parse is a distinct, explicit error state — return it
+    // untouched so the caller can tell "analysis failed" apart from "analysis
+    // succeeded and found nothing." Never merge partial/rule-based data into it.
+    if (result?.error) return result;
+
     // Deterministic rule-based checks always run alongside the AI analysis, so
     // regulatory-reference and specificity gaps are caught even if the AI misses them.
     const ruleIssues = getRuleBasedIssues(
@@ -439,51 +528,49 @@ export class ProjectsController {
       createdBy: string;
     }
   ) {
-    const project = await this.projects.get(projectId);
-    const protocol = project?.data?.protocol || {};
-    const amendments: any[] = protocol.amendments || [];
+    let newAmendment: any;
+    await this.projects.updateProtocolAtomic(projectId, (protocol) => {
+      // Everything the previous version computed from an unprotected get() — sections,
+      // amendments length, sequence number — is now read from `protocol` as handed in
+      // under the row lock, so it reflects every concurrent write already committed.
+      const amendments: any[] = protocol.amendments ? [...protocol.amendments] : [];
 
-    // Capture a snapshot of every protocol section's content at the moment the amendment
-    // is initiated — this is the "before" state used for track-changes rendering.
-    const protocolSections: any[] = protocol.sections || [];
-    const protocolSnapshot: Record<string, { title: string; content: string; version: string }> = {};
-    for (const section of protocolSections) {
-      if (section.id) {
-        protocolSnapshot[section.id] = {
-          title: section.title || section.id,
-          content: section.content || '',
-          version: protocol.version || '1.0',
-        };
+      // Capture a snapshot of every protocol section's content at the moment the amendment
+      // is initiated — this is the "before" state used for track-changes rendering.
+      const protocolSections: any[] = protocol.sections || [];
+      const protocolSnapshot: Record<string, { title: string; content: string; version: string }> = {};
+      for (const section of protocolSections) {
+        if (section.id) {
+          protocolSnapshot[section.id] = {
+            title: section.title || section.id,
+            content: section.content || '',
+            version: protocol.version || '1.0',
+          };
+        }
       }
-    }
 
-    const newAmendment = {
-      id: `amd-${Date.now()}`,
-      number: amendments.length + 1,
-      title: body.title,
-      reason: body.reason,
-      description: body.description,
-      affectedProtocolSections: body.affectedProtocolSections,
-      affectedReportSections: this.getAffectedReportSections(body.affectedProtocolSections),
-      status: 'draft',
-      createdBy: body.createdBy,
-      createdAt: new Date().toISOString(),
-      protocolVersion: protocol.version || '1.0',
-      protocolSnapshot,
-      approvals: {
-        pi: { approved: false, by: null, at: null },
-        sponsor: { approved: false, by: null, at: null },
-        ethicsCommittee: { status: 'pending', uploadedDoc: null, confirmedAt: null }
-      }
-    };
+      newAmendment = {
+        id: `amd-${randomUUID()}`,
+        number: amendments.length + 1,
+        title: body.title,
+        reason: body.reason,
+        description: body.description,
+        affectedProtocolSections: body.affectedProtocolSections,
+        affectedReportSections: this.getAffectedReportSections(body.affectedProtocolSections),
+        status: 'draft',
+        createdBy: body.createdBy,
+        createdAt: new Date().toISOString(),
+        protocolVersion: protocol.version || '1.0',
+        protocolSnapshot,
+        approvals: {
+          pi: { approved: false, by: null, at: null },
+          sponsor: { approved: false, by: null, at: null },
+          ethicsCommittee: { status: 'pending', uploadedDoc: null, confirmedAt: null }
+        }
+      };
 
-    amendments.push(newAmendment);
-
-    await this.projects.update(projectId, {
-      data: {
-        ...project.data,
-        protocol: { ...protocol, amendments }
-      }
+      amendments.push(newAmendment);
+      return { ...protocol, amendments };
     });
 
     await this.audit.create(projectId, {
@@ -683,6 +770,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/generate-report')
+  @UseGuards(AiThrottlerGuard)
   async generateReport(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
     const projectData = project?.data?.projectData || {};
@@ -740,12 +828,17 @@ export class ProjectsController {
 
     const sectionDefs = this.getDynamicReportSections(targetMarkets, scope);
 
+    // Sanitized immediately: this array feeds both the stored `newSections` below and
+    // the HTTP response returned to the caller, and the frontend renders the response
+    // directly via dangerouslySetInnerHTML without necessarily re-fetching first — so
+    // relying on ProjectsService.update()'s storage-side sanitization alone would leave
+    // the immediate response unsanitized.
     const generatedContents: string[] = [];
     for (const s of sectionDefs) {
       const content = await this.ai.generateReportSection(
         s.title, s.number, protocolSections, enrichedSynopsis, enrichedScope, projectData, roles, []
       );
-      generatedContents.push(content);
+      generatedContents.push(sanitizeSectionHtml(content));
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
@@ -784,6 +877,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/generate-report-section')
+  @UseGuards(AiThrottlerGuard)
   async generateReportSection(
     @Param('projectId') projectId: string,
     @Body() body: { sectionId: string; sectionTitle: string; sectionNumber: number },
@@ -852,7 +946,9 @@ export class ProjectsController {
       [],
     );
 
-    const trimmedContent = content.trim();
+    // Sanitized immediately for the same reason as generateReport(): this value is
+    // both stored and returned directly in the HTTP response.
+    const trimmedContent = sanitizeSectionHtml(content.trim());
 
     await this.projects.update(projectId, {
       data: {
@@ -884,6 +980,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/analyze-report-section')
+  @UseGuards(AiThrottlerGuard)
   async analyzeReportSection(
     @Param('projectId') projectId: string,
     @Body() body: { sectionTitle: string; sectionContent: string; appendicesList?: string[] },
@@ -919,6 +1016,7 @@ export class ProjectsController {
   }
 
   @Post('/:projectId/check-cross-consistency')
+  @UseGuards(AiThrottlerGuard)
   async checkCrossConsistency(
     @Param('projectId') projectId: string,
   ) {
@@ -955,10 +1053,21 @@ export class ProjectsController {
       content: data.content || '',
     })).filter((s: any) => s.content);
 
-    return this.ai.checkCrossConsistency(protocolSections, reportSections, targetMarkets, deviceCategory);
+    const result = await this.ai.checkCrossConsistency(protocolSections, reportSections, targetMarkets, deviceCategory);
+
+    // Cache the result on the project so the frontend only has to re-run this (AI,
+    // non-deterministic wording) check on an explicit user action, not on every page
+    // load — otherwise a "Won't fix" dismissal keyed on the finding's text can lapse
+    // as soon as the AI rewords the same finding on the next automatic re-check.
+    await this.projects.update(projectId, {
+      data: { report: { crossConsistencyIssues: result.issues } },
+    });
+
+    return result;
   }
 
   @Post('/:projectId/check-synopsis-consistency')
+  @UseGuards(AiThrottlerGuard)
   async checkSynopsisConsistency(
     @Param('projectId') projectId: string,
   ) {
@@ -1028,6 +1137,37 @@ export class ProjectsController {
 
     return this.milestones.computeMilestones(project, workflowStates);
   }
+}
+
+// Produces a short, human-readable note for one changed top-level `data` key. Nested
+// array fields (e.g. data.protocol.amendments) are the common shape for the kind of
+// silent, hard-to-notice change this audit entry exists to catch, so a length change one
+// level down is called out specifically instead of just "protocol changed".
+function summarizeFieldChange(key: string, oldVal: any, newVal: any): string {
+  if (
+    oldVal && newVal &&
+    typeof oldVal === 'object' && typeof newVal === 'object' &&
+    !Array.isArray(oldVal) && !Array.isArray(newVal)
+  ) {
+    const noteworthy: string[] = [];
+    const subKeys = new Set([...Object.keys(oldVal), ...Object.keys(newVal)]);
+    for (const subKey of subKeys) {
+      const oldSub = oldVal[subKey];
+      const newSub = newVal[subKey];
+      if (Array.isArray(oldSub) || Array.isArray(newSub)) {
+        const oldLen = Array.isArray(oldSub) ? oldSub.length : 0;
+        const newLen = Array.isArray(newSub) ? newSub.length : 0;
+        if (oldLen !== newLen) noteworthy.push(`${key}.${subKey}: ${oldLen} -> ${newLen} item(s)`);
+      }
+    }
+    if (noteworthy.length > 0) return noteworthy.join('; ');
+  }
+  if (Array.isArray(oldVal) || Array.isArray(newVal)) {
+    const oldLen = Array.isArray(oldVal) ? oldVal.length : 0;
+    const newLen = Array.isArray(newVal) ? newVal.length : 0;
+    if (oldLen !== newLen) return `${key}: ${oldLen} -> ${newLen} item(s)`;
+  }
+  return `${key} changed`;
 }
 
 // ── Deterministic rule-based section checks ──────────────────────────────

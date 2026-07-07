@@ -277,7 +277,7 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm]         = useState({ name: '', email: '', password: '', system_role: 'member' });
+  const [form, setForm]         = useState({ name: '', email: '', system_role: 'member' });
   const [saving, setSaving]     = useState(false);
   const [formErr, setFormErr]   = useState<string | null>(null);
 
@@ -293,7 +293,7 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
   async function invite(e: React.FormEvent) {
     e.preventDefault();
     setFormErr(null);
-    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
+    if (!form.name.trim() || !form.email.trim()) {
       setFormErr('All fields are required.');
       return;
     }
@@ -309,8 +309,10 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
       const created = await res.json();
       setUsers(us => [...us, created]);
       setShowForm(false);
-      setForm({ name: '', email: '', password: '', system_role: 'author' });
-      onToast('User invited');
+      setForm({ name: '', email: '', system_role: 'author' });
+      onToast(created.emailSent
+        ? 'User invited — temporary password emailed.'
+        : 'User invited — email delivery unavailable; check server logs for the temporary password.');
     } catch (e: any) {
       setFormErr(e.message);
     } finally {
@@ -377,22 +379,15 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
                 placeholder="jane@company.com" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Temporary password</label>
-              <input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                className="w-full text-sm border border-slate-200 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Share securely with user" />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Role</label>
-              <select value={form.system_role} onChange={e => setForm(f => ({ ...f, system_role: e.target.value }))}
-                className="w-full text-sm border border-slate-200 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Role</label>
+            <select value={form.system_role} onChange={e => setForm(f => ({ ...f, system_role: e.target.value }))}
+              className="w-full text-sm border border-slate-200 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
           </div>
+          <p className="text-xs text-slate-500">A temporary password will be generated and emailed to this user.</p>
           {formErr && <p className={`text-xs ${theme.text.error}`}>{formErr}</p>}
           <div className="flex gap-2">
             <button type="submit" disabled={saving}

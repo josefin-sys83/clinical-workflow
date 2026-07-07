@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
 import { CreateProjectDto } from './dto';
+import { AdminService } from '../admin/admin.service';
+import { sanitizeIncomingProjectData } from '../../common/sanitize-section-html';
 
 export type Project = {
   id: string;
@@ -14,18 +17,47 @@ export type Project = {
 
 @Injectable()
 export class ProjectsService {
-  async list(): Promise<Project[]> {
+  constructor(private readonly admin: AdminService) {}
+
+  // Resolves the authenticated user's real name/email from the DB, so callers
+  // that need a trustworthy identity (e.g. electronic signatures) never have
+  // to fall back to client-supplied name/email fields.
+  async getUserIdentity(userId: string): Promise<{ id: string; name: string; email: string } | null> {
+    const { rows } = await getPool().query<{ id: string; name: string; email: string }>(
+      `select id, name, email from users where id = $1`,
+      [userId],
+    );
+    return rows[0] ?? null;
+  }
+
+  async list(companyId?: string, isSuperadmin?: boolean): Promise<Project[]> {
+    if (isSuperadmin) {
+      const { rows } = await getPool().query(
+        `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+         from projects order by created_at desc`,
+      );
+      return rows;
+    }
     const { rows } = await getPool().query(
       `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
-       from projects order by created_at desc`,
+       from projects where company_id=$1 order by created_at desc`,
+      [companyId ?? null],
     );
     return rows;
   }
 
-  async listCompleted(): Promise<Project[]> {
+  async listCompleted(companyId?: string, isSuperadmin?: boolean): Promise<Project[]> {
+    if (isSuperadmin) {
+      const { rows } = await getPool().query(
+        `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+         from projects where status='completed' order by created_at desc`,
+      );
+      return rows;
+    }
     const { rows } = await getPool().query(
       `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
-       from projects where status='completed' order by created_at desc`,
+       from projects where status='completed' and company_id=$1 order by created_at desc`,
+      [companyId ?? null],
     );
     return rows;
   }
@@ -41,35 +73,93 @@ export class ProjectsService {
     return p;
   }
 
-  private async generateProjectId(): Promise<string> {
+  // Finds the highest existing numeric suffix for the given year (not a row count),
+  // so a gap anywhere in the sequence (e.g. an earlier deletion) can never cause the
+  // next id to collide with one that's still in use.
+  //
+  // Information leak (low severity, no data access): the sequence is counted globally
+  // across every company's projects, not scoped by company_id. Any user creating a
+  // project — regardless of which company they belong to — can infer a rough estimate
+  // of the system's total project count from the id they're assigned.
+  private async generateProjectId(client: PoolClient): Promise<string> {
     const year = new Date().getFullYear();
-    const { rows } = await getPool().query(
-      `select count(*) as count from projects where id::text like $1`,
+    const { rows } = await client.query(
+      `select coalesce(max((substring(id from '^\\d{4}-(\\d+)$'))::int), 0) as max_seq
+       from projects where id like $1`,
       [`${year}-%`],
     );
-    const count = parseInt(rows[0].count, 10) + 1;
-    const padded = String(count).padStart(3, '0');
+    const next = Number(rows[0].max_seq) + 1;
+    const padded = String(next).padStart(3, '0');
     return `${year}-${padded}`;
   }
 
-  async create(dto: CreateProjectDto): Promise<Project> {
-    const id = await this.generateProjectId();
+  async create(dto: CreateProjectDto, companyId?: string): Promise<Project> {
     const now = new Date().toISOString();
-    await getPool().query(
-      `insert into projects (id, name, description, status, created_at, updated_at)
-       values ($1,$2,$3,'active',$4,$4)`,
-      [id, dto.name, dto.description ?? null, now],
-    );
-    await getPool().query(
-      `insert into workflow_step_state (project_id, step_id, state, updated_at)
-       select $1, step_id, 'draft', $2 from workflow_steps`,
-      [id, now],
-    );
+    const client = await getPool().connect();
+    let id = '';
+    try {
+      await client.query('BEGIN');
+
+      // enforceProjectLimit() takes `for update` on the company row and holds it for
+      // the rest of this transaction, so a second concurrent create() for the same
+      // company blocks here until this one commits (or rolls back) — serializing the
+      // plan-limit check against the insert below instead of both reading the same
+      // stale project count and both passing.
+      if (companyId) {
+        await this.admin.enforceProjectLimit(companyId, client);
+        await this.admin.touchLastActive(companyId, client);
+      }
+
+      // generateProjectId() reads the current max suffix without its own locking, so
+      // two concurrent creates (for different companies, hence no shared company lock)
+      // can still compute the same id. The `projects_pkey` unique constraint is the
+      // real race guard: on a collision (23505) roll back to the savepoint — which
+      // undoes only the failed insert, not the company lock/limit check above — and
+      // retry against the now-updated max.
+      const maxAttempts = 5;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        await client.query('SAVEPOINT create_project_attempt');
+        id = await this.generateProjectId(client);
+        try {
+          await client.query(
+            `insert into projects (id, name, description, status, company_id, created_at, updated_at)
+             values ($1,$2,$3,'active',$4,$5,$5)`,
+            [id, dto.name, dto.description ?? null, companyId ?? null, now],
+          );
+          await client.query('RELEASE SAVEPOINT create_project_attempt');
+          break;
+        } catch (err: any) {
+          await client.query('ROLLBACK TO SAVEPOINT create_project_attempt');
+          if (err?.code === '23505' && attempt < maxAttempts) continue;
+          throw err;
+        }
+      }
+
+      await client.query(
+        `insert into workflow_step_state (project_id, step_id, state, updated_at)
+         select $1, step_id, 'draft', $2 from workflow_steps`,
+        [id, now],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
     return this.get(id);
   }
 
   async update(id: string, patch: { name?: string; description?: string; data?: any }): Promise<Project> {
     const now = new Date().toISOString();
+
+    // Sanitize protocol/report section HTML here, at the single choke point every
+    // update() caller (generic PATCH, generateReport(), updateSection(), etc.) goes
+    // through — see sanitizeIncomingProjectData() for why per-endpoint sanitization
+    // alone isn't sufficient.
+    if (patch.data) {
+      patch = { ...patch, data: sanitizeIncomingProjectData(patch.data) };
+    }
 
     // If data is provided, merge with existing data instead of overwriting.
     // Deep-merge one level so nested keys like `synopsis` are merged rather than replaced.
@@ -132,6 +222,45 @@ export class ProjectsService {
          where id=$1`,
         [id, patch.name ?? null, patch.description ?? null, now],
       );
+    }
+    return this.get(id);
+  }
+
+  // Read-modify-write helpers like createAmendment() need to append to a nested array
+  // (data.protocol.amendments) based on its *current* contents. Doing that via a plain
+  // get() + update() is exactly the unprotected pattern update()'s own FOR UPDATE lock
+  // doesn't cover: update() only locks around its own read, not around whatever stale
+  // snapshot the caller computed before calling it. This runs `mutate` against the
+  // locked, up-to-the-moment `data.protocol`, so concurrent callers are serialized and
+  // each one builds its result (e.g. amendments.length + 1) from data that already
+  // includes every previously-committed concurrent write.
+  async updateProtocolAtomic(id: string, mutate: (protocol: any, data: any) => any): Promise<Project> {
+    const now = new Date().toISOString();
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select data from projects where id=$1 for update`,
+        [id],
+      );
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException('Project not found');
+      }
+      const existingData = rows[0].data || {};
+      const protocol = existingData.protocol || {};
+      const newProtocol = mutate(protocol, existingData);
+      const mergedData = { ...existingData, protocol: newProtocol };
+      await client.query(
+        `update projects set data=$2, updated_at=$3 where id=$1`,
+        [id, JSON.stringify(mergedData), now],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
     return this.get(id);
   }

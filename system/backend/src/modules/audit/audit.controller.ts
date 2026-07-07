@@ -1,8 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { ProjectAccessGuard } from "../auth/project-access.guard";
 import { CreateAuditEventDto } from "./dto";
 import { AuditService } from "./audit.service";
 
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, ProjectAccessGuard)
 @ApiTags("audit")
 @Controller("/api/projects/:projectId/audit")
 export class AuditController {

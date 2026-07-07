@@ -1,12 +1,27 @@
 import { FileText } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import DOMPurify from 'dompurify';
+import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { Info, X, FileDown, Lock, CheckCircle2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
+
+// Defense-in-depth: the backend sanitizes section content on the way in (see
+// sanitize-section-html.ts), but this renders straight into dangerouslySetInnerHTML,
+// so it must never trust that alone — sanitize again immediately before render.
+function sanitizeForRender(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      'h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
+      'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'img', 'mark', 'span', 'blockquote', 'code', 'pre',
+    ],
+    ALLOWED_ATTR: ['style', 'src', 'alt'],
+  });
+}
 
 // ─── Inline document styles (A4 paper layout preserved for print/PDF) ─────────
 
@@ -181,12 +196,20 @@ export function ClinicalInvestigationReport() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           role: confirmingAs === 'investigator' ? 'report-investigator' : 'report-sponsor',
+          // The backend authorizes this call by matching roleTitle against the
+          // caller's own project role assignment — without it, createSignature()
+          // can never find a claimedRole and always 403s regardless of who's signing.
+          roleTitle,
           signerName: person.name,
           signerEmail: person.email || '',
           signerUserId: person.name,
           documentHash,
         }),
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || `Signing failed (${res.status})`);
+      }
       const record = await res.json();
       const updated = { ...signatures, [confirmingAs]: record };
       setSignatures(updated);
@@ -194,10 +217,15 @@ export function ClinicalInvestigationReport() {
       setConfirmChecked(false);
       setConfirmNameInput('');
       if (updated.investigator && updated.sponsor) {
-        await transitionWorkflow({ projectId, stepId: 'report-pdf', to: 'signed' });
+        await advanceWorkflowStep({ projectId, stepId: 'report-pdf', to: 'signed' });
       }
     } catch (e) {
-      console.error('Signing failed', e);
+      if (e instanceof WorkflowStepBlockedError) {
+        window.alert(e.message);
+      } else {
+        console.error('Signing failed', e);
+        window.alert(e instanceof Error ? e.message : 'Signing failed. Please try again.');
+      }
     } finally {
       setSaving(false);
     }
@@ -218,10 +246,17 @@ export function ClinicalInvestigationReport() {
         type: 'changes_requested',
         summary: `Request Changes: ${requestChangesComment.trim()}`,
       });
-      await transitionWorkflow({ projectId: projectId!, stepId: 'report-pdf', to: 'draft' });
+      // 'draft' isn't a valid transition target (stateNameToAction() has no mapping for
+      // it) — 'blocked' is the correct "sent back for changes" state.
+      await advanceWorkflowStep({ projectId: projectId!, stepId: 'report-pdf', to: 'blocked' });
       window.location.href = window.location.pathname.split('/workflow/')[0] + '/workflow/report/review';
     } catch (e) {
-      console.error('Request changes failed', e);
+      if (e instanceof WorkflowStepBlockedError) {
+        window.alert(e.message);
+      } else {
+        console.error('Request changes failed', e);
+        window.alert('Something went wrong while requesting changes. Please try again.');
+      }
     } finally {
       setRequestChangesSubmitting(false);
       setShowRequestChangesDialog(false);
@@ -506,7 +541,7 @@ export function ClinicalInvestigationReport() {
                 <section style={{ marginBottom: '40px' }}>
                   <h2 style={h2Style}>{idx + 1}. {section.title}</h2>
                   <div
-                    dangerouslySetInnerHTML={{ __html: section.content.replace(/```html\n?/g, '').replace(/```\n?/g, '') }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeForRender(section.content.replace(/```html\n?/g, '').replace(/```\n?/g, '')) }}
                     style={{ fontSize: '13px', lineHeight: '1.8', color: '#1a1a1a', fontFamily: 'Georgia, serif' }}
                   />
                 </section>

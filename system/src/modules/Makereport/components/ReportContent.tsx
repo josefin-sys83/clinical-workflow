@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import DOMPurify from 'dompurify';
 
 function highlightPlaceholders(html: string): string {
   return html.replace(
@@ -12,10 +13,24 @@ function stripCodeFences(content: string): string {
   return content.replace(/^```html\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '').trim();
 }
 
+// Defense-in-depth: the backend sanitizes section content on the way in (see
+// sanitize-section-html.ts), but this renders straight into dangerouslySetInnerHTML,
+// so it must never trust that alone — sanitize again immediately before render.
+function sanitizeForRender(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      'h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
+      'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'img', 'mark', 'span', 'blockquote', 'code', 'pre',
+    ],
+    ALLOWED_ATTR: ['style', 'src', 'alt'],
+  });
+}
+
 function renderContent(content: string): string {
   if (!content) return '';
   const cleaned = stripCodeFences(content);
-  if (/<[a-z][\s\S]*>/i.test(cleaned)) return highlightPlaceholders(cleaned);
+  if (/<[a-z][\s\S]*>/i.test(cleaned)) return sanitizeForRender(highlightPlaceholders(cleaned));
   // Legacy markdown fallback
   let h = cleaned
     .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -39,11 +54,11 @@ function renderContent(content: string): string {
   h = h.split('\n').map(line =>
     /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
   ).join('\n');
-  return highlightPlaceholders(h);
+  return sanitizeForRender(highlightPlaceholders(h));
 }
-import { ReportSection, DataAsset, User, ReportCompletenessStatus } from '../types';
-import { transitionWorkflow } from '@/shared/services/workflowService';
-import { AlertCircle, Table2, BarChart3, FileSpreadsheet, ChevronDown, UserIcon, MessageSquare, Check, X, Plus, Info, CheckCircle, Bold, Italic, Underline, Heading1, Heading2, Type, Image, Paperclip, Sparkles } from 'lucide-react';
+import { ReportSection, DataAsset, User, ReportCompletenessStatus, CompletenessElement } from '../types';
+import { advanceWorkflowStep } from '@/shared/services/workflowService';
+import { AlertCircle, Table2, BarChart3, FileSpreadsheet, ChevronDown, UserIcon, MessageSquare, Check, X, Plus, Info, CheckCircle, Bold, Italic, Underline, Heading1, Heading2, Type, Image, Paperclip } from 'lucide-react';
 import { SectionCompletenessStatus } from './SectionCompletenessStatus';
 import { SectionGuidancePanel } from './SectionGuidancePanel';
 import { AssetSelectorModal } from './AssetSelectorModal';
@@ -69,8 +84,7 @@ interface ReportContentProps {
   onAcceptNarrative: (sectionId: string, insertedAssetId: string) => void;
   onEditNarrative: (sectionId: string, insertedAssetId: string, text: string) => void;
   onResolveComment: (sectionId: string, commentId: string) => void;
-  onApproveSection: (sectionId: string, approvalId: string, comment?: string) => void;
-  onRejectSection: (sectionId: string, approvalId: string, comment: string) => void;
+  onApproveSection: (sectionId: string, comment?: string) => void;
   onMarkSectionReady: (sectionId: string) => void;
   onMoveSectionToDraft: (sectionId: string) => void;
   onEditSection: (sectionId: string) => void;
@@ -80,6 +94,7 @@ interface ReportContentProps {
   onVerifyCompletenessElement: (elementId: string) => void;
   sectionAiIssues: Record<string, any[]>;
   onSectionAiIssuesChange: (sectionId: string, issues: any[]) => void;
+  onSectionCompletenessChange: (sectionId: string, elements: CompletenessElement[]) => void;
   forceAnalyzeVersion: number;
   savedWontFixIssues?: Record<string, string[]>;
   onWontFixSave?: (sectionId: string, descriptions: string[]) => void;
@@ -107,7 +122,6 @@ export function ReportContent({
   onEditNarrative,
   onResolveComment,
   onApproveSection,
-  onRejectSection,
   onMarkSectionReady,
   onMoveSectionToDraft,
   onEditSection,
@@ -117,6 +131,7 @@ export function ReportContent({
   onVerifyCompletenessElement,
   sectionAiIssues,
   onSectionAiIssuesChange,
+  onSectionCompletenessChange,
   forceAnalyzeVersion,
   savedWontFixIssues,
   onWontFixSave,
@@ -167,12 +182,14 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       .catch(() => {});
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Restore persisted won't-fix suppressions on mount
+  // Keep the local suppression list in sync with the shared state — not just on
+  // mount, but whenever it changes (e.g. a "Won't fix" action taken from the
+  // Quality System panel instead of this component).
   useEffect(() => {
     if (savedWontFixIssues) {
       wontFixDescRef.current = { ...savedWontFixIssues };
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [savedWontFixIssues]);
 
   useEffect(() => {
     const ref = sectionRefs.current[currentSection];
@@ -234,7 +251,11 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       const el = editorRefs.current.get(editingSection);
       const sec = sections.find(s => s.id === editingSection);
       if (el && sec) {
-        el.innerHTML = sec.content || '<p><br></p>';
+        // Fix 19: this previously assigned sec.content to innerHTML directly, bypassing the
+        // sanitizeForRender() DOMPurify pass used everywhere else in this file — a stray
+        // <img onerror=...> or similar would execute the instant a user opened the section
+        // for editing. Sanitize here too, exactly as the read-mode render path already does.
+        el.innerHTML = sanitizeForRender(sec.content || '') || '<p><br></p>';
         el.focus();
       }
     }
@@ -361,6 +382,21 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         issues = issues.filter((i: any) => !suppressed.includes(i.description));
       }
       onSectionAiIssuesChange(sectionId, issues);
+
+      // Populate real completeness evidence from the AI result — mirrors Protocol's
+      // analyzeSectionWithAI, which merges requiredElements into persisted state
+      // instead of leaving completenessElements stale/empty/fabricated.
+      const rawElements: any[] = result.requiredElements || [];
+      if (rawElements.length > 0) {
+        const mapped: CompletenessElement[] = rawElements.map((e: any) => ({
+          id: e.id,
+          title: e.name,
+          isoReference: e.reference,
+          status: 'not-yet-verified',
+          aiSuggestion: e.status === 'complete' ? 'covered' : e.status === 'partial' ? 'partial' : 'missing',
+        }));
+        onSectionCompletenessChange(sectionId, mapped);
+      }
     } catch {
       // silently fail
     }
@@ -479,7 +515,9 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
         {/* AI Disclaimer */}
         <div className="mb-6 flex items-start gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded">
-          <Sparkles className="w-3.5 h-3.5 text-purple-500 flex-shrink-0 mt-0.5" />
+          <div className="w-3.5 h-3.5 bg-purple-600 text-white rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0 mt-0.5">
+            AI
+          </div>
           <span className="text-xs text-purple-700">
             This system continuously uses AI to analyze content for completeness, consistency, and regulatory alignment. All decisions, approvals, and final responsibility remain with assigned human roles.
           </span>
@@ -1141,17 +1179,13 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       <SectionApprovalsModal
         isOpen={approvalsModalOpen}
         onClose={() => setApprovalsModalOpen(false)}
+        sectionNumber={selectedSectionForApprovals ? (sections.findIndex(s => s.id === selectedSectionForApprovals) + 1).toString() : ''}
         sectionTitle={selectedSectionForApprovals ? sections.find(s => s.id === selectedSectionForApprovals)?.title || '' : ''}
-        approvals={selectedSectionForApprovals ? sections.find(s => s.id === selectedSectionForApprovals)?.approvals || [] : []}
-        currentUser={currentUser}
-        onApprove={(approvalId, comment) => {
+        requiredApproverName={selectedSectionForApprovals ? sections.find(s => s.id === selectedSectionForApprovals)?.roles.requiredApprover.map(u => u.name).join(', ') : ''}
+        reviewerName={selectedSectionForApprovals ? sections.find(s => s.id === selectedSectionForApprovals)?.roles.reviewer.map(u => u.name).join(', ') : ''}
+        onApprove={(comment) => {
           if (selectedSectionForApprovals) {
-            onApproveSection(selectedSectionForApprovals, approvalId, comment);
-          }
-        }}
-        onReject={(approvalId, comment) => {
-          if (selectedSectionForApprovals) {
-            onRejectSection(selectedSectionForApprovals, approvalId, comment);
+            onApproveSection(selectedSectionForApprovals, comment);
           }
         }}
       />
@@ -1164,12 +1198,12 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
           setReviewModeModalOpen(false);
           // Transition report-make → approved so the sidebar unlocks Report Review.
           if (projectId) {
-            transitionWorkflow({
+            advanceWorkflowStep({
               projectId,
               stepId: 'report-make',
               to: 'approved',
               note: 'Report entered review mode',
-            }).catch(() => {});
+            });
           }
         }}
         sections={sections}

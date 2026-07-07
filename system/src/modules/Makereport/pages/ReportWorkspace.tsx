@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
-import { ReportSection, DataAsset, UploadedFile, User, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus } from '../types';
+import { ReportSection, DataAsset, UploadedFile, User, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus, CompletenessElement } from '../types';
 import { ReportNavigation } from '../components/ReportNavigation';
 import { WorkflowProgressIndicator } from '../components/WorkflowProgressIndicator';
 import { ReportContent } from '../components/ReportContent';
@@ -21,6 +21,7 @@ import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { createProjectAuditEvent } from '@/shared/services/auditService';
+import { getToken } from '@/shared/auth/token';
 
 function userFromRole(rawRoles: any[], roleTitle: string): User {
   const role = rawRoles.find((r: any) => r.title === roleTitle);
@@ -49,6 +50,7 @@ export function ReportWorkspace() {
   const [projectData, setProjectData] = useState<any>(null);
   const [scope, setScope] = useState<any>(null);
   const [rawRoles, setRawRoles] = useState<any[]>([]);
+  const [sessionUser, setSessionUser] = useState<{ id: string; name: string; email: string | null } | null>(null);
   const [apiSectionDefs, setApiSectionDefs] = useState<Array<{ id: string; title: string; number: number }>>([]);
   const [targetMarkets, setTargetMarkets] = useState<string[]>([]);
 
@@ -73,6 +75,7 @@ export function ReportWorkspace() {
   const [sectionAiIssues, setSectionAiIssues] = useState<Record<string, any[]>>({});
   const [analysisVersion, setAnalysisVersion] = useState(0);
   const [savedWontFixIssues, setSavedWontFixIssues] = useState<Record<string, string[]>>({});
+  const [wontFixCrossConsistencyIds, setWontFixCrossConsistencyIds] = useState<string[]>([]);
 
   // Protocol amendments fetched from the backend (distinct from the local `amendments`
   // mock state above, which tracks a separate UI-only amendment flow).
@@ -104,6 +107,17 @@ export function ReportWorkspace() {
       .then(data => setProtocolAmendments(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [projectId]);
+
+  // Real authenticated identity, used to determine which sections/issues are
+  // actually "mine" — independent of the project's role assignments below.
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then((u: { id: string; name: string; email: string | null } | null) => { if (u) setSessionUser(u); })
+      .catch(() => {});
+  }, []);
 
   const pendingProtocolAmendments = protocolAmendments.filter((a: any) => a.status === 'draft');
   const isReportBlocked = pendingProtocolAmendments.length > 0;
@@ -157,6 +171,37 @@ export function ReportWorkspace() {
       }
       if (Object.keys(wontFixMap).length > 0) setSavedWontFixIssues(wontFixMap);
 
+      // Cross-consistency dismissals are project-level (span Protocol + Report), so
+      // they're stored on `report` directly rather than under an individual section.
+      if (Array.isArray(p.data?.report?.wontFixCrossConsistencyIssues)) {
+        setWontFixCrossConsistencyIds(p.data.report.wontFixCrossConsistencyIssues);
+      }
+
+      // The cross-consistency check hits the AI and its wording isn't fully
+      // deterministic between calls, which can make a "Won't fix" dismissal (keyed
+      // on the finding's text) lapse if it re-runs on every page load. So: use the
+      // cached result from the last run if one exists, and only invoke the AI check
+      // automatically the very first time (never run before for this project).
+      const hasCachedCrossConsistency = Array.isArray(p.data?.report?.crossConsistencyIssues);
+      if (hasCachedCrossConsistency) {
+        setCrossConsistencyIssues(p.data.report.crossConsistencyIssues);
+      }
+
+      // Restore persisted AI issues — same persistence pattern as completenessElements,
+      // so a reload shows last-known issues immediately instead of 0 until re-analysis completes.
+      const issuesMap: Record<string, any[]> = {};
+      if (savedSections && typeof savedSections === 'object' && !Array.isArray(savedSections)) {
+        Object.entries(savedSections as Record<string, any>).forEach(([id, data]) => {
+          if (Array.isArray((data as any)?.issues)) issuesMap[id] = (data as any).issues;
+        });
+      }
+      if (Array.isArray(savedSections)) {
+        savedSections.forEach((sec: any) => {
+          if (sec.id && Array.isArray(sec.issues)) issuesMap[sec.id] = sec.issues;
+        });
+      }
+      if (Object.keys(issuesMap).length > 0) setSectionAiIssues(issuesMap);
+
       // Determine the ordered section list to render
       const templateList = apiDefs.length > 0 ? apiDefs : initialReportSections.map(s => ({ id: s.id, title: s.title, number: s.order }));
       const templateIds = new Set(templateList.map(t => t.id));
@@ -170,7 +215,19 @@ export function ReportWorkspace() {
           : null;
         // Use scaffold only when it corresponds to this section (title match guards against repurposed IDs)
         if (scaffold && scaffold.title === def.title) {
-          return { ...scaffold, ...(saved ?? {}), title: def.title, order: def.number, roles };
+          // Scaffold's own state/approvals/completenessElements are demo placeholder
+          // values, never real per-project data — a fresh section always starts as
+          // draft with no approvals and no completeness evidence, until `saved`
+          // (real persisted data) overrides them.
+          return {
+            ...scaffold,
+            state: 'draft',
+            completenessElements: [],
+            ...(saved ?? {}),
+            title: def.title,
+            order: def.number,
+            roles,
+          };
         }
         // Dynamic section with no scaffold — build minimal object
         return {
@@ -186,7 +243,6 @@ export function ReportWorkspace() {
           aiDraftGenerated: false,
           userEdited: false,
           insertedAssets: [],
-          approvals: [],
           completenessElements: [],
           linkedSAPSections: [],
           linkedProtocolSections: [],
@@ -210,7 +266,6 @@ export function ReportWorkspace() {
                   ...section,
                   roles,
                   comments: section.comments ?? [],
-                  approvals: section.approvals ?? [],
                   insertedAssets: section.insertedAssets ?? [],
                   validationFindings: section.validationFindings ?? [],
                   completenessElements: section.completenessElements?.length ? section.completenessElements : (scaffold?.completenessElements ?? []),
@@ -223,15 +278,20 @@ export function ReportWorkspace() {
       setCurrentSection(prev => prev || finalSections[0]?.id || '');
       setSectionsLoading(false);
 
-      runCrossConsistencyCheck();
+      if (!hasCachedCrossConsistency) runCrossConsistencyCheck();
     }).catch(() => {
       setSectionsLoading(false);
     });
   }, [projectId]);
 
-  // Re-run AI analysis on all sections when the Shell Refresh button is clicked
+  // Re-run AI analysis on all sections when the Shell Refresh button is clicked —
+  // also re-runs the cross-consistency check, since that's the explicit user action
+  // meant to regenerate AI findings (as opposed to every incidental page load).
   useEffect(() => {
-    const handler = () => setAnalysisVersion(v => v + 1);
+    const handler = () => {
+      setAnalysisVersion(v => v + 1);
+      runCrossConsistencyCheck();
+    };
     window.addEventListener('report:refresh-analysis', handler);
     return () => window.removeEventListener('report:refresh-analysis', handler);
   }, []);
@@ -268,9 +328,30 @@ export function ReportWorkspace() {
     }
   };
 
-  // Persist won't-fix suppressions to the backend so they survive page reload
+  // Persist won't-fix suppressions to the backend so they survive page reload.
+  // Also updates the shared state (not just each panel's own local copy) since
+  // the save is a full overwrite, not an append — otherwise the Report content
+  // view and the Quality System panel could clobber each other's suppressions.
   const handleWontFixSave = async (sectionId: string, descriptions: string[]) => {
+    setSavedWontFixIssues(prev => ({ ...prev, [sectionId]: descriptions }));
     await saveReportSectionState(sectionId, { wontFixIssues: descriptions });
+  };
+
+  // Cross-consistency findings aren't tied to one report section, so their
+  // dismissals are saved directly on `report` (a sibling of `report.sections`)
+  // instead of going through saveReportSectionState.
+  const handleCrossConsistencyWontFixSave = async (ids: string[]) => {
+    setWontFixCrossConsistencyIds(ids);
+    if (!projectId) return;
+    try {
+      await fetch(apiBase + '/api/projects/' + projectId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { report: { wontFixCrossConsistencyIssues: ids } } }),
+      });
+    } catch {
+      // silently fail — state already applied in memory
+    }
   };
 
   // Mock protocol deviations
@@ -303,7 +384,19 @@ export function ReportWorkspace() {
     },
   ]);
 
-  const currentUser: User = userFromRole(rawRoles, 'Medical Writer');
+  // Match on the real logged-in user's email so ownership checks (e.g. "My issues")
+  // reflect who is actually signed in, not just whoever the project happens to
+  // list as Medical Writer. Falls back to the role-lookup stub only pre-SSO.
+  const currentUser: User = useMemo(() => {
+    if (sessionUser) {
+      return {
+        id: sessionUser.email || sessionUser.id,
+        name: sessionUser.name,
+        email: sessionUser.email || '',
+      };
+    }
+    return userFromRole(rawRoles, 'Medical Writer');
+  }, [sessionUser, rawRoles]);
 
   const [generatingSectionId, setGeneratingSectionId] = useState<string | null>(null);
   // Guards against duplicate concurrent generation requests for the same section
@@ -374,6 +467,22 @@ export function ReportWorkspace() {
       hadAiDraft ? `Content added by ${currentUser.name} with AI assistance` : 'Updated section content'
     );
     saveReportSectionState(sectionId, { content, userEdited: true });
+  };
+
+  // Persists real AI-derived completeness evidence — mirrors Protocol's
+  // analyzeSectionWithAI, which merges requiredElements into persisted state
+  // instead of leaving completenessElements stale/empty/fabricated.
+  const handleSectionCompletenessChange = (sectionId: string, elements: CompletenessElement[]) => {
+    setSections(prev => prev.map(s => s.id === sectionId ? { ...s, completenessElements: elements } : s));
+    saveReportSectionState(sectionId, { completenessElements: elements });
+  };
+
+  // Persists AI issues — mirrors Protocol's pattern of saving issues alongside the
+  // section data so they survive a reload instead of reading back as empty until
+  // the next analysis run completes.
+  const handleSectionAiIssuesChange = (sectionId: string, issues: any[]) => {
+    setSectionAiIssues(prev => ({ ...prev, [sectionId]: issues }));
+    saveReportSectionState(sectionId, { issues });
   };
 
   const handleAcceptAIDraft = (sectionId: string) => {
@@ -603,49 +712,20 @@ export function ReportWorkspace() {
   const canAssembleReport = allSectionsComplete && !hasUnresolvedBlockers && !hasPendingDeviations && !hasUnapprovedSections;
   const hasIssues = !allSectionsComplete || hasUnresolvedBlockers || hasPendingDeviations;
 
-  const handleApproveSection = (sectionId: string, approvalId: string, comment?: string) => {
+  const handleApproveSection = (sectionId: string, comment?: string) => {
     const section = sections.find(s => s.id === sectionId);
     if (!section) return;
-    const updatedApprovals = section.approvals.map(a =>
-      a.id === approvalId
-        ? { ...a, status: 'approved' as const, comment, timestamp: new Date().toISOString() }
-        : a
-    );
-    // Transition state to 'approved' once every required approval slot is approved
-    const allApproved = updatedApprovals.length > 0 && updatedApprovals.every(a => a.status === 'approved');
-    const newState = allApproved ? 'approved' as const : section.state;
 
     setSections(sections.map(s =>
       s.id === sectionId
-        ? { ...s, approvals: updatedApprovals, state: newState }
+        ? { ...s, state: 'approved' as const }
         : s
     ));
 
     // Persist so approval survives page reload
-    saveReportSectionState(sectionId, { approvals: updatedApprovals, state: newState });
+    saveReportSectionState(sectionId, { state: 'approved' });
 
     logReportAuditEvent(projectId, 'lifecycle_transition', 'Section approved', comment || 'Section approved');
-  };
-
-  const handleRejectSection = (sectionId: string, approvalId: string, comment: string) => {
-    const section = sections.find(s => s.id === sectionId);
-    if (!section) return;
-    const updatedApprovals = section.approvals.map(a =>
-      a.id === approvalId
-        ? { ...a, status: 'rejected' as const, comment, timestamp: new Date().toISOString() }
-        : a
-    );
-
-    setSections(sections.map(s =>
-      s.id === sectionId
-        ? { ...s, approvals: updatedApprovals, state: 'draft' as const }
-        : s
-    ));
-
-    // Persist so rejection survives page reload
-    saveReportSectionState(sectionId, { approvals: updatedApprovals, state: 'draft' });
-
-    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section rejected', comment);
   };
 
   const handleReviewDeviation = (deviationId: string, status: 'approved' | 'requires-amendment', comment: string) => {
@@ -886,7 +966,6 @@ export function ReportWorkspace() {
               logReportAuditEvent(projectId, 'note', 'Comment resolved', 'Comment marked as resolved');
             }}
             onApproveSection={handleApproveSection}
-            onRejectSection={handleRejectSection}
             onMarkSectionReady={handleMarkSectionReady}
             onMoveSectionToDraft={handleMoveSectionToDraft}
             onEditSection={handleEditSection}
@@ -895,7 +974,8 @@ export function ReportWorkspace() {
             completenessStatus={completenessStatus}
             onVerifyCompletenessElement={handleVerifyCompletenessElement}
             sectionAiIssues={sectionAiIssues}
-            onSectionAiIssuesChange={(id, issues) => setSectionAiIssues(prev => ({ ...prev, [id]: issues }))}
+            onSectionAiIssuesChange={handleSectionAiIssuesChange}
+            onSectionCompletenessChange={handleSectionCompletenessChange}
             forceAnalyzeVersion={analysisVersion}
             savedWontFixIssues={savedWontFixIssues}
             onWontFixSave={handleWontFixSave}
@@ -915,6 +995,11 @@ export function ReportWorkspace() {
             uploadedFiles={uploadedFiles}
             sectionAiIssues={sectionAiIssues}
             crossConsistencyIssues={crossConsistencyIssues}
+            savedWontFixIssues={savedWontFixIssues}
+            wontFixCrossConsistencyIds={wontFixCrossConsistencyIds}
+            onSectionAiIssuesChange={handleSectionAiIssuesChange}
+            onWontFixSave={handleWontFixSave}
+            onCrossConsistencyWontFixSave={handleCrossConsistencyWontFixSave}
           />
           </div>
         </div>

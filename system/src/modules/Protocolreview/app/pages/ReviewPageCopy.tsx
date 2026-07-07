@@ -5,7 +5,7 @@ import { ReportContent } from '../components/ReportContent';
 import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
 import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { buildWorkflowPath } from '@/shared/workflow/steps';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
@@ -359,16 +359,23 @@ export default function ReviewPageCopy() {
       }),
     }).catch(() => {});
 
-    // Transition workflow step — non-blocking; navigate regardless of outcome
+    // Only navigate once the transition actually succeeded — silently proceeding on
+    // failure previously masked every role-mismatch/state error as a false success.
     try {
-      await transitionWorkflow({
+      await advanceWorkflowStep({
         projectId,
         stepId: 'protocol-review',
         to: 'approved',
         note: reason,
       });
-    } catch {
-      // workflow transition failure is non-critical — proceed to navigate
+    } catch (e) {
+      if (e instanceof WorkflowStepBlockedError) {
+        window.alert(e.message);
+      } else {
+        console.error('Approve failed', e);
+        window.alert('Something went wrong while approving. Please try again.');
+      }
+      return;
     }
 
     navigate(`/projects/${projectId}/workflow/protocol/pdf`);
@@ -390,16 +397,22 @@ export default function ReviewPageCopy() {
       }),
     }).catch(() => {});
 
-    // Transition workflow step — non-blocking; navigate regardless of outcome
+    // Only navigate once the transition actually succeeded (see handleApproveReport).
     try {
-      await transitionWorkflow({
+      await advanceWorkflowStep({
         projectId,
         stepId: 'protocol-review',
         to: 'blocked',
         note: reason,
       });
-    } catch {
-      // workflow transition failure is non-critical — proceed to navigate
+    } catch (e) {
+      if (e instanceof WorkflowStepBlockedError) {
+        window.alert(e.message);
+      } else {
+        console.error('Request changes failed', e);
+        window.alert('Something went wrong while requesting changes. Please try again.');
+      }
+      return;
     }
 
     navigate(`/projects/${projectId}/workflow/protocol/make`);

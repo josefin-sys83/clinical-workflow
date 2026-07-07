@@ -21,7 +21,7 @@ export type DocumentLifecycleState =
   | 'blocked'
   | 'approved'
   | 'signed'
-  | 'finalized';
+  | 'final';
 
 export type IssueSeverity = 'blocker' | 'warning' | 'info';
 

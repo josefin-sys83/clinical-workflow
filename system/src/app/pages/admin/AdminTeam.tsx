@@ -19,9 +19,10 @@ export function AdminTeam() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ name: '', email: '' });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   async function load() {
@@ -54,7 +55,7 @@ export function AdminTeam() {
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
+    if (!form.name.trim() || !form.email.trim()) {
       setFormError('All fields are required.');
       return;
     }
@@ -72,7 +73,10 @@ export function AdminTeam() {
       const created = await res.json();
       setMembers(ms => [...ms, created]);
       setShowForm(false);
-      setForm({ name: '', email: '', password: '' });
+      setForm({ name: '', email: '' });
+      setInviteNotice(created.emailSent
+        ? 'Superadmin added — temporary password emailed.'
+        : 'Superadmin added — email delivery unavailable; check server logs for the temporary password.');
     } catch (e: any) {
       setFormError(e.message ?? 'Failed to invite');
     } finally {
@@ -89,7 +93,7 @@ export function AdminTeam() {
         </div>
         {!showForm && (
           <button
-            onClick={() => setShowForm(true)}
+            onClick={() => { setShowForm(true); setInviteNotice(null); }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -97,6 +101,12 @@ export function AdminTeam() {
           </button>
         )}
       </div>
+
+      {inviteNotice && (
+        <p className="mb-4 text-sm text-slate-700 bg-slate-100 border border-slate-200 rounded-md px-3 py-2">
+          {inviteNotice}
+        </p>
+      )}
 
       {showForm && (
         <form
@@ -134,16 +144,7 @@ export function AdminTeam() {
               />
             </div>
           </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">Temporary password</label>
-            <input
-              type="password"
-              className="w-full text-sm border border-slate-200 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.password}
-              onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-              placeholder="Share securely with user"
-            />
-          </div>
+          <p className="text-xs text-slate-500">A temporary password will be generated and emailed to this user.</p>
           {formError && <p className="text-xs text-rose-700">{formError}</p>}
           <div className="flex gap-2 pt-1">
             <button

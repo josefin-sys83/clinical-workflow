@@ -5,7 +5,9 @@ import { StepLifecycleState, TransitionAction } from '../common/types';
 import { AuditService } from '../audit/audit.service';
 
 // Map a target state name (sent by the frontend) to the action verb the service uses.
-function stateNameToAction(to: string): TransitionAction {
+// Exported so the role-gating guard can resolve the same action from a `to`-style body
+// without duplicating this mapping.
+export function stateNameToAction(to: string): TransitionAction {
   switch (to) {
     case 'approved':        return 'approve';
     case 'blocked':         return 'request_changes';
@@ -43,6 +45,45 @@ function nextState(current: StepLifecycleState, action: TransitionAction): StepL
   }
 }
 
+// Which current states each named action may be invoked from. This is the backend
+// enforcement of the lifecycle the frontend's (currently unimported) reference file
+// shared/workflow/stateMachine.ts describes, adapted to this service's model where a
+// given action always resolves to the same fixed target regardless of current state
+// (see nextState() above) — so validity here is expressed as "is `current` one of the
+// states this action is allowed to start from", not as a `from -> to` pair.
+//
+// request_changes is the one intentionally backward-moving action (a reviewer/approver
+// sending work back to authoring). No other backward jump is permitted, and no action
+// may be invoked from a state that skips earlier stages (e.g. finalize from 'draft').
+const ALLOWED_FROM_STATES: Record<TransitionAction, StepLifecycleState[]> = {
+  mark_input_needed: ['draft'],
+  mark_ready: ['draft', 'input_needed', 'blocked'],
+  start_review: ['ready'],
+  request_changes: ['in_review'],
+  approve: ['in_review'],
+  sign: ['approved'],
+  finalize: ['signed'],
+};
+
+function assertValidTransition(
+  stepId: string,
+  current: StepLifecycleState,
+  action: TransitionAction,
+  next: StepLifecycleState,
+): void {
+  // Re-invoking an action whose target is already the current state is a no-op (e.g.
+  // viewing an already-finalized PDF fires 'finalize' again) — allow it unconditionally
+  // rather than treating it as a jump that needs a starting-state check.
+  if (current === next) return;
+  const allowedFrom = ALLOWED_FROM_STATES[action];
+  if (!allowedFrom.includes(current)) {
+    throw new BadRequestException(
+      `Invalid transition for step '${stepId}': cannot go from '${current}' to '${next}' via '${action}'. ` +
+      `'${action}' is only allowed from: ${allowedFrom.join(', ')}.`,
+    );
+  }
+}
+
 @Injectable()
 export class WorkflowService {
   constructor(private readonly audit: AuditService) {}
@@ -73,33 +114,57 @@ export class WorkflowService {
     const { rows: stepRows } = await getPool().query(`select 1 from workflow_steps where step_id=$1`, [stepId]);
     if (stepRows.length === 0) throw new BadRequestException('Unknown stepId');
 
-    // get current
-    const { rows } = await getPool().query(
-      `select state from workflow_step_state where project_id=$1 and step_id=$2`,
-      [projectId, stepId],
-    );
-    if (rows.length === 0) throw new NotFoundException('Workflow state not initialized for project');
-    const current: StepLifecycleState = rows[0].state;
-
-    // Immutability hardening: if a document has been finalized, lock transitions for that doc's workflow steps.
-    const docType: 'protocol' | 'report' | null = stepId.startsWith('protocol-') ? 'protocol' : stepId.startsWith('report-') ? 'report' : null;
-    if (docType) {
-      const { rows: art } = await getPool().query(
-        `select 1 from document_artifact where project_id=$1 and doc_type=$2 limit 1`,
-        [projectId, docType],
-      );
-      if (art.length > 0 && action !== 'finalize' && action !== 'request_changes') {
-        throw new BadRequestException(`${docType} workflow is locked because a finalized artifact exists`);
-      }
-    }
-
-    const next = nextState(current, action);
-
+    // Reading `current` and writing `next` were previously two separate, unlocked
+    // queries: two concurrent transitions on the same step could both read the same
+    // stale `current`, so both would log a "transition from X" even though only one of
+    // them was really starting from X — a lost-update race identical in shape to the
+    // one fixed in ProjectsService.updateProtocolAtomic(). SELECT ... FOR UPDATE takes
+    // a row lock for the transaction, so a second concurrent call blocks until the first
+    // commits and then reads its already-updated state, serializing transitions on the
+    // same (project_id, step_id) without changing the transition logic above.
+    const client = await getPool().connect();
+    let current: StepLifecycleState;
+    let next: StepLifecycleState;
     const now = new Date().toISOString();
-    await getPool().query(
-      `update workflow_step_state set state=$3, updated_at=$4 where project_id=$1 and step_id=$2`,
-      [projectId, stepId, next, now],
-    );
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select state from workflow_step_state where project_id=$1 and step_id=$2 for update`,
+        [projectId, stepId],
+      );
+      if (rows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException('Workflow state not initialized for project');
+      }
+      current = rows[0].state;
+
+      // Immutability hardening: if a document has been finalized, lock transitions for that doc's workflow steps.
+      const docType: 'protocol' | 'report' | null = stepId.startsWith('protocol-') ? 'protocol' : stepId.startsWith('report-') ? 'report' : null;
+      if (docType) {
+        const { rows: art } = await client.query(
+          `select 1 from document_artifact where project_id=$1 and doc_type=$2 limit 1`,
+          [projectId, docType],
+        );
+        if (art.length > 0 && action !== 'finalize' && action !== 'request_changes') {
+          await client.query('ROLLBACK');
+          throw new BadRequestException(`${docType} workflow is locked because a finalized artifact exists`);
+        }
+      }
+
+      next = nextState(current, action);
+      assertValidTransition(stepId, current, action, next);
+
+      await client.query(
+        `update workflow_step_state set state=$3, updated_at=$4 where project_id=$1 and step_id=$2`,
+        [projectId, stepId, next, now],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
 
     await this.audit.record({
       projectId,

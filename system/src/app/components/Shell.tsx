@@ -23,10 +23,10 @@ import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState, WorkflowStepId } from '@/shared/workflow/types';
 import { AuditTrailButton } from '@/shared/components/AuditTrailButton';
 import { Button } from '@/app/components/ui/button';
-import { clearToken, getToken, isAdmin } from '@/shared/auth/token';
+import { getToken, isAdmin, logout } from '@/shared/auth/token';
 
 function isDone(state: DocumentLifecycleState | undefined): boolean {
-  return state === 'approved' || state === 'signed' || state === 'finalized' || state === 'final';
+  return state === 'approved' || state === 'signed' || state === 'final';
 }
 
 function shouldLockStep(args: {
@@ -91,7 +91,7 @@ export function Shell() {
   }, []);
 
   const handleSignOut = () => {
-    clearToken();
+    void logout();
     navigate('/login');
   };
 

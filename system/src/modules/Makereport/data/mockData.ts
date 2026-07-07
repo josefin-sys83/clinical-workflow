@@ -31,16 +31,6 @@ The investigation was completed as planned. The clinical data generated demonstr
     aiDraftGenerated: true,
     userEdited: true,
     insertedAssets: [],
-    approvals: [
-      {
-        id: 'approval-1-1',
-        sectionId: 'section-1',
-        approver: mockUsers[3],
-        status: 'approved',
-        timestamp: new Date(Date.now() - 86400000).toISOString(),
-        comment: 'Executive summary is comprehensive and accurately reflects the investigation outcomes.',
-      },
-    ],
     linkedSAPSections: ['SAP Section 1.1', 'SAP Section 8.0'],
     linkedProtocolSections: ['Protocol Section 1.0', 'Protocol Section 3.1'],
     completenessElements: [
@@ -139,15 +129,6 @@ A detailed technical description of the device, its components, materials, and o
     aiDraftGenerated: true,
     userEdited: true,
     insertedAssets: [],
-    approvals: [
-      {
-        id: 'approval-2-1',
-        sectionId: 'section-2',
-        approver: mockUsers[3],
-        status: 'pending',
-        timestamp: new Date().toISOString(),
-      },
-    ],
     linkedSAPSections: ['SAP Section 2.0'],
     linkedProtocolSections: ['Protocol Section 2.1', 'Protocol Section 2.3'],
     completenessElements: [
@@ -228,7 +209,6 @@ Primary and secondary endpoints were predefined in the Clinical Investigation Pl
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 3.1', 'SAP Section 3.2'],
     linkedProtocolSections: ['Protocol Section 3.0'],
     completenessElements: [
@@ -317,7 +297,6 @@ All study procedures, assessments, and follow-up activities were conducted accor
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 4.0'],
     linkedProtocolSections: ['Protocol Section 4.0', 'Protocol Section 5.0'],
     completenessElements: [
@@ -393,7 +372,6 @@ No post-hoc analyses outside the SAP were performed unless explicitly stated.`,
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 5.0'],
     linkedProtocolSections: ['Protocol Section 5.0'],
     completenessElements: [
@@ -476,7 +454,6 @@ Baseline data were comparable across study subjects and consistent with the inte
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 6.0'],
     linkedProtocolSections: ['Protocol Section 6.0'],
     completenessElements: [
@@ -557,7 +534,6 @@ All results are presented objectively without interpretation beyond the predefin
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 7.0'],
     linkedProtocolSections: ['Protocol Section 7.0'],
     completenessElements: [
@@ -637,7 +613,6 @@ No unexpected serious adverse device effects were identified unless otherwise st
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 8.0'],
     linkedProtocolSections: ['Protocol Section 8.0'],
     completenessElements: [
@@ -711,7 +686,6 @@ No unexpected serious adverse device effects were identified unless otherwise st
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: ['SAP Section 9.0'],
     linkedProtocolSections: ['Protocol Section 9.0'],
     completenessElements: [
@@ -805,7 +779,6 @@ These appendices may be included based on study-specific requirements:
     aiDraftGenerated: false,
     userEdited: false,
     insertedAssets: [],
-    approvals: [],
     linkedSAPSections: [],
     linkedProtocolSections: ['Protocol Section 1.0'],
     completenessElements: [

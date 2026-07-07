@@ -22,19 +22,33 @@ export interface MilestonesResult {
 export function useMilestones(projectId: string | undefined) {
   const [milestones, setMilestones] = useState<MilestonesResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
+    setError(null);
     const apiBase = '';
     fetch(`${apiBase}/api/projects/${projectId}/milestones`)
-      .then(r => r.json())
-      .then(data => setMilestones(data))
-      .catch(() => {})
+      .then(async (r) => {
+        if (!r.ok) {
+          // A 4xx/5xx body (e.g. {statusCode, message, error}) is not a MilestonesResult
+          // — treating it as one crashed MilestoneBanner's `.milestones.find(...)` on
+          // every failed fetch (wrong project, no access, transient server error, ...).
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body?.message || `Failed to load milestones (${r.status})`);
+        }
+        return r.json();
+      })
+      .then((data) => setMilestones(data))
+      .catch((e) => {
+        setMilestones(null);
+        setError(e instanceof Error ? e.message : 'Failed to load milestones');
+      })
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  return { milestones, loading };
+  return { milestones, loading, error };
 }
 
 export function getMilestoneStatusIcon(status: MilestoneStatus['status']): string {

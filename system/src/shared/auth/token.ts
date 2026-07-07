@@ -26,6 +26,24 @@ export function clearToken() {
   }
 }
 
+// Revokes the current token server-side (so it can't still be used if it was ever leaked)
+// before clearing it locally. Best-effort: if the request fails (offline, server down), the
+// local token is still cleared so the user is signed out of this browser either way.
+export async function logout(): Promise<void> {
+  const token = getToken();
+  if (token) {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      // ignore — still clear the local token below
+    }
+  }
+  clearToken();
+}
+
 export function getTokenRoles(): string[] {
   const token = getToken();
   if (!token) return [];

@@ -13,6 +13,11 @@ interface RightSidebarProps {
   uploadedFiles: UploadedFile[];
   sectionAiIssues: Record<string, any[]>;
   crossConsistencyIssues?: any[];
+  savedWontFixIssues?: Record<string, string[]>;
+  wontFixCrossConsistencyIds?: string[];
+  onSectionAiIssuesChange: (sectionId: string, issues: any[]) => void;
+  onWontFixSave?: (sectionId: string, descriptions: string[]) => void;
+  onCrossConsistencyWontFixSave?: (ids: string[]) => void;
 }
 
 export function RightSidebar({
@@ -25,6 +30,11 @@ export function RightSidebar({
   uploadedFiles,
   sectionAiIssues,
   crossConsistencyIssues,
+  savedWontFixIssues,
+  wontFixCrossConsistencyIds,
+  onSectionAiIssuesChange,
+  onWontFixSave,
+  onCrossConsistencyWontFixSave,
 }: RightSidebarProps) {
   return (
     <div className="w-80 flex flex-col overflow-hidden border-l border-slate-200 bg-white">
@@ -38,6 +48,11 @@ export function RightSidebar({
           onVerifyElement={onVerifyElement}
           sectionAiIssues={sectionAiIssues}
           crossConsistencyIssues={crossConsistencyIssues}
+          savedWontFixIssues={savedWontFixIssues}
+          wontFixCrossConsistencyIds={wontFixCrossConsistencyIds}
+          onSectionAiIssuesChange={onSectionAiIssuesChange}
+          onWontFixSave={onWontFixSave}
+          onCrossConsistencyWontFixSave={onCrossConsistencyWontFixSave}
         />
       </div>
 

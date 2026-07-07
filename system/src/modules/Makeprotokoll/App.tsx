@@ -3,7 +3,7 @@ import { useParams, useLocation, Link } from 'react-router-dom';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle } from 'lucide-react';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState } from '@/shared/workflow/types';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { ProtocolSection } from './components/protocol-section';
 import { ExportReadinessIndicator } from './components/export-readiness-indicator';
 import { ReviewModeEntry } from './components/review-mode-entry';
@@ -15,6 +15,7 @@ import { AmendmentModal } from './components/AmendmentModal';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
+import { getToken } from '@/shared/auth/token';
 
 
 
@@ -26,6 +27,7 @@ export default function App() {
   const [reviewCycle, setReviewCycle] = useState<number>(0);
   const [showReviewConfirmation, setShowReviewConfirmation] = useState<boolean>(false);
   const [issueFilter, setIssueFilter] = useState<'my-issues' | 'all-issues'>('my-issues');
+  const [sessionUser, setSessionUser] = useState<{ id: string; name: string; email: string | null } | null>(null);
   const [showAuditLog, setShowAuditLog] = useState<boolean>(false);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mainContentRef = useRef<HTMLDivElement | null>(null);
@@ -41,6 +43,7 @@ export default function App() {
   const [generatingProtocol, setGeneratingProtocol] = React.useState(false);
   const [protocolError, setProtocolError] = React.useState<string | null>(null);
 const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
+  const [sectionAnalysisFailed, setSectionAnalysisFailed] = React.useState<Record<string, boolean>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
@@ -136,6 +139,17 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Real authenticated identity, used to determine which sections/issues are
+  // actually "mine" — independent of the project's role assignments below.
+  React.useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then((u: { id: string; name: string; email: string | null } | null) => { if (u) setSessionUser(u); })
+      .catch(() => {});
+  }, []);
+
   React.useEffect(() => {
     if (!projectId) return;
     loadOrGenerateProtocol();
@@ -159,6 +173,17 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
       });
       const result = await res.json();
+
+      // A failed AI call/parse is an explicit error state, not an empty success.
+      // Never merge it into issues/requiredElements — that would silently mask
+      // the failure as "AI confirmed nothing/everything is missing."
+      if (!res.ok || result?.error) {
+        console.error('Section analysis failed', result?.message || res.statusText);
+        setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: true }));
+        return 0;
+      }
+      setSectionAnalysisFailed(prev => (prev[sectionId] ? { ...prev, [sectionId]: false } : prev));
+
       let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
       const elements = result.requiredElements || [];
       // Filter out won't-fix descriptions for this section
@@ -187,6 +212,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       return resolvedCount;
     } catch (e) {
       console.error('Section analysis failed', e);
+      setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: true }));
       return 0;
     }
   };
@@ -462,26 +488,25 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
       // If amendment is now fully approved, re-analyze affected protocol sections
       if (updatedAmendment.status === 'approved') {
+        // Re-fetch and apply the freshly-approved protocol BEFORE analyzing any
+        // section. analyzeSectionWithAI persists via setProtocol(prev => ...) and
+        // PATCHes the whole `protocol` object back — if `prev` were the stale
+        // pre-approval state instead, each per-section PATCH below would silently
+        // overwrite the backend's just-set amended/needs-review flags.
+        const freshProject = await fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()).catch(() => null);
+        const freshProtocol = freshProject?.data?.protocol;
+        if (freshProtocol) setProtocol(freshProtocol);
+
         const affectedSectionIds: string[] = updatedAmendment.affectedProtocolSections || [];
-        const sectionsToAnalyze = protocol?.sections?.filter((s: any) =>
+        const sectionsToAnalyze = (freshProtocol?.sections || protocol?.sections || []).filter((s: any) =>
           affectedSectionIds.includes(s.id)
-        ) || [];
+        );
 
         for (const section of sectionsToAnalyze) {
           if (section.content) {
             await analyzeSectionWithAI(section.title, section.content, section.id);
           }
         }
-
-        // Also re-fetch project to get updated section states
-        fetch(apiBase + '/api/projects/' + projectId)
-          .then(r => r.json())
-          .then(p => {
-            if (p.data?.protocol) {
-              setProtocol(p.data.protocol);
-            }
-          })
-          .catch(() => {});
 
         // Trigger report re-analysis via custom event
         window.dispatchEvent(new CustomEvent('report:refresh-analysis'));
@@ -511,11 +536,14 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     return 'Unknown';
   }, [roles]);
 
-  // Bare name (no role suffix) for matching against owner/raisedBy fields,
-  // which store only the person's name.
+  // Bare name for matching against owner/raisedBy fields, which store only the
+  // person's name. Prefer the real logged-in session over the role-derived
+  // guess above — otherwise "my issues" always matches whoever the project
+  // happens to list as Protocol Lead/Medical Writer/etc., regardless of who
+  // is actually signed in.
   const currentUserName = React.useMemo(
-    () => currentUser.replace(/\s*\([^)]*\)$/, ''),
-    [currentUser]
+    () => sessionUser?.name || currentUser.replace(/\s*\([^)]*\)$/, ''),
+    [sessionUser, currentUser]
   );
 
   const toggleSection = (sectionId: string) => {
@@ -610,12 +638,12 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
     // Transition protocol-make → approved so the sidebar unlocks Protocol Review.
     // Non-blocking: navigate even if the transition fails.
-    transitionWorkflow({
+    advanceWorkflowStep({
       projectId: projectId!,
       stepId: 'protocol-make',
       to: 'approved',
       note: `Protocol review cycle ${nextCycle} started by ${currentUser}`,
-    }).catch(() => {});
+    });
 
     try {
       await fetch(apiBase + '/api/projects/' + projectId + '/audit', {
@@ -671,12 +699,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   const approvedCount = protocolSections.filter(s => s.approvalStatus === 'approved').length;
 
   // Issue filtering logic
-  const getFilteredSections = () => {
-    if (issueFilter === 'all-issues') {
-      return protocolSections;
-    }
-    
-    // Filter to 'my-issues': sections where current user is owner OR has assigned issues
+  const getMyIssuesSections = () => {
+    // Sections where current user is owner OR has assigned issues
     return protocolSections.filter(section => {
       // User is section owner
       if (section.owner === currentUserName) return true;
@@ -691,16 +715,25 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     });
   };
 
+  const getFilteredSections = () => {
+    if (issueFilter === 'all-issues') {
+      return protocolSections;
+    }
+    return getMyIssuesSections();
+  };
+
   const filteredSections = getFilteredSections();
-  
-  // Calculate filtered issue counts
-  const filteredBlockers = filteredSections.reduce((count, section) => 
+
+  // "My issues" count must always reflect the current user's subset,
+  // regardless of which tab (issueFilter) is currently active.
+  const myIssuesSections = getMyIssuesSections();
+  const myIssuesBlockers = myIssuesSections.reduce((count, section) =>
     count + (section.issues?.filter(i => i.severity === 'blocker' && i.status === 'open').length || 0), 0
   );
-  const filteredIssues = filteredSections.reduce((count, section) => 
+  const myIssuesWarnings = myIssuesSections.reduce((count, section) =>
     count + (section.issues?.filter(i => i.severity === 'warning' && i.status === 'open').length || 0), 0
   );
-  const myIssuesCount = filteredBlockers + filteredIssues;
+  const myIssuesCount = myIssuesBlockers + myIssuesWarnings;
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
@@ -896,6 +929,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         onApprove={(comment) => handleApproveSection(section.id, comment)}
                         onUnlock={(reason) => handleUnlockSection(section.id, reason)}
                         deadline={protocolMakeDeadline}
+                        analysisFailed={!!sectionAnalysisFailed[section.id]}
+                        onRetryAnalysis={() => analyzeSectionWithAI(section.title, section.content, section.id)}
                       />
                     ))}
                   </div>
@@ -934,22 +969,31 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Protocol Amendments</h3>
                   </div>
                   {amendments.map((amendment: any) => {
-                    const statusColors: Record<string, string> = {
-                      draft: 'bg-amber-500',
-                      approved: 'bg-indigo-600',
-                      rejected: 'bg-rose-500',
+                    // Same pill style as the section "Status Badges" in protocol-section.tsx —
+                    // amber (needs action) matches ProtocolFinalizedBanner's 'approved' state;
+                    // blue (terminal/complete) matches the section list's own "Approved" badge.
+                    const statusBadges: Record<string, { label: string; className: string }> = {
+                      draft:     { label: 'Draft',     className: 'bg-slate-100 text-slate-700 border border-slate-200' },
+                      approved:  { label: 'Approved',  className: 'bg-amber-100 text-amber-700 border border-amber-200 font-medium' },
+                      rejected:  { label: 'Rejected',  className: 'bg-rose-100 text-rose-700 border border-rose-200 font-medium' },
+                      finalized: { label: 'Finalized', className: 'bg-blue-100 text-blue-700 border border-blue-200 font-medium' },
                     };
+                    const statusBadge = statusBadges[amendment.status] || { label: amendment.status, className: 'bg-slate-100 text-slate-700 border border-slate-200' };
                     const protocolLeadApproved = !!amendment.approvals?.protocolLead?.approved;
                     const vpApproved = !!amendment.approvals?.clinicalAffairsVP?.approved;
                     const isDraft = amendment.status === 'draft';
                     return (
                       <div key={amendment.id} className="mb-3 last:mb-0">
                         <div className="flex items-start gap-2">
-                          <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${statusColors[amendment.status] || 'bg-slate-400'}`} />
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-slate-800 leading-tight">
-                              Amendment {amendment.number}: {amendment.title}
-                            </p>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs font-medium text-slate-800 leading-tight">
+                                Amendment {amendment.number}: {amendment.title}
+                              </p>
+                              <span className={`px-2 py-0.5 text-xs rounded whitespace-nowrap flex-shrink-0 ${statusBadge.className}`}>
+                                {statusBadge.label}
+                              </span>
+                            </div>
                             <p className="text-xs text-slate-500 mt-0.5 leading-tight line-clamp-2">{amendment.reason}</p>
                             {amendment.description && (
                               <p className="text-xs text-slate-600 mt-1 leading-tight line-clamp-2">{amendment.description}</p>
@@ -997,7 +1041,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
               {/* Scrollable Content */}
               <div className="flex-1 overflow-y-auto min-h-0">
                 <div className="p-4 space-y-3">
-                  {synopsisConsistencyIssues.length > 0 && (issueFilter === 'all' || issueFilter === 'my') && synopsisConsistencyIssues.map((issue: any, i: number) => (
+                  {synopsisConsistencyIssues.length > 0 && (issueFilter === 'all-issues' || issueFilter === 'my-issues') && synopsisConsistencyIssues.map((issue: any, i: number) => (
                     <div key={'synopsis-' + i} className="p-3 border-b border-slate-100 hover:bg-slate-50">
                       <div className="flex items-start gap-2">
                         <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${issue.severity === 'blocker' ? 'bg-rose-500' : 'bg-amber-400'}`} />

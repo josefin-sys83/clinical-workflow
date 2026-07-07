@@ -76,7 +76,9 @@ export function useProtocolStatus(projectId: string | undefined): ProtocolStatus
     ? { id: top.id, number: top.number, title: top.title, state }
     : null;
 
-  const isLocked = protocolFinalized && !latestAmendment;
+  // Locked when finalized and there's no amendment currently in progress — a
+  // finalized amendment (or no amendment at all) both count as "nothing pending".
+  const isLocked = protocolFinalized && (!latestAmendment || latestAmendment.state === 'finalized');
 
   return { protocolFinalized, isLocked, amendments, latestAmendment, loading };
 }

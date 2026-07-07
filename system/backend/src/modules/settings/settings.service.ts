@@ -1,5 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { getPool } from '../../db/pg';
+import { EmailService } from '../email/email.service';
 
 const STEP_ORDER = [
   'project-setup', 'synopsis', 'scope',
@@ -19,6 +21,8 @@ function deriveCurrentStep(data: any): string {
 
 @Injectable()
 export class SettingsService {
+  constructor(private readonly email: EmailService) {}
+
   async getProfile(userId: string) {
     const { rows } = await getPool().query(
       `select u.id, u.name, u.email, u.system_role, u.timezone, u.created_at,
@@ -53,7 +57,7 @@ export class SettingsService {
     );
     if (!rows[0]) throw new UnauthorizedException('Current password is incorrect');
     await getPool().query(
-      `update users set password_hash = crypt($1, gen_salt('bf', 10)), updated_at = now()
+      `update users set password_hash = crypt($1, gen_salt('bf', 10)), must_reset_password = false, updated_at = now()
        where id = $2`,
       [newPassword, userId],
     );
@@ -104,16 +108,29 @@ export class SettingsService {
     return { users: ur.rows, projects };
   }
 
-  async inviteUser(companyId: string, name: string, email: string, password: string, systemRole: string) {
+  async inviteUser(companyId: string, name: string, email: string, systemRole: string) {
     if (systemRole !== 'admin' && systemRole !== 'member') throw new BadRequestException('Invalid role');
     const dbRole = systemRole === 'admin' ? 'admin' : 'author';
+    const tempPassword = randomBytes(12).toString('base64url');
     const { rows } = await getPool().query(
-      `insert into users (company_id, name, email, password_hash, system_role)
-       values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5)
+      `insert into users (company_id, name, email, password_hash, system_role, must_reset_password)
+       values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5, true)
        returning id, name, email, system_role, is_active, created_at`,
-      [companyId, name, email, password, dbRole],
+      [companyId, name, email, tempPassword, dbRole],
     );
-    return rows[0];
+    const user = rows[0];
+
+    const emailSent = await this.email.send(
+      email,
+      'Your Clinical Investigation Platform account',
+      `Hi ${name},\n\n` +
+        `An account has been created for you on the Clinical Investigation Platform.\n\n` +
+        `Email: ${email}\n` +
+        `Temporary password: ${tempPassword}\n\n` +
+        `Log in and you'll be asked to set a new password before continuing.`,
+    );
+
+    return { ...user, accountCreated: true, emailSent };
   }
 
   async setUserRole(companyId: string, userId: string, systemRole: string) {

@@ -7,6 +7,7 @@ import {
   Req,
   Res,
   Body,
+  UseGuards,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
@@ -15,13 +16,15 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentsService } from './documents.service';
-import { Roles } from '../auth/roles.decorator';
+import { JwtAuthGuard, ProjectAccessGuard, Roles, RolesGuard } from '../auth';
 import { FinalizeDocumentDto, CreateAddendumDto, UpdateAddendumDto } from './dto';
 import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
+import { ADDENDUM_UPLOAD_OPTIONS } from '../../common/upload-security';
 
 @ApiTags('documents')
 @ApiBearerAuth()
+@UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
 @Controller('api/projects/:projectId/documents')
 export class DocumentsController {
   constructor(
@@ -39,18 +42,26 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const roles: string[] | undefined = Array.isArray(user?.roles) ? user.roles : undefined;
 
     const created = await this.docs.finalize({ projectId, docType, userId, userRoles: roles, note: body?.note });
 
-    // Best-effort: mark the corresponding PDF step finalized.
+    // Mark the corresponding PDF step finalized. finalize() and transition() write
+    // through separate services/connections, so they can't share one DB transaction —
+    // if the transition fails, compensate by deleting the artifact we just created so
+    // the endpoint is all-or-nothing instead of leaving a permanent orphaned artifact.
     const stepId = docType === 'protocol' ? 'protocol-pdf' : 'report-pdf';
-    await this.workflow.transition(projectId, stepId, {
-      action: 'finalize',
-      reason: body?.note ?? `Finalized ${docType} export (${created.sha256.slice(0, 12)}…)`,
-      actorUserId: userId,
-    } as any);
+    try {
+      await this.workflow.transition(projectId, stepId, {
+        action: 'finalize',
+        reason: body?.note ?? `Finalized ${docType} export (${created.sha256.slice(0, 12)}…)`,
+        actorUserId: userId,
+      } as any);
+    } catch (err) {
+      await this.docs.deleteArtifact({ projectId, docType, artifactId: created.id }).catch(() => {});
+      throw err;
+    }
 
     await this.audit.record({
       projectId,
@@ -92,7 +103,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const result = await this.docs.verify({ projectId, artifactId, verifierUserId: userId });
     await this.audit.record({
       projectId,
@@ -113,7 +124,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const roles: string[] = Array.isArray(user?.roles) ? user.roles : [];
 
     const signed = await this.docs.signArtifact({
@@ -152,7 +163,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const result = await this.docs.verifyChain({ projectId, artifactId, verifierUserId: userId });
 
     await this.audit.record({
@@ -195,7 +206,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const created = await this.docs.createAddendum({
       projectId,
       docType,
@@ -238,7 +249,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
 
     const updated = await this.docs.updateAddendum({
       projectId,
@@ -270,7 +281,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const res = await this.docs.startAddendumReview({ projectId, docType, addendumId });
 
     await this.audit.record({
@@ -295,7 +306,7 @@ export class DocumentsController {
     @Body() body: any,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
 
     const res = await this.docs.approveAddendumAsReviewer({
       projectId,
@@ -328,7 +339,7 @@ export class DocumentsController {
     @Body() body: any,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
 
     const res = await this.docs.approveAddendumAsReviewer({
       projectId,
@@ -360,7 +371,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const roles: string[] = Array.isArray(user?.roles) ? user.roles : [];
 
     const res = await this.docs.signAddendum({
@@ -392,7 +403,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     const res = await this.docs.lockAddendum({ projectId, docType, addendumId });
 
     await this.audit.record({
@@ -421,7 +432,7 @@ export class DocumentsController {
 
   @Post(':docType/addendums/:addendumId/files')
   @Roles('admin', 'author')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', ADDENDUM_UPLOAD_OPTIONS))
   async uploadAddendumFile(
     @Param('projectId') projectId: string,
     @Param('docType') docType: 'protocol' | 'report',
@@ -430,7 +441,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user: any = (req as any).user;
-    const userId = user?.sub;
+    const userId = user?.userId;
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }

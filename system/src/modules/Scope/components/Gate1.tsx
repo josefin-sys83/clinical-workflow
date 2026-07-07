@@ -4,6 +4,7 @@ import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { postAudit } from '@/shared/api/audit';
+import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -677,14 +678,8 @@ Return ONLY a JSON array, no markdown:
   };
 
   const handleConfirmGate = async () => {
-    try {
-      await fetch(`/api/projects/${projectId}/workflow/scope/transition`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: 'approved' }),
-      });
-    } catch {
-      // non-blocking — navigate regardless
+    if (projectId) {
+      await advanceWorkflowStep({ projectId, stepId: 'scope', to: 'approved' });
     }
     navigate(`/projects/${projectId}/workflow/protocol/make`);
   };

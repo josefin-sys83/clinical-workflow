@@ -5,7 +5,7 @@ import { ReportContent } from '../components/ReportContent';
 import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
 import { AuditTrailModal } from '../components/AuditTrailModal';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
@@ -173,10 +173,15 @@ export default function ReviewPage() {
         type: 'lifecycle_transition',
         summary: 'Report approved for PDF finalization',
       });
-      await transitionWorkflow({ projectId, stepId: 'report-review', to: 'approved' });
+      await advanceWorkflowStep({ projectId, stepId: 'report-review', to: 'approved' });
       navigate(`/projects/${projectId}/workflow/report/pdf`);
     } catch (e) {
-      console.error('Approve failed', e);
+      if (e instanceof WorkflowStepBlockedError) {
+        window.alert(e.message);
+      } else {
+        console.error('Approve failed', e);
+        window.alert('Something went wrong while approving. Please try again.');
+      }
     } finally {
       setApproving(false);
     }
@@ -197,10 +202,18 @@ export default function ReviewPage() {
         type: 'changes_requested',
         summary: `Request Changes: ${requestChangesComment.trim()}`,
       });
-      await transitionWorkflow({ projectId, stepId: 'report-review', to: 'draft' });
+      // 'draft' isn't a valid transition target (stateNameToAction() has no mapping for
+      // it) — 'blocked' is the correct "sent back for changes" state, same as the
+      // protocol-review equivalent in ReviewPageCopy.tsx.
+      await advanceWorkflowStep({ projectId, stepId: 'report-review', to: 'blocked' });
       navigate(`/projects/${projectId}/workflow/report/make`);
     } catch (e) {
-      console.error('Request changes failed', e);
+      if (e instanceof WorkflowStepBlockedError) {
+        window.alert(e.message);
+      } else {
+        console.error('Request changes failed', e);
+        window.alert('Something went wrong while requesting changes. Please try again.');
+      }
     } finally {
       setRequestChangesSubmitting(false);
       setShowRequestChangesDialog(false);

@@ -81,8 +81,8 @@ export class AdminController {
 
   @UseGuards(JwtAuthGuard, SuperadminGuard)
   @Post('team')
-  inviteTeam(@Body() body: { name: string; email: string; password: string }) {
-    return this.admin.createSuperadmin(body.name, body.email, body.password);
+  inviteTeam(@Body() body: { name: string; email: string }) {
+    return this.admin.createSuperadmin(body.name, body.email);
   }
 
   @UseGuards(JwtAuthGuard, SuperadminGuard)

@@ -2,7 +2,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { Lock, Info, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
-import { transitionWorkflow } from '@/shared/services/workflowService';
+import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { createProjectAuditEvent } from '@/shared/services/auditService';
 
 // ─── Inline document styles (A4 paper layout preserved for print/PDF) ─────────
@@ -82,6 +82,7 @@ export function ProtocolDocument() {
   const [confirmingAs, setConfirmingAs] = useState<'investigator' | 'sponsor' | null>(null);
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [confirmNameInput, setConfirmNameInput] = useState('');
+  const [signError, setSignError] = useState<string | null>(null);
 
   // ── Document integrity hash ────────────────────────────────────────────────
   const [documentHash, setDocumentHash] = useState('');
@@ -210,6 +211,7 @@ export function ProtocolDocument() {
   const handleSignClick = (role: 'investigator' | 'sponsor') => {
     setConfirmChecked(false);
     setConfirmNameInput('');
+    setSignError(null);
     setConfirmingAs(role);
   };
 
@@ -220,9 +222,7 @@ export function ProtocolDocument() {
     const roleTitle     = confirmingAs === 'investigator' ? piRoleTitle  : vpRoleTitle;
     const which         = confirmingAs;
 
-    setConfirmingAs(null);
-    setConfirmNameInput('');
-    setConfirmChecked(false);
+    setSignError(null);
     setSaving(true);
 
     try {
@@ -231,6 +231,7 @@ export function ProtocolDocument() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           role: which,
+          roleTitle,
           signerName,
           signerEmail,
           signerUserId: signerEmail || signerName,
@@ -244,16 +245,34 @@ export function ProtocolDocument() {
           const updated = { ...prev, [which]: record };
           // Both signatures present — transition protocol-pdf to signed
           if (updated.investigator && updated.sponsor && projectId) {
-            transitionWorkflow({ projectId, stepId: 'protocol-pdf', to: 'signed' }).catch(() => {});
+            advanceWorkflowStep({ projectId, stepId: 'protocol-pdf', to: 'signed' }).catch((e) => {
+              setSignError(e instanceof WorkflowStepBlockedError ? e.message : 'Signature saved, but finalizing the sign-off failed. Please try again.');
+            });
           }
           return updated;
         });
+        setConfirmingAs(null);
+        setConfirmNameInput('');
+        setConfirmChecked(false);
       } else {
         const errText = await res.text();
         console.error('[PdfProtocol] Signature POST failed:', res.status, errText);
+        if (res.status === 403) {
+          let message = 'You are not authorized to sign as this role.';
+          try {
+            const parsed = JSON.parse(errText);
+            if (parsed?.message) message = parsed.message;
+          } catch {
+            // errText wasn't JSON — fall back to the default message
+          }
+          setSignError(message);
+        } else {
+          setSignError('Signature failed. Please try again.');
+        }
       }
     } catch (e) {
       console.error('[PdfProtocol] Signature request error:', e);
+      setSignError('Signature failed. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -278,11 +297,15 @@ export function ProtocolDocument() {
         type: 'changes_requested',
         summary: `Request Changes: ${requestChangesComment.trim()}`,
       });
-      await transitionWorkflow({ projectId: projectId!, stepId: 'protocol-pdf', to: 'blocked' });
+      await advanceWorkflowStep({ projectId: projectId!, stepId: 'protocol-pdf', to: 'blocked' });
       navigate(`/projects/${projectId}/workflow/protocol/make`);
     } catch (e) {
-      console.error('Request changes failed', e);
-      alert('Something went wrong. Please try again.');
+      if (e instanceof WorkflowStepBlockedError) {
+        alert(e.message);
+      } else {
+        console.error('Request changes failed', e);
+        alert('Something went wrong. Please try again.');
+      }
     } finally {
       setRequestChangesSubmitting(false);
       setShowRequestChangesDialog(false);
@@ -753,10 +776,17 @@ export function ProtocolDocument() {
                 </span>
               </label>
 
+              {/* Signature error banner */}
+              {signError && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', padding: '12px 16px', fontSize: '13px', color: '#991b1b', lineHeight: 1.5 }}>
+                  {signError}
+                </div>
+              )}
+
               {/* Actions */}
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '4px' }}>
                 <button
-                  onClick={() => { setConfirmingAs(null); setConfirmNameInput(''); setConfirmChecked(false); }}
+                  onClick={() => { setConfirmingAs(null); setConfirmNameInput(''); setConfirmChecked(false); setSignError(null); }}
                   style={{ cursor: 'pointer', background: '#fff', color: '#374151', border: '1px solid #d1d5db', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 500, fontFamily: 'inherit' }}
                 >
                   Cancel

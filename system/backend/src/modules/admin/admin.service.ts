@@ -1,5 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
+import { EmailService } from '../email/email.service';
 
 export const PLAN_LIMITS: Record<string, number> = {
   starter: 2,
@@ -9,6 +12,8 @@ export const PLAN_LIMITS: Record<string, number> = {
 
 @Injectable()
 export class AdminService {
+  constructor(private readonly email: EmailService) {}
+
   async getStats() {
     const pool = getPool();
     const [c, u, p] = await Promise.all([
@@ -175,33 +180,49 @@ export class AdminService {
     return rows[0];
   }
 
-  /** Called by ProjectsService before creating a project. Throws if over plan limit or suspended. */
-  async enforceProjectLimit(companyId: string): Promise<void> {
-    const { rows } = await getPool().query(
-      `select c.status, c.subscription_plan,
-              count(p.id)::int as project_count
-       from companies c
-       left join projects p on p.company_id = c.id
-       where c.id = $1
-       group by c.status, c.subscription_plan`,
+  /**
+   * Called by ProjectsService.create() before inserting a project. Throws if the
+   * company doesn't exist, is suspended, or is already at its plan's project limit.
+   *
+   * Must be called with the same transaction `client` that performs the insert, and
+   * that client must already be inside a BEGIN. `for update` takes a row lock on the
+   * company for the rest of that transaction, so a second concurrent create() for the
+   * same company blocks here until the first commits (and its insert becomes visible
+   * to this one's count) instead of both reading the same stale project_count — the
+   * plain unlocked read-then-insert this replaced allowed both to pass the limit check.
+   */
+  async enforceProjectLimit(companyId: string, client: PoolClient): Promise<void> {
+    const { rows } = await client.query(
+      `select status, subscription_plan from companies where id = $1 for update`,
       [companyId],
     );
-    if (!rows[0]) return; // unknown company — let it through
-    const { status, subscription_plan, project_count } = rows[0];
-    if (status === 'suspended') {
+    const company = rows[0];
+    // An unknown company is never valid here — a nonexistent/deleted company_id (e.g. a
+    // stale JWT issued before the company was removed) must be rejected explicitly, not
+    // waved through: letting it through only ever led to an unhandled FK-violation 500
+    // on the insert that followed, since projects.company_id references companies(id).
+    if (!company) {
+      throw new BadRequestException('Company not found for this account. Contact your administrator.');
+    }
+    if (company.status === 'suspended') {
       throw new ForbiddenException('Your organisation account is suspended. Contact your administrator.');
     }
-    const limit = PLAN_LIMITS[subscription_plan] ?? 2;
-    if (project_count >= limit) {
-      const planLabel = subscription_plan.charAt(0).toUpperCase() + subscription_plan.slice(1);
+    const { rows: cntRows } = await client.query(
+      `select count(*)::int as project_count from projects where company_id = $1`,
+      [companyId],
+    );
+    const projectCount = Number(cntRows[0]?.project_count ?? 0);
+    const limit = PLAN_LIMITS[company.subscription_plan] ?? 2;
+    if (projectCount >= limit) {
+      const planLabel = company.subscription_plan.charAt(0).toUpperCase() + company.subscription_plan.slice(1);
       throw new ForbiddenException(
         `Project limit reached. Your ${planLabel} plan allows up to ${limit} project${limit === 1 ? '' : 's'}. Upgrade your plan to create more.`,
       );
     }
   }
 
-  async touchLastActive(companyId: string): Promise<void> {
-    await getPool().query(
+  async touchLastActive(companyId: string, client?: PoolClient): Promise<void> {
+    await (client ?? getPool()).query(
       `update companies set last_active_at = now() where id = $1`,
       [companyId],
     );
@@ -217,14 +238,27 @@ export class AdminService {
     return rows;
   }
 
-  async createSuperadmin(name: string, email: string, password: string) {
+  async createSuperadmin(name: string, email: string) {
+    const tempPassword = randomBytes(12).toString('base64url');
     const { rows } = await getPool().query(
-      `insert into users (name, email, password_hash, system_role, is_superadmin, company_id)
-       values ($1, $2, crypt($3, gen_salt('bf', 10)), 'admin', true, null)
+      `insert into users (name, email, password_hash, system_role, is_superadmin, company_id, must_reset_password)
+       values ($1, $2, crypt($3, gen_salt('bf', 10)), 'admin', true, null, true)
        returning id, name, email, is_active, created_at`,
-      [name, email, password],
+      [name, email, tempPassword],
     );
-    return rows[0];
+    const user = rows[0];
+
+    const emailSent = await this.email.send(
+      email,
+      'Your Clinical Investigation Platform superadmin account',
+      `Hi ${name},\n\n` +
+        `A superadmin account has been created for you on the Clinical Investigation Platform.\n\n` +
+        `Email: ${email}\n` +
+        `Temporary password: ${tempPassword}\n\n` +
+        `Log in and you'll be asked to set a new password before continuing.`,
+    );
+
+    return { ...user, accountCreated: true, emailSent };
   }
 
   async setSuperadminActive(id: string, isActive: boolean) {

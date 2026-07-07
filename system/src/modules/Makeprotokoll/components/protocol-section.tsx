@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import DOMPurify from 'dompurify';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Paperclip } from 'lucide-react';
 import { AuditTrailModal } from './audit-trail-modal';
 import { InlineIssueMarker } from './inline-issue-marker';
@@ -94,6 +95,8 @@ interface ProtocolSectionProps {
   onApprove?: (comment: string) => Promise<void>;
   onUnlock?: (reason: string) => Promise<void>;
   deadline?: { date: string; status: string } | null;
+  analysisFailed?: boolean;
+  onRetryAnalysis?: () => void;
 }
 
 /** Apply only inline markdown (bold, italic, underline, images) — safe inside table cells. */
@@ -203,7 +206,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisFailed = false, onRetryAnalysis }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -248,7 +251,11 @@ function ProtocolSectionComponent(
   // Populate editor HTML when entering edit mode
   useEffect(() => {
     if (isEditing && editorRef.current) {
-      editorRef.current.innerHTML = section.content || '<p><br></p>';
+      // Fix 19: previously assigned section.content to innerHTML directly, bypassing the
+      // sanitizeForRender() DOMPurify pass used everywhere else in this file — a stray
+      // <img onerror=...> or similar would execute the instant a user opened the section
+      // for editing. Sanitize here too, exactly as the read-mode render path already does.
+      editorRef.current.innerHTML = sanitizeForRender(section.content || '') || '<p><br></p>';
       editorRef.current.focus();
     }
   }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -377,9 +384,21 @@ function ProtocolSectionComponent(
    * Render content for read mode.
    * HTML content (new) is rendered directly; legacy markdown is converted.
    */
+  // Defense-in-depth: the backend sanitizes section content on the way in (see
+  // sanitize-section-html.ts), but this renders straight into dangerouslySetInnerHTML,
+  // so it must never trust that alone — sanitize again immediately before render.
+  const sanitizeForRender = (html: string): string => DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      'h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
+      'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'img', 'mark', 'span', 'blockquote', 'code', 'pre',
+    ],
+    ALLOWED_ATTR: ['style', 'src', 'alt'],
+  });
+
   const renderContent = (content: string): string => {
     if (!content) return '';
-    if (/<[a-z][\s\S]*>/i.test(content)) return content;
+    if (/<[a-z][\s\S]*>/i.test(content)) return sanitizeForRender(content);
     // Legacy markdown fallback
     let h = content
       .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -403,7 +422,7 @@ function ProtocolSectionComponent(
     h = h.split('\n').map(line =>
       /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
     ).join('\n');
-    return h;
+    return sanitizeForRender(h);
   };
 
   return (
@@ -601,11 +620,27 @@ function ProtocolSectionComponent(
 
             {/* 3. COMPLETENESS STATUS - INSPECTION CRITICAL */}
             {/* Always shown in a collapsible box */}
-            {section.requiredElements && section.requiredElements.length > 0 && (
-              <SectionCompletenessIndicator
-                sectionNumber={section.number}
-                requiredElements={section.requiredElements}
-              />
+            {analysisFailed ? (
+              <div className="px-3 py-2.5 border border-amber-200 bg-amber-50 rounded flex items-center justify-between gap-3">
+                <span className="text-xs text-amber-800">
+                  Completeness analysis unavailable — the last check failed, so results below may be out of date.
+                </span>
+                {onRetryAnalysis && (
+                  <button
+                    onClick={onRetryAnalysis}
+                    className="text-xs font-medium text-amber-800 hover:text-amber-900 underline flex-shrink-0"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            ) : (
+              section.requiredElements && section.requiredElements.length > 0 && (
+                <SectionCompletenessIndicator
+                  sectionNumber={section.number}
+                  requiredElements={section.requiredElements}
+                />
+              )
             )}
 
             {/* 4. AI ROLE CLARITY - INSPECTION CRITICAL */}
@@ -1058,8 +1093,8 @@ function ProtocolSectionComponent(
         <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
           <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem'}}>
-              <div style={{width: '1.25rem', height: '1.25rem', borderRadius: '50%', backgroundColor: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <div style={{width: '1.25rem', height: '1.25rem', borderRadius: '50%', backgroundColor: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </div>
               <h2 style={{margin: 0, fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Approve Section</h2>
             </div>

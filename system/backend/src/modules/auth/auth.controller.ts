@@ -19,4 +19,11 @@ export class AuthController {
   me(@Req() req: any) {
     return this.auth.me(req.user);
   }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('/logout')
+  logout(@Req() req: any) {
+    return this.auth.logout(req.user.jti, req.user.exp);
+  }
 }
