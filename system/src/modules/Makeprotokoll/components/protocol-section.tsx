@@ -8,6 +8,16 @@ import { SectionCompletenessIndicator } from './section-completeness-indicator';
 import { AmendmentWarning } from './amendment-warning';
 import { ProtocolTextSeparator, MetadataSeparator } from './protocol-text-separator';
 import { AIRoleClarityBanner } from './ai-role-clarity-banner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/shared/ui/alert-dialog';
 
 interface ProtocolIssue {
   id: string;
@@ -96,6 +106,7 @@ interface ProtocolSectionProps {
   onUnlock?: (reason: string) => Promise<void>;
   deadline?: { date: string; status: string } | null;
   analysisFailed?: boolean;
+  analysisRetrying?: boolean;
   onRetryAnalysis?: () => void;
 }
 
@@ -206,7 +217,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisFailed = false, onRetryAnalysis }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisFailed = false, analysisRetrying = false, onRetryAnalysis }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -224,6 +235,7 @@ function ProtocolSectionComponent(
   const [changeReason, setChangeReason] = useState('');
   const [wontFixModal, setWontFixModal] = useState<string | null>(null); // issueId or null
   const [wontFixComment, setWontFixComment] = useState('');
+  const [hoveredRoleTerm, setHoveredRoleTerm] = useState<'reviewer' | 'approver' | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string }>>([]);
   const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set(['normal']));
   const editorRef = useRef<HTMLDivElement>(null);
@@ -522,7 +534,7 @@ function ProtocolSectionComponent(
                 className="flex items-center gap-1 hover:text-blue-600 transition-colors cursor-pointer"
               >
                 <MessageSquare className="w-3 h-3" />
-                <span>{comments.filter(c => c.status === 'open').length} comments</span>
+                <span>{comments.filter(c => c.status === 'open').length} comment{comments.filter(c => c.status === 'open').length === 1 ? '' : 's'}</span>
               </button>
               
               {/* Completeness Indicator */}
@@ -558,11 +570,39 @@ function ProtocolSectionComponent(
                   <span className="ml-2 text-slate-900">Cycle {section.reviewCycle || 1}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500">Required Approver:</span>
+                  <span
+                    className="relative inline-flex items-center gap-1 text-slate-500"
+                    onMouseEnter={() => setHoveredRoleTerm('approver')}
+                    onMouseLeave={() => setHoveredRoleTerm(null)}
+                  >
+                    Required Approver:
+                    <Info className="w-3 h-3 text-slate-400 cursor-help" />
+                    {hoveredRoleTerm === 'approver' && (
+                      <div className="absolute left-0 bottom-full mb-2 w-64 p-2.5 bg-slate-900 text-white text-xs rounded-lg shadow-lg z-20 normal-case font-normal">
+                        Gives formal sign-off on this section. Their approval is required
+                        before the section can move forward — distinct from a Reviewer, who
+                        can comment and flag issues but doesn't hold approval authority.
+                      </div>
+                    )}
+                  </span>
                   <span className="ml-2 text-slate-900">{section.approver || ''}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500">Reviewer(s):</span>
+                  <span
+                    className="relative inline-flex items-center gap-1 text-slate-500"
+                    onMouseEnter={() => setHoveredRoleTerm('reviewer')}
+                    onMouseLeave={() => setHoveredRoleTerm(null)}
+                  >
+                    Reviewer(s):
+                    <Info className="w-3 h-3 text-slate-400 cursor-help" />
+                    {hoveredRoleTerm === 'reviewer' && (
+                      <div className="absolute left-0 bottom-full mb-2 w-64 p-2.5 bg-slate-900 text-white text-xs rounded-lg shadow-lg z-20 normal-case font-normal">
+                        Can read, comment on, and raise issues against this section during
+                        review. A Reviewer's feedback doesn't by itself move the section
+                        forward — that requires the Required Approver's sign-off.
+                      </div>
+                    )}
+                  </span>
                   <span className="ml-2 text-slate-900">{section.reviewer || ''}</span>
                 </div>
                 <div>
@@ -628,9 +668,11 @@ function ProtocolSectionComponent(
                 {onRetryAnalysis && (
                   <button
                     onClick={onRetryAnalysis}
-                    className="text-xs font-medium text-amber-800 hover:text-amber-900 underline flex-shrink-0"
+                    disabled={analysisRetrying}
+                    className="text-xs font-medium text-amber-800 hover:text-amber-900 disabled:text-amber-400 disabled:no-underline underline flex-shrink-0 flex items-center gap-1.5"
                   >
-                    Retry
+                    {analysisRetrying && <span className="w-3 h-3 border-2 border-amber-300 border-t-amber-800 rounded-full animate-spin" />}
+                    {analysisRetrying ? 'Retrying…' : 'Retry'}
                   </button>
                 )}
               </div>
@@ -914,7 +956,7 @@ function ProtocolSectionComponent(
                 const issues = section.issues || [];
                 const quotes = issues.filter((iss: any) => iss.textQuote);
                 const editButton = (
-                  <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
+                  <div key="edit-button" style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
                     <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
                   </div>
                 );
@@ -1089,95 +1131,85 @@ function ProtocolSectionComponent(
       )}
 
       {/* ── Approve Section Modal ─────────────────────────────────────────────── */}
-      {showApproveModal && (
-        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
-          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
-            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem'}}>
-              <div style={{width: '1.25rem', height: '1.25rem', borderRadius: '50%', backgroundColor: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              </div>
-              <h2 style={{margin: 0, fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Approve Section</h2>
-            </div>
-            <p style={{margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#64748b'}}>
-              Section {section.number}: <strong>{section.title}</strong>
-            </p>
-            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
-              Approving marks this section as reviewed and compliant. Add an optional comment.
-            </p>
-            <textarea
-              autoFocus
-              value={approveComment}
-              onChange={(e) => setApproveComment(e.target.value)}
-              placeholder="Optional approval comment (e.g. Reviewed against ISO 14155:2020 §6.3, content verified)"
-              style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
-            />
-            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
-              <button
-                disabled={approveLoading}
-                onClick={() => { setShowApproveModal(false); setApproveComment(''); }}
-                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
-              >
-                Cancel
-              </button>
-              <button
-                disabled={approveLoading}
-                onClick={async () => {
-                  if (!onApprove) return;
-                  setApproveLoading(true);
-                  try { await onApprove(approveComment.trim()); }
-                  finally { setApproveLoading(false); setShowApproveModal(false); setApproveComment(''); }
-                }}
-                style={{padding: '0.5rem 1rem', backgroundColor: approveLoading ? '#93c5fd' : '#2563eb', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: approveLoading ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 500}}
-              >
-                {approveLoading ? 'Approving…' : 'Approve Section'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AlertDialog
+        open={showApproveModal}
+        onOpenChange={(open) => { if (!approveLoading) { setShowApproveModal(open); if (!open) setApproveComment(''); } }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Approve Section</AlertDialogTitle>
+            <AlertDialogDescription>
+              Section {section.number}: {section.title}. Approving marks this section as
+              reviewed and compliant. Add an optional comment.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <textarea
+            autoFocus
+            value={approveComment}
+            onChange={(e) => setApproveComment(e.target.value)}
+            placeholder="Optional approval comment (e.g. Reviewed against ISO 14155:2020 §6.3, content verified)"
+            style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={approveLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={approveLoading}
+              onClick={async (e) => {
+                e.preventDefault(); // keep the dialog open until the async approval settles
+                if (!onApprove) return;
+                setApproveLoading(true);
+                try { await onApprove(approveComment.trim()); }
+                finally { setApproveLoading(false); setShowApproveModal(false); setApproveComment(''); }
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {approveLoading ? 'Approving…' : 'Approve Section'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Unlock Section Confirmation ────────────────────────────────────── */}
-      {showUnlockConfirm && (
-        <div style={{position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999}}>
-          <div style={{backgroundColor: 'white', borderRadius: '0.5rem', padding: '1.5rem', width: '100%', maxWidth: '28rem', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'}}>
-            <h2 style={{margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600, color: '#0f172a'}}>Unlock Section</h2>
-            <p style={{margin: '0 0 1rem', fontSize: '0.75rem', color: '#64748b'}}>
-              Unlocking <strong>Section {section.number}: {section.title}</strong> will clear the approval and require re-approval after editing. This action is logged in the audit trail.
-            </p>
-            <label style={{display: 'block', fontSize: '0.75rem', fontWeight: 500, color: '#374151', marginBottom: '0.375rem'}}>
-              Reason for unlocking <span style={{color: '#ef4444'}}>*</span>
-            </label>
-            <textarea
-              autoFocus
-              value={unlockReason}
-              onChange={(e) => setUnlockReason(e.target.value)}
-              placeholder="e.g. Updated regulatory guidance requires revision to inclusion criteria"
-              style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
-            />
-            <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end'}}>
-              <button
-                disabled={unlockLoading}
-                onClick={() => { setShowUnlockConfirm(false); setUnlockReason(''); }}
-                style={{padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem'}}
-              >
-                Cancel
-              </button>
-              <button
-                disabled={!unlockReason.trim() || unlockLoading}
-                onClick={async () => {
-                  if (!onUnlock || !unlockReason.trim()) return;
-                  setUnlockLoading(true);
-                  try { await onUnlock(unlockReason.trim()); }
-                  finally { setUnlockLoading(false); setShowUnlockConfirm(false); setUnlockReason(''); }
-                }}
-                style={{padding: '0.5rem 1rem', backgroundColor: unlockReason.trim() && !unlockLoading ? '#dc2626' : '#fca5a5', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: unlockReason.trim() && !unlockLoading ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
-              >
-                {unlockLoading ? 'Unlocking…' : 'Unlock Section'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AlertDialog
+        open={showUnlockConfirm}
+        onOpenChange={(open) => { if (!unlockLoading) { setShowUnlockConfirm(open); if (!open) setUnlockReason(''); } }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlock Section</AlertDialogTitle>
+            <AlertDialogDescription>
+              Unlocking Section {section.number}: {section.title} will clear the approval and
+              require re-approval after editing. This action is logged in the audit trail.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label style={{display: 'block', fontSize: '0.75rem', fontWeight: 500, color: '#374151', marginBottom: '0.375rem'}}>
+            Reason for unlocking <span style={{color: '#ef4444'}}>*</span>
+          </label>
+          <textarea
+            autoFocus
+            value={unlockReason}
+            onChange={(e) => setUnlockReason(e.target.value)}
+            placeholder="e.g. Updated regulatory guidance requires revision to inclusion criteria"
+            style={{width: '100%', minHeight: '80px', fontSize: '0.875rem', lineHeight: '1.6', padding: '0.625rem', border: '1.5px solid #cbd5e1', borderRadius: '0.375rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box'}}
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unlockLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!unlockReason.trim() || unlockLoading}
+              onClick={async (e) => {
+                e.preventDefault(); // keep the dialog open until the async unlock settles
+                if (!onUnlock || !unlockReason.trim()) return;
+                setUnlockLoading(true);
+                try { await onUnlock(unlockReason.trim()); }
+                finally { setUnlockLoading(false); setShowUnlockConfirm(false); setUnlockReason(''); }
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {unlockLoading ? 'Unlocking…' : 'Unlock Section'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Won't Fix Modal */}
       {wontFixModal && (

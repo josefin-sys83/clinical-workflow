@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react';
 import { getToken } from '@/shared/auth/token';
 import { Trash2, Plus, X } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/shared/ui/alert-dialog';
 
 type Superadmin = {
   id: string;
@@ -184,31 +195,36 @@ export function AdminTeam() {
                 <p className="text-xs text-slate-400">
                   Joined {new Date(m.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
                 </p>
-                {confirmDeleteId === m.id ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-600">Delete permanently?</span>
+                <AlertDialog
+                  open={confirmDeleteId === m.id}
+                  onOpenChange={(open) => setConfirmDeleteId(open ? m.id : null)}
+                >
+                  <AlertDialogTrigger asChild>
                     <button
-                      onClick={() => handleDelete(m.id)}
-                      className="text-xs px-2 py-0.5 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                      title="Delete superadmin"
+                      className="text-slate-300 hover:text-red-500 transition-colors"
                     >
-                      Delete
+                      <Trash2 className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => setConfirmDeleteId(null)}
-                      className="text-xs px-2 py-0.5 text-slate-600 rounded hover:bg-slate-100 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setConfirmDeleteId(m.id)}
-                    title="Delete superadmin"
-                    className="text-slate-300 hover:text-red-500 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete {m.name}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This permanently removes their superadmin access. This cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => handleDelete(m.id)}
+                        className="bg-red-600 hover:bg-red-700 text-white"
+                      >
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
             </div>
           ))}
