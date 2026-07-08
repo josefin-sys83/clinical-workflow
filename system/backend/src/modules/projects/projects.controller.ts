@@ -14,6 +14,24 @@ import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { SYNOPSIS_UPLOAD_OPTIONS, getSafeDownloadHeaders } from '../../common/upload-security';
 
+// The PDF steps (protocol-pdf/report-pdf) only ever reach the workflow's 'signed' state
+// through advanceWorkflowStep() — nothing in the UI ever calls the document-artifact
+// finalize endpoint that's the only other code path to 'final' (see documents.controller.ts).
+// That leaves protocolFinalized/isLocked (useProtocolStatus.ts) permanently false and the
+// Setup/Synopsis/Scope pages permanently unlocked, no matter how many signatures are
+// collected. Rather than wire in the artifact/addendum subsystem — its finalize() builds
+// its own generic PDFKit document (workflow snapshot + audit log) that has nothing to do
+// with the actual protocol/report content rendered and printed by ProtocolDocument.tsx /
+// ClinicalInvestigationReport.tsx, so treating it as "the" signed record would be wrong —
+// this maps each signature slot straight to its step and fires the workflow's own
+// 'finalize' transition once every required slot for that step is filled.
+const SIGNATURE_STEP_ROLES: Record<string, { stepId: string; requiredRoles: string[] }> = {
+  investigator: { stepId: 'protocol-pdf', requiredRoles: ['investigator', 'sponsor'] },
+  sponsor: { stepId: 'protocol-pdf', requiredRoles: ['investigator', 'sponsor'] },
+  'report-investigator': { stepId: 'report-pdf', requiredRoles: ['report-investigator', 'report-sponsor'] },
+  'report-sponsor': { stepId: 'report-pdf', requiredRoles: ['report-investigator', 'report-sponsor'] },
+};
+
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard)
 @ApiTags('projects')
@@ -217,9 +235,32 @@ export class ProjectsController {
     const existing: any[] = Array.isArray(project.data?.signatures) ? project.data.signatures : [];
     // Remove any prior signature for the same role so there is at most one per slot
     const filtered = existing.filter((s: any) => s.role !== body.role);
+    const allSignatures = [...filtered, sigRecord];
     await this.projects.update(projectId, {
-      data: { signatures: [...filtered, sigRecord] },
+      data: { signatures: allSignatures },
     });
+
+    // Once every required slot for this document is signed, finalize it — this is the
+    // only place that ever does, see the SIGNATURE_STEP_ROLES comment above. Only fires
+    // from 'signed' (the state advanceWorkflowStep() puts the step in before e-signing is
+    // even offered); if the workflow is somehow in a different state, skip rather than
+    // let an unrelated inconsistency turn a successful signature into a failed request.
+    const stepConfig = SIGNATURE_STEP_ROLES[body.role];
+    if (stepConfig) {
+      const hasAllRequiredSignatures = stepConfig.requiredRoles.every((r) =>
+        allSignatures.some((s: any) => s.role === r),
+      );
+      if (hasAllRequiredSignatures) {
+        const snapshot = await this.workflow.getSnapshot(projectId);
+        if (snapshot.steps?.[stepConfig.stepId]?.state === 'signed') {
+          await this.workflow.transition(projectId, stepConfig.stepId, {
+            action: 'finalize',
+            reason: `Finalized after both required signatures collected (${stepConfig.requiredRoles.join(', ')})`,
+            actorUserId: identity.id,
+          } as any);
+        }
+      }
+    }
 
     // Regulatory audit record — full metadata for tamper-evident trail
     await this.audit.create(projectId, {
