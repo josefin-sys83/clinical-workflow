@@ -30,31 +30,16 @@ export class ProjectsService {
     return rows[0] ?? null;
   }
 
-  // List views only ever render summary fields (ProjectCard reads id/name/description/status,
-  // plus the two projectData submission-target dates for its Timeline toggle) — never the full
-  // protocol/report/synopsis-file content that lives in `data`. Pulling the whole jsonb blob per
-  // row here made the dashboard load scale with total document content instead of project count
-  // (11.3MB for 100 realistic projects). Project detail's get() still selects the full `data`.
-  private static readonly LIST_SUMMARY_DATA_SQL = `
-    jsonb_build_object(
-      'projectData', jsonb_build_object(
-        'ethicsSubmissionTarget', data#>>'{projectData,ethicsSubmissionTarget}',
-        'regulatorySubmissionTarget', data#>>'{projectData,regulatorySubmissionTarget}'
-      )
-    ) as data`;
-
   async list(companyId?: string, isSuperadmin?: boolean): Promise<Project[]> {
     if (isSuperadmin) {
       const { rows } = await getPool().query(
-        `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
-                created_at as "createdAt", updated_at as "updatedAt"
+        `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
          from projects order by created_at desc`,
       );
       return rows;
     }
     const { rows } = await getPool().query(
-      `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
-              created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
        from projects where company_id=$1 order by created_at desc`,
       [companyId ?? null],
     );
@@ -64,15 +49,13 @@ export class ProjectsService {
   async listCompleted(companyId?: string, isSuperadmin?: boolean): Promise<Project[]> {
     if (isSuperadmin) {
       const { rows } = await getPool().query(
-        `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
-                created_at as "createdAt", updated_at as "updatedAt"
+        `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
          from projects where status='completed' order by created_at desc`,
       );
       return rows;
     }
     const { rows } = await getPool().query(
-      `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
-              created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
        from projects where status='completed' and company_id=$1 order by created_at desc`,
       [companyId ?? null],
     );
