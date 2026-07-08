@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
@@ -15,8 +16,13 @@ import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 const SUBSCRIPTION_PLANS = ['starter', 'professional', 'enterprise'] as const;
 const SYSTEM_ROLES = ['admin', 'author', 'reviewer', 'approver'] as const;
 
+// Trims before @IsNotEmpty() runs, so a whitespace-only value (e.g. "   ") is rejected
+// as empty instead of passing through and creating a blank, unidentifiable record.
+const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+
 export class CreateCompanyDto {
   @ApiProperty({ example: 'Acme Clinical' })
+  @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)
@@ -128,6 +134,7 @@ export class SetCompanyStatusDto {
 
 export class CreateCompanyUserDto {
   @ApiProperty({ example: 'Jane Smith' })
+  @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)
@@ -166,6 +173,7 @@ export class SetUserRoleDto {
 
 export class InviteSuperadminDto {
   @ApiProperty({ example: 'Jane Smith' })
+  @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)

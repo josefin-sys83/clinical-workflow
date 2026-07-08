@@ -146,7 +146,10 @@ export class SettingsService {
     return rows[0];
   }
 
-  async setUserActive(companyId: string, userId: string, isActive: boolean) {
+  async setUserActive(companyId: string, userId: string, isActive: boolean, requesterId: string) {
+    if (!isActive && userId === requesterId) {
+      throw new ForbiddenException('You cannot deactivate your own account');
+    }
     const { rows } = await getPool().query(
       `update users set is_active = $1, updated_at = now()
        where id = $2 and company_id = $3

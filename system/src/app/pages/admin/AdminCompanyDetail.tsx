@@ -158,6 +158,7 @@ export function AdminCompanyDetail() {
         body: JSON.stringify(editForm),
       });
       setEditing(false);
+      setError('');
       load();
     } catch (err) {
       setError(apiErrorMessage(err, 'Failed to update company'));
@@ -175,6 +176,7 @@ export function AdminCompanyDetail() {
         method: 'PATCH',
         body: JSON.stringify({ status: next }),
       });
+      setError('');
       load();
     } catch {
       setError('Failed to update company status');
@@ -194,6 +196,7 @@ export function AdminCompanyDetail() {
       });
       setUserForm({ name: '', email: '', password: '', system_role: 'author' });
       setShowUserForm(false);
+      setError('');
       load();
     } catch (err) {
       setError(apiErrorMessage(err, 'Failed to create user'));
@@ -209,6 +212,7 @@ export function AdminCompanyDetail() {
         method: 'PATCH',
         body: JSON.stringify({ is_active: !user.is_active }),
       });
+      setError('');
       load();
     } catch {
       setError('Failed to update user');
@@ -224,6 +228,7 @@ export function AdminCompanyDetail() {
         method: 'PATCH',
         body: JSON.stringify({ system_role: role }),
       });
+      setError('');
       load();
     } catch {
       setError('Failed to change role');

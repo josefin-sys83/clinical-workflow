@@ -75,6 +75,7 @@ export function AdminCompanies() {
       setFormName('');
       setFormDomain('');
       setShowForm(false);
+      setError('');
       load();
     } catch (err) {
       console.error('[AdminCompanies] handleCreate error', err);

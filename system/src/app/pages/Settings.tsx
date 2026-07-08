@@ -272,7 +272,7 @@ function ProfileTab({ profile, onToast }: { profile: Profile; onToast: (msg: str
 
 // ── Users Tab ─────────────────────────────────────────────────────────────────
 
-function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: string) => void }) {
+function UsersTab({ companyId, currentUserId, onToast }: { companyId: string; currentUserId: string; onToast: (msg: string) => void }) {
   const [users, setUsers]       = useState<CompanyUser[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -309,7 +309,7 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
       const created = await res.json();
       setUsers(us => [...us, created]);
       setShowForm(false);
-      setForm({ name: '', email: '', system_role: 'author' });
+      setForm({ name: '', email: '', system_role: 'member' });
       onToast(created.emailSent
         ? 'User invited — temporary password emailed.'
         : 'User invited — email delivery unavailable; check server logs for the temporary password.');
@@ -331,12 +331,19 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
   }
 
   async function toggleActive(user: CompanyUser) {
+    if (user.id === currentUserId) {
+      onToast('You cannot deactivate your own account');
+      return;
+    }
     const res = await fetch(`/api/settings/company/users/${user.id}/active`, {
       method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ is_active: !user.is_active }),
     });
     if (res.ok) {
       const u = await res.json();
       setUsers(us => us.map(x => x.id === u.id ? { ...x, is_active: u.is_active } : x));
+    } else {
+      const b = await res.json().catch(() => ({}));
+      onToast(b.message ?? 'Failed to update user');
     }
   }
 
@@ -415,22 +422,32 @@ function UsersTab({ companyId, onToast }: { companyId: string; onToast: (msg: st
               <p className="text-sm font-medium text-slate-900 truncate">{u.name}</p>
               <p className="text-xs text-slate-500 truncate">{u.email}</p>
             </div>
-            <select
-              value={u.system_role === 'admin' ? 'admin' : 'member'}
-              onChange={e => patchRole(u.id, e.target.value)}
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
+            {u.system_role === 'admin' || u.system_role === 'author' ? (
+              <select
+                value={u.system_role === 'admin' ? 'admin' : 'member'}
+                onChange={e => patchRole(u.id, e.target.value)}
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+              </select>
+            ) : (
+              <span
+                className="text-xs text-slate-500 px-2 py-1"
+                title="Reviewer and approver roles are managed from the superadmin panel, not here"
+              >
+                {ROLE_LABELS[u.system_role] ?? u.system_role}
+              </span>
+            )}
             <button
               onClick={() => toggleActive(u)}
-              className={`text-xs px-2.5 py-0.5 rounded-full font-medium transition-colors ${
+              disabled={u.id === currentUserId && u.is_active}
+              className={`text-xs px-2.5 py-0.5 rounded-full font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 u.is_active
                   ? `${theme.status.active} hover:bg-rose-50 hover:text-rose-700`
                   : `${theme.status.neutral} hover:bg-blue-50 hover:text-blue-700`
               }`}
-              title={u.is_active ? 'Deactivate' : 'Activate'}
+              title={u.id === currentUserId && u.is_active ? 'You cannot deactivate your own account' : u.is_active ? 'Deactivate' : 'Activate'}
             >
               {u.is_active ? 'Active' : 'Inactive'}
             </button>
@@ -671,7 +688,7 @@ export default function Settings() {
           <ProfileTab profile={profile} onToast={setToast} />
         )}
         {tab === 'users' && isAdmin && profile.company_id && (
-          <UsersTab companyId={profile.company_id} onToast={setToast} />
+          <UsersTab companyId={profile.company_id} currentUserId={profile.id} onToast={setToast} />
         )}
         {tab === 'projects' && isAdmin && profile.company_id && (
           <ProjectsTab companyId={profile.company_id} />

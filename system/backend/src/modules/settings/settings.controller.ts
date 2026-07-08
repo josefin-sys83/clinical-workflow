@@ -69,7 +69,7 @@ export class SettingsController {
   ) {
     if (!req.user.roles?.includes('admin')) throw new ForbiddenException();
     if (!req.user.companyId) throw new ForbiddenException();
-    return this.svc.setUserActive(req.user.companyId, id, body.is_active);
+    return this.svc.setUserActive(req.user.companyId, id, body.is_active, req.user.userId);
   }
 
   @Post('support')
