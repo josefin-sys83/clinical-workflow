@@ -265,13 +265,15 @@ export class ProjectsController {
       ipAddress,
     };
 
-    // Append to signatures array (preserves previous signatures on the same document)
-    const existing: any[] = Array.isArray(project.data?.signatures) ? project.data.signatures : [];
-    // Remove any prior signature for the same role so there is at most one per slot
-    const filtered = existing.filter((s: any) => s.role !== body.role);
-    const allSignatures = [...filtered, sigRecord];
-    await this.projects.update(projectId, {
-      data: { signatures: allSignatures },
+    // Append to signatures array (preserves previous signatures on the same document).
+    // Done via updateSignaturesAtomic() rather than a get()-then-update() pair so the
+    // read, the "remove any prior signature for this role" dedupe, and the write all
+    // happen inside one row-locked transaction — otherwise two signatures submitted close
+    // together could each be computed against the same stale snapshot and one would
+    // silently overwrite the other (pentest F8).
+    const { signatures: allSignatures } = await this.projects.updateSignaturesAtomic(projectId, (existing) => {
+      const filtered = existing.filter((s: any) => s.role !== body.role);
+      return [...filtered, sigRecord];
     });
 
     // Once every required slot for this document is signed, finalize it — this is the

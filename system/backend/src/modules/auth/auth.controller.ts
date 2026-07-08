@@ -2,12 +2,14 @@ import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { AuthService } from './auth.service';
+import { LoginThrottlerGuard } from './login-throttler.guard';
 
 @ApiTags('auth')
 @Controller('/api/auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  @UseGuards(LoginThrottlerGuard)
   @Post('/login')
   login(@Body() body: { email: string; password: string }) {
     return this.auth.login(body.email, body.password);

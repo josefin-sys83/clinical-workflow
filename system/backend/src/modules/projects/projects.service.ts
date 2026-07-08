@@ -345,6 +345,47 @@ export class ProjectsService {
     return this.get(id);
   }
 
+  // Read-modify-write helper for data.signatures — mirrors updateProtocolAtomic above.
+  // createSignature() previously read project.data.signatures via a plain get(), built the
+  // new array in memory, then wrote it through update() — whose one-level merge replaces
+  // arrays wholesale rather than merging them. Two signature requests landing close
+  // together could each compute their "append" against the same stale snapshot, and
+  // whichever wrote second would silently discard the first's signature (pentest F8). Doing
+  // the read, mutate and write inside one `for update`-locked transaction serializes
+  // concurrent signers against each other, the same way updateProtocolAtomic already does
+  // for protocol amendments.
+  async updateSignaturesAtomic(
+    id: string,
+    mutate: (signatures: any[], data: any) => any[],
+  ): Promise<{ signatures: any[] }> {
+    const now = new Date().toISOString();
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(`select data from projects where id=$1 for update`, [id]);
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException('Project not found');
+      }
+      const existingData = rows[0].data || {};
+      const existingSignatures: any[] = Array.isArray(existingData.signatures) ? existingData.signatures : [];
+      const newSignatures = mutate(existingSignatures, existingData);
+      const mergedData = { ...existingData, signatures: newSignatures };
+      await client.query(`update projects set data=$2, updated_at=$3 where id=$1`, [
+        id,
+        JSON.stringify(mergedData),
+        now,
+      ]);
+      await client.query('COMMIT');
+      return { signatures: newSignatures };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async saveSynopsisFile(projectId: string, fileName: string, bytes: Buffer, mimeType: string): Promise<void> {
     const now = new Date().toISOString();
     const existing = await this.get(projectId);

@@ -5,6 +5,16 @@ import { getPool } from '../../db/pg';
 import { Role } from './roles.decorator';
 import { revokeToken } from './revoked-tokens';
 
+// A fixed bcrypt hash (cost 10 — the same cost every real password_hash is created with,
+// see gen_salt('bf', 10) in admin.service.ts/settings.service.ts/seed.ts) of a string that
+// is not, and never will be, any real user's password. Comparing the submitted password
+// against this whenever the email doesn't resolve to a real, active account means bcrypt's
+// ~100ms cost is paid on every login attempt regardless of whether the account exists —
+// closing the timing side-channel that previously let an attacker enumerate valid emails
+// just by measuring how fast /login responded (pentest F2: the old single WHERE clause let
+// Postgres skip the expensive crypt() call entirely once the email predicate failed).
+const DUMMY_PASSWORD_HASH = '$2a$10$xNY1ZR8l6Ymc6a5cOuhL1uAxejRMfeonMNHkTzOa3u5v/CWG8FCPC';
+
 @Injectable()
 export class AuthService {
   constructor(private readonly jwt: JwtService) {}
@@ -17,20 +27,34 @@ export class AuthService {
       company_id: string | null;
       is_superadmin: boolean;
       must_reset_password: boolean;
+      is_active: boolean;
+      password_hash: string;
       company_status: string | null;
     }>(
       `select u.id, u.name, u.system_role, u.company_id, u.is_superadmin, u.must_reset_password,
-              c.status as company_status
+              u.is_active, u.password_hash, c.status as company_status
        from users u
        left join companies c on c.id = u.company_id
-       where u.email = $1
-         and u.password_hash = crypt($2, u.password_hash)
-         and u.is_active = true`,
-      [email, password],
+       where u.email = $1`,
+      [email],
     );
 
     const user = rows[0];
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+
+    // Always run exactly one bcrypt comparison — against the real hash for an existing,
+    // active account, or against DUMMY_PASSWORD_HASH otherwise — before branching on
+    // whether the account exists or the password matched. See DUMMY_PASSWORD_HASH comment
+    // above for why this can't be skipped for nonexistent/inactive accounts.
+    const hashToCompare = user?.is_active ? user.password_hash : DUMMY_PASSWORD_HASH;
+    const { rows: matchRows } = await getPool().query<{ matches: boolean }>(
+      `select ($1 = crypt($2, $1)) as matches`,
+      [hashToCompare, password],
+    );
+    const passwordMatches = matchRows[0]?.matches ?? false;
+
+    if (!user || !user.is_active || !passwordMatches) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     // A suspended company's users are locked out entirely (superadmins bypass this,
     // since their company_id is incidental, not the account they're acting on behalf of).
