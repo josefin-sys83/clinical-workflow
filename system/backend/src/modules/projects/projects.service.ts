@@ -403,22 +403,45 @@ export class ProjectsService {
     }
   }
 
+  // Was previously a plain get() + raw UPDATE with no locking or transaction — the same
+  // unlocked read-modify-write shape that F8 fixed for signatures, just on data.synopsisFile
+  // instead of data.signatures. A concurrent write to any other part of `data` (e.g. a
+  // PATCH saving unrelated section content) landing between this method's read and its
+  // write would have its change silently discarded once this method's write lands. Now
+  // uses the same `for update`-locked read-modify-write as updateProtocolAtomic()/
+  // updateSignaturesAtomic() above.
   async saveSynopsisFile(projectId: string, fileName: string, bytes: Buffer, mimeType: string): Promise<void> {
     const now = new Date().toISOString();
-    const existing = await this.get(projectId);
-    const mergedData = {
-      ...(existing.data || {}),
-      synopsisFile: {
-        fileName,
-        mimeType,
-        bytes: bytes.toString('base64'),
-        uploadedAt: now,
-      },
-    };
-    await getPool().query(
-      `update projects set data=$2, updated_at=$3 where id=$1`,
-      [projectId, JSON.stringify(mergedData), now],
-    );
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(`select data from projects where id=$1 for update`, [projectId]);
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException('Project not found');
+      }
+      const existingData = rows[0].data || {};
+      const mergedData = {
+        ...existingData,
+        synopsisFile: {
+          fileName,
+          mimeType,
+          bytes: bytes.toString('base64'),
+          uploadedAt: now,
+        },
+      };
+      await client.query(`update projects set data=$2, updated_at=$3 where id=$1`, [
+        projectId,
+        JSON.stringify(mergedData),
+        now,
+      ]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async getSynopsisFile(projectId: string): Promise<{ fileName: string; mimeType: string; bytes: Buffer }> {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { GatewayTimeoutException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 
 @Injectable()
 export class AiService {
@@ -6,6 +6,57 @@ export class AiService {
   private readonly deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
   private readonly apiVersion = process.env.AZURE_OPENAI_API_VERSION;
   private readonly apiKey = process.env.AZURE_OPENAI_API_KEY;
+
+  // Caps how many Azure OpenAI calls may be in flight across the WHOLE app at once — every
+  // user/company combined. AiThrottlerGuard only limits a single user's own request rate, so
+  // it does nothing to stop many different users overwhelming the one shared Azure deployment
+  // simultaneously: load testing showed 24 concurrent users from different companies drove
+  // single-call latency from a normal few seconds up to 40-105s, because Azure's own
+  // throttling kicked in and callAI()'s retry-with-backoff silently absorbed it into very
+  // long waits instead of a fast, clear error. Requests over this cap wait in aiWaitQueue for
+  // a free slot; if none frees up within AI_QUEUE_MAX_WAIT_MS they get a clear "busy" error
+  // instead of queuing indefinitely or piling onto Azure.
+  //
+  // In-memory only — this coordinates concurrency within a single backend process. If this
+  // app ever runs multiple instances/replicas, each instance enforces its own independent cap,
+  // so the effective app-wide ceiling becomes (AI_CONCURRENCY_LIMIT × instance count), not a
+  // single shared limit. A distributed limiter (e.g. Redis-backed) would be needed at that point.
+  private static readonly AI_CONCURRENCY_LIMIT = 6;
+  private static readonly AI_QUEUE_MAX_WAIT_MS = 25_000;
+  private aiActiveCount = 0;
+  private readonly aiWaitQueue: Array<{ resolve: () => void; timer: NodeJS.Timeout }> = [];
+
+  // Held for the full duration of one callAI() call (including its internal retries), so a
+  // single user's multi-section generation (e.g. generateReport's per-section loop) only ever
+  // occupies one slot at a time — never the whole loop's duration — matching how those calls
+  // are actually issued to Azure (one at a time, not concurrently).
+  private acquireAiSlot(): Promise<void> {
+    if (this.aiActiveCount < AiService.AI_CONCURRENCY_LIMIT) {
+      this.aiActiveCount++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve: () => { clearTimeout(waiter.timer); resolve(); },
+        timer: setTimeout(() => {
+          const idx = this.aiWaitQueue.indexOf(waiter);
+          if (idx !== -1) this.aiWaitQueue.splice(idx, 1);
+          reject(new ServiceUnavailableException('The AI service is busy right now. Please try again in a moment.'));
+        }, AiService.AI_QUEUE_MAX_WAIT_MS),
+      };
+      this.aiWaitQueue.push(waiter);
+    });
+  }
+
+  private releaseAiSlot(): void {
+    const next = this.aiWaitQueue.shift();
+    if (next) {
+      // Slot transfers directly to the next waiter — activeCount stays the same.
+      next.resolve();
+    } else {
+      this.aiActiveCount--;
+    }
+  }
 
   // Protocol sections allowed up to 5 issues (vs. default 3) in analyzeSection
   private readonly PROTOCOL_HIGH_ISSUE_SECTIONS = ['Safety Monitoring & Reporting', 'Statistical Considerations', 'Ethics & Regulatory Considerations'];
@@ -69,7 +120,28 @@ export class AiService {
     return refs.join('; ');
   }
 
+  // Bounds the ENTIRE call (every retry attempt combined) to this many ms. Azure OpenAI can
+  // occasionally accept a request and then simply never respond, rather than erroring — with
+  // no timeout at all, that used to block the caller's whole HTTP request indefinitely, since
+  // the retry loop below only reacts to a *response* (429/non-ok) or a thrown network error,
+  // neither of which ever fires on a true hang (confirmed empirically: a simulated hung
+  // upstream left the request unsettled for 90+ seconds). 45s is long enough that it won't
+  // false-positive-abort the slow-but-real responses seen under heavy concurrent load in
+  // production load testing (single-attempt latencies up to ~105s were observed at 24
+  // concurrent users, which is exactly the scenario this bound needs to tolerate reasonably
+  // for a couple of retries) while still giving every request a hard ceiling.
+  private static readonly AI_CALL_TIMEOUT_MS = 45_000;
+
   private async callAI(prompt: string, maxTokens = 2000, temperature = 0.3): Promise<string> {
+    await this.acquireAiSlot();
+    try {
+      return await this.callAIThrottled(prompt, maxTokens, temperature);
+    } finally {
+      this.releaseAiSlot();
+    }
+  }
+
+  private async callAIThrottled(prompt: string, maxTokens = 2000, temperature = 0.3): Promise<string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'api-key': this.apiKey || '',
@@ -82,6 +154,10 @@ export class AiService {
           { role: 'user', content: prompt.slice(delimiterIdx + this.PROMPT_CONTENT_DELIMITER.length) },
         ];
     const maxAttempts = 5;
+    // One shared signal across every attempt: once the deadline fires, whichever fetch is
+    // in flight aborts, and any further attempt started after that instant rejects
+    // immediately too — so retries never chase the deadline past what's set here.
+    const signal = AbortSignal.timeout(AiService.AI_CALL_TIMEOUT_MS);
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const response = await fetch(
@@ -89,6 +165,7 @@ export class AiService {
           {
             method: 'POST',
             headers,
+            signal,
             body: JSON.stringify({
               messages,
               max_tokens: maxTokens,
@@ -125,6 +202,16 @@ export class AiService {
         }
         return content;
       } catch (err) {
+        // A timed-out attempt means the deadline for the WHOLE call has passed — stop
+        // retrying (a retry would just abort again) and surface a clear, actionable error
+        // instead of the generic '' the other exhaustion paths above fall back to, so a
+        // hung Azure OpenAI response is never indistinguishable from a silently-empty result.
+        if (signal.aborted) {
+          console.error(`[AI] callAI timed out after ${AiService.AI_CALL_TIMEOUT_MS}ms (attempt ${attempt + 1}/${maxAttempts}), giving up`);
+          throw new GatewayTimeoutException(
+            'The AI service did not respond in time. Please try again in a moment — if this keeps happening, the AI provider may be experiencing an outage.',
+          );
+        }
         if (attempt < maxAttempts - 1) {
           await new Promise(resolve => setTimeout(resolve, 2000));
           continue;
