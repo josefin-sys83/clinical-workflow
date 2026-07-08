@@ -23,7 +23,7 @@ import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState, WorkflowStepId } from '@/shared/workflow/types';
 import { AuditTrailButton } from '@/shared/components/AuditTrailButton';
 import { Button } from '@/app/components/ui/button';
-import { getToken, isAdmin, logout } from '@/shared/auth/token';
+import { getToken, isSuperadmin, logout } from '@/shared/auth/token';
 
 function isDone(state: DocumentLifecycleState | undefined): boolean {
   return state === 'approved' || state === 'signed' || state === 'final';
@@ -268,7 +268,7 @@ export function Shell() {
           <AuditTrailButton />
           {currentUser && (
             <div className="flex items-center gap-2 pl-3 ml-1 border-l border-slate-200">
-              {isAdmin() && (
+              {isSuperadmin() && (
                 <Link
                   to="/admin"
                   title="Admin panel"

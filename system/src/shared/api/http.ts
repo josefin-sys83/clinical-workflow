@@ -1,3 +1,13 @@
+// class-validator's ValidationPipe returns `message` as string[] when multiple rules fail
+// on one field (or across fields) — join it so the UI shows one readable line instead of
+// concatenating the array or rendering "[object Object]".
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  const payload = (err as { payload?: { message?: string | string[] } })?.payload;
+  const message = payload?.message;
+  if (Array.isArray(message)) return message.join(' ');
+  return message ?? fallback;
+}
+
 export class ApiError extends Error {
   status: number;
   payload?: unknown;

@@ -30,7 +30,8 @@ export default function Login() {
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        setError('Invalid email or password');
+        const body = await res.json().catch(() => ({}));
+        setError(body.message ?? 'Invalid email or password');
         return;
       }
       const data = await res.json();
