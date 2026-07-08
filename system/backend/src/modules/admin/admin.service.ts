@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
@@ -9,6 +9,23 @@ export const PLAN_LIMITS: Record<string, number> = {
   professional: 6,
   enterprise: Infinity,
 };
+
+// Postgres unique_violation. Maps known constraint names to a message the caller
+// can actually act on, instead of letting the raw DB error surface as a 500.
+const UNIQUE_VIOLATION = '23505';
+const UNIQUE_CONSTRAINT_MESSAGES: Record<string, string> = {
+  companies_domain_key: 'This domain is already in use by another company.',
+  users_email_key: 'This email address is already in use.',
+};
+
+function rethrowKnownUniqueViolation(err: unknown): never {
+  const pgErr = err as { code?: string; constraint?: string };
+  if (pgErr?.code === UNIQUE_VIOLATION) {
+    const message = pgErr.constraint ? UNIQUE_CONSTRAINT_MESSAGES[pgErr.constraint] : undefined;
+    if (message) throw new ConflictException(message);
+  }
+  throw err;
+}
 
 @Injectable()
 export class AdminService {
@@ -44,13 +61,17 @@ export class AdminService {
   }
 
   async createCompany(name: string, domain?: string) {
-    const { rows } = await getPool().query(
-      `insert into companies (name, domain)
-       values ($1, nullif($2, ''))
-       returning id, name, domain, status, subscription_plan, created_at`,
-      [name, domain ?? ''],
-    );
-    return rows[0];
+    try {
+      const { rows } = await getPool().query(
+        `insert into companies (name, domain)
+         values ($1, nullif($2, ''))
+         returning id, name, domain, status, subscription_plan, created_at`,
+        [name, domain ?? ''],
+      );
+      return rows[0];
+    } catch (err) {
+      rethrowKnownUniqueViolation(err);
+    }
   }
 
   async getCompany(id: string) {
@@ -149,13 +170,17 @@ export class AdminService {
     password: string,
     systemRole: string,
   ) {
-    const { rows } = await getPool().query(
-      `insert into users (company_id, name, email, password_hash, system_role)
-       values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5)
-       returning id, name, email, system_role, is_active, created_at`,
-      [companyId, name, email, password, systemRole],
-    );
-    return rows[0];
+    try {
+      const { rows } = await getPool().query(
+        `insert into users (company_id, name, email, password_hash, system_role)
+         values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5)
+         returning id, name, email, system_role, is_active, created_at`,
+        [companyId, name, email, password, systemRole],
+      );
+      return rows[0];
+    } catch (err) {
+      rethrowKnownUniqueViolation(err);
+    }
   }
 
   async setUserActive(userId: string, isActive: boolean) {
@@ -240,12 +265,17 @@ export class AdminService {
 
   async createSuperadmin(name: string, email: string) {
     const tempPassword = randomBytes(12).toString('base64url');
-    const { rows } = await getPool().query(
-      `insert into users (name, email, password_hash, system_role, is_superadmin, company_id, must_reset_password)
-       values ($1, $2, crypt($3, gen_salt('bf', 10)), 'admin', true, null, true)
-       returning id, name, email, is_active, created_at`,
-      [name, email, tempPassword],
-    );
+    let rows;
+    try {
+      ({ rows } = await getPool().query(
+        `insert into users (name, email, password_hash, system_role, is_superadmin, company_id, must_reset_password)
+         values ($1, $2, crypt($3, gen_salt('bf', 10)), 'admin', true, null, true)
+         returning id, name, email, is_active, created_at`,
+        [name, email, tempPassword],
+      ));
+    } catch (err) {
+      rethrowKnownUniqueViolation(err);
+    }
     const user = rows[0];
 
     const emailSent = await this.email.send(

@@ -1,10 +1,11 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Building2, ShieldCheck, LogOut, Users } from 'lucide-react';
+import { Building2, ShieldCheck, LogOut, Users, LayoutDashboard } from 'lucide-react';
 import { logout } from '@/shared/auth/token';
 
 const NAV = [
-  { label: 'Companies', href: '/admin/companies',  icon: Building2 },
-  { label: 'Team',      href: '/admin/team',       icon: Users },
+  { label: 'Overview',  href: '/admin/overview',  icon: LayoutDashboard },
+  { label: 'Companies', href: '/admin/companies', icon: Building2 },
+  { label: 'Team',      href: '/admin/team',      icon: Users },
 ];
 
 export function AdminLayout() {

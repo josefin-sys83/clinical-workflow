@@ -4,7 +4,7 @@ import {
   ChevronLeft, Plus, Loader2, UserCheck, UserX,
   Pencil, Check, X, FolderOpen, ShieldAlert,
 } from 'lucide-react';
-import { apiFetch } from '@/shared/api/http';
+import { apiErrorMessage, apiFetch } from '@/shared/api/http';
 import { theme } from '@/app/theme';
 
 interface User {
@@ -46,6 +46,7 @@ interface Company {
 }
 
 const ROLES = ['admin'] as const;
+const SYSTEM_ROLES = ['admin', 'author', 'reviewer', 'approver'] as const;
 const PLANS = ['starter', 'professional', 'enterprise'] as const;
 
 const PLAN_LIMITS: Record<string, number | null> = {
@@ -158,8 +159,8 @@ export function AdminCompanyDetail() {
       });
       setEditing(false);
       load();
-    } catch {
-      setError('Failed to update company');
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Failed to update company'));
     } finally {
       setSavingCompany(false);
     }
@@ -194,8 +195,8 @@ export function AdminCompanyDetail() {
       setUserForm({ name: '', email: '', password: '', system_role: 'author' });
       setShowUserForm(false);
       load();
-    } catch (err: any) {
-      setError(err.message || 'Failed to create user');
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Failed to create user'));
     } finally {
       setSavingUser(false);
     }
@@ -609,7 +610,19 @@ export function AdminCompanyDetail() {
                   <td className="px-5 py-3 font-medium text-slate-900">{u.name}</td>
                   <td className="px-5 py-3 text-slate-500">{u.email}</td>
                   <td className="px-5 py-3 text-xs text-slate-700">
-                    {u.system_role.charAt(0).toUpperCase() + u.system_role.slice(1)}
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={u.system_role}
+                        onChange={e => changeRole(u, e.target.value)}
+                        disabled={changingRole === u.id}
+                        className="border border-slate-200 rounded-md px-1.5 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                      >
+                        {SYSTEM_ROLES.map(r => (
+                          <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
+                        ))}
+                      </select>
+                      {changingRole === u.id && <Loader2 className="w-3 h-3 animate-spin text-slate-400" />}
+                    </div>
                   </td>
                   <td className="px-5 py-3">
                     <span className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full ${u.is_active ? theme.status.active : theme.status.neutral}`}>

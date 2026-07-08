@@ -3,6 +3,7 @@ import { Shell } from './components/Shell';
 import { AuthGuard } from '@/shared/auth/AuthGuard';
 import { AdminGuard } from '@/shared/auth/AdminGuard';
 import { AdminLayout } from './pages/admin/AdminLayout';
+import { AdminOverview } from './pages/admin/AdminOverview';
 import { AdminCompanies } from './pages/admin/AdminCompanies';
 import { AdminCompanyDetail } from './pages/admin/AdminCompanyDetail';
 import { AdminTeam } from './pages/admin/AdminTeam';
@@ -52,6 +53,7 @@ export const router = createBrowserRouter([
         element: <AdminLayout />,
         children: [
           { index: true, element: <Navigate to="/admin/companies" replace /> },
+          { path: 'overview', element: <AdminOverview /> },
           { path: 'companies', element: <AdminCompanies /> },
           { path: 'companies/:id', element: <AdminCompanyDetail /> },
           { path: 'team', element: <AdminTeam /> },

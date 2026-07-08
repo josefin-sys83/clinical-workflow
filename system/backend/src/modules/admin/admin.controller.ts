@@ -1,11 +1,19 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard, Roles, RolesGuard, SuperadminGuard } from '../auth';
+import { JwtAuthGuard, SuperadminGuard } from '../auth';
 import { AdminService } from './admin.service';
+import {
+  CreateCompanyDto,
+  CreateCompanyUserDto,
+  InviteSuperadminDto,
+  SetCompanyStatusDto,
+  SetUserActiveDto,
+  SetUserRoleDto,
+  UpdateCompanyDto,
+} from './dto';
 
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin')
+@UseGuards(JwtAuthGuard, SuperadminGuard)
 @ApiTags('admin')
 @Controller('/api/admin')
 export class AdminController {
@@ -22,7 +30,7 @@ export class AdminController {
   }
 
   @Post('companies')
-  createCompany(@Body() body: { name: string; domain?: string }) {
+  createCompany(@Body() body: CreateCompanyDto) {
     return this.admin.createCompany(body.name, body.domain);
   }
 
@@ -34,7 +42,7 @@ export class AdminController {
   @Post('companies/:id/users')
   createUser(
     @Param('id') companyId: string,
-    @Body() body: { name: string; email: string; password: string; system_role?: string },
+    @Body() body: CreateCompanyUserDto,
   ) {
     return this.admin.createUser(
       companyId,
@@ -46,52 +54,42 @@ export class AdminController {
   }
 
   @Patch('companies/:id')
-  updateCompany(@Param('id') id: string, @Body() body: {
-    name: string; domain?: string;
-    contact_name?: string; contact_email?: string; contact_phone?: string;
-    billing_address_line1?: string; billing_address_line2?: string;
-    billing_city?: string; billing_postal_code?: string; billing_country?: string;
-    subscription_plan?: string; subscription_start?: string; subscription_renewal?: string;
-  }) {
+  updateCompany(@Param('id') id: string, @Body() body: UpdateCompanyDto) {
     return this.admin.updateCompany(id, body);
   }
 
   @Patch('companies/:id/status')
-  setCompanyStatus(@Param('id') id: string, @Body() body: { status: 'active' | 'suspended' }) {
+  setCompanyStatus(@Param('id') id: string, @Body() body: SetCompanyStatusDto) {
     return this.admin.setCompanyStatus(id, body.status);
   }
 
   @Patch('users/:id/active')
-  setUserActive(@Param('id') id: string, @Body() body: { is_active: boolean }) {
+  setUserActive(@Param('id') id: string, @Body() body: SetUserActiveDto) {
     return this.admin.setUserActive(id, body.is_active);
   }
 
   @Patch('users/:id/role')
-  setUserRole(@Param('id') id: string, @Body() body: { system_role: string }) {
+  setUserRole(@Param('id') id: string, @Body() body: SetUserRoleDto) {
     return this.admin.setUserRole(id, body.system_role);
   }
 
   // ── Team (superadmin) endpoints ──────────────────────────────────────────
 
-  @UseGuards(JwtAuthGuard, SuperadminGuard)
   @Get('team')
   listTeam() {
     return this.admin.listSuperadmins();
   }
 
-  @UseGuards(JwtAuthGuard, SuperadminGuard)
   @Post('team')
-  inviteTeam(@Body() body: { name: string; email: string }) {
+  inviteTeam(@Body() body: InviteSuperadminDto) {
     return this.admin.createSuperadmin(body.name, body.email);
   }
 
-  @UseGuards(JwtAuthGuard, SuperadminGuard)
   @Patch('team/:id/active')
-  setTeamMemberActive(@Param('id') id: string, @Body() body: { is_active: boolean }) {
+  setTeamMemberActive(@Param('id') id: string, @Body() body: SetUserActiveDto) {
     return this.admin.setSuperadminActive(id, body.is_active);
   }
 
-  @UseGuards(JwtAuthGuard, SuperadminGuard)
   @Delete('team/:id')
   deleteTeamMember(@Param('id') id: string, @Req() req: any) {
     return this.admin.deleteSuperadmin(id, req.user.userId);

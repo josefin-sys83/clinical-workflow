@@ -22,8 +22,7 @@ export function AdminOverview() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    apiFetch('/api/admin/stats')
-      .then(r => r.json())
+    apiFetch<Stats>('/api/admin/stats')
       .then(setStats)
       .catch(() => setError('Failed to load stats'));
   }, []);

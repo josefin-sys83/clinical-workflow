@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Building2, Loader2, ChevronRight } from 'lucide-react';
-import { apiFetch } from '@/shared/api/http';
+import { Plus, Building2, Loader2, ChevronRight, AlertTriangle } from 'lucide-react';
+import { apiErrorMessage, apiFetch } from '@/shared/api/http';
 import { theme } from '@/app/theme';
 
 interface Company {
@@ -51,6 +51,17 @@ export function AdminCompanies() {
 
   useEffect(() => { load(); }, []);
 
+  // No DB-level uniqueness on company name (two "CardioHRT" entries already exist in
+  // production with different domains), so this is a non-blocking heads-up only — it
+  // catches accidental double-creation without risking a hard failure on legitimate
+  // same-named-but-different-entity companies (subsidiaries, rebrands, etc).
+  const duplicateNameWarning = (() => {
+    const trimmed = formName.trim().toLowerCase();
+    if (!trimmed) return null;
+    const match = companies.find(c => c.name.trim().toLowerCase() === trimmed);
+    return match ? `A company named "${match.name}" already exists.` : null;
+  })();
+
   async function handleCreate(e: React.FormEvent) {
     console.log('[AdminCompanies] handleCreate fired', { formName, formDomain });
     e.preventDefault();
@@ -67,7 +78,7 @@ export function AdminCompanies() {
       load();
     } catch (err) {
       console.error('[AdminCompanies] handleCreate error', err);
-      setError('Failed to create company');
+      setError(apiErrorMessage(err, 'Failed to create company'));
     } finally {
       setSaving(false);
     }
@@ -108,6 +119,12 @@ export function AdminCompanies() {
                 required
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              {duplicateNameWarning && (
+                <p className="flex items-center gap-1.5 text-xs text-amber-700 mt-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                  {duplicateNameWarning}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Domain (optional)</label>
