@@ -309,7 +309,13 @@ export function ClinicalInvestigationReport() {
           backgroundColor: '#ffffff'
         });
 
-        const imgData = canvas.toDataURL('image/png');
+        // JPEG instead of PNG: these pages are white-background/text/table content, not
+        // photography, but PNG's lossless encoding still has to store every anti-aliased
+        // text-edge pixel individually, which made 14 pages balloon to ~150-200MB. JPEG's
+        // DCT compression handles large flat-color regions (the page background) and soft
+        // edges far more efficiently; 0.92 quality is visually indistinguishable from the
+        // PNG output for this content but a small fraction of the size.
+        const imgData = canvas.toDataURL('image/jpeg', 0.92);
         const imgProps = pdf.getImageProperties(imgData);
         const ratio = Math.min(pageWidth / imgProps.width, pageHeight / imgProps.height);
         const imgWidth = imgProps.width * ratio;
@@ -323,7 +329,7 @@ export function ClinicalInvestigationReport() {
           pdf.addPage();
         }
 
-        pdf.addImage(imgData, 'PNG', x, y, imgWidth, imgHeight);
+        pdf.addImage(imgData, 'JPEG', x, y, imgWidth, imgHeight);
       }
 
       // Add metadata
