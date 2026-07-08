@@ -4,6 +4,7 @@ export type CurrentUser = {
   id: string;
   name: string;
   email: string;
+  must_reset_password: boolean;
 };
 
 export type RequiredAction = {

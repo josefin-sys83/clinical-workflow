@@ -64,6 +64,17 @@ export class SettingsService {
     return { ok: true };
   }
 
+  async getCompanyUserDirectory(companyId: string) {
+    const { rows } = await getPool().query(
+      `select id, name, email
+       from users
+       where company_id = $1 and is_superadmin = false and is_active = true
+       order by name asc`,
+      [companyId],
+    );
+    return rows;
+  }
+
   async getCompanyData(companyId: string) {
     const pool = getPool();
     const [ur, pr, mr] = await Promise.all([

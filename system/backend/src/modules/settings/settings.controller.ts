@@ -35,6 +35,16 @@ export class SettingsController {
     return this.svc.getCompanyData(req.user.companyId);
   }
 
+  // Unlike GET /company (admin-only), this is available to any authenticated user in the
+  // company — it backs the person-search autocomplete in Project Setup, which any team
+  // member assigning roles can use, not just admins. Still tenant-scoped to req.user.companyId
+  // so it can never leak another company's users.
+  @Get('company/user-directory')
+  getCompanyUserDirectory(@Req() req: any) {
+    if (!req.user.companyId) throw new ForbiddenException('No company associated');
+    return this.svc.getCompanyUserDirectory(req.user.companyId);
+  }
+
   @Post('company/users')
   inviteUser(
     @Req() req: any,

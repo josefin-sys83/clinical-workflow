@@ -71,8 +71,14 @@ export class AuthService {
     };
   }
 
-  me(user: { userId: string; name: string; roles: Role[]; companyId?: string }) {
-    return { id: user.userId, name: user.name, roles: user.roles, company_id: user.companyId ?? null };
+  me(user: { userId: string; name: string; roles: Role[]; companyId?: string; mustResetPassword?: boolean }) {
+    return {
+      id: user.userId,
+      name: user.name,
+      roles: user.roles,
+      company_id: user.companyId ?? null,
+      must_reset_password: user.mustResetPassword ?? false,
+    };
   }
 
   async logout(jti: string, exp: number) {

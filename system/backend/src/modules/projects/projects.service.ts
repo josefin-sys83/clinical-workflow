@@ -30,16 +30,31 @@ export class ProjectsService {
     return rows[0] ?? null;
   }
 
+  // List views only ever render summary fields (ProjectCard reads id/name/description/status,
+  // plus the two projectData submission-target dates for its Timeline toggle) — never the full
+  // protocol/report/synopsis-file content that lives in `data`. Pulling the whole jsonb blob per
+  // row here made the dashboard load scale with total document content instead of project count
+  // (11.3MB for 100 realistic projects). Project detail's get() still selects the full `data`.
+  private static readonly LIST_SUMMARY_DATA_SQL = `
+    jsonb_build_object(
+      'projectData', jsonb_build_object(
+        'ethicsSubmissionTarget', data#>>'{projectData,ethicsSubmissionTarget}',
+        'regulatorySubmissionTarget', data#>>'{projectData,regulatorySubmissionTarget}'
+      )
+    ) as data`;
+
   async list(companyId?: string, isSuperadmin?: boolean): Promise<Project[]> {
     if (isSuperadmin) {
       const { rows } = await getPool().query(
-        `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+        `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
+                created_at as "createdAt", updated_at as "updatedAt"
          from projects order by created_at desc`,
       );
       return rows;
     }
     const { rows } = await getPool().query(
-      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
+              created_at as "createdAt", updated_at as "updatedAt"
        from projects where company_id=$1 order by created_at desc`,
       [companyId ?? null],
     );
@@ -49,13 +64,15 @@ export class ProjectsService {
   async listCompleted(companyId?: string, isSuperadmin?: boolean): Promise<Project[]> {
     if (isSuperadmin) {
       const { rows } = await getPool().query(
-        `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+        `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
+                created_at as "createdAt", updated_at as "updatedAt"
          from projects where status='completed' order by created_at desc`,
       );
       return rows;
     }
     const { rows } = await getPool().query(
-      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, status, ${ProjectsService.LIST_SUMMARY_DATA_SQL},
+              created_at as "createdAt", updated_at as "updatedAt"
        from projects where status='completed' and company_id=$1 order by created_at desc`,
       [companyId ?? null],
     );
@@ -224,6 +241,86 @@ export class ProjectsService {
       );
     }
     return this.get(id);
+  }
+
+  // Keeps project_members (the real, queryable source of "who holds what role on this
+  // project" — see settings.service.ts getCompanyData()) in sync with the roles the
+  // caller just saved into data.roles. A person only becomes a project_members row once
+  // their email resolves to a real user in the project's own company — the Project Setup
+  // UI's PersonAutocomplete only lets you pick real users, but this is the actual
+  // enforcement point, since the JSON blob itself can still hold arbitrary free text.
+  // Reconciles the full set every call (insert missing, delete stale) since the caller
+  // always submits the complete current roles array, not a diff.
+  async syncProjectMembers(
+    projectId: string,
+    roles: Array<{ title: string; assignedTo?: Array<{ email?: string }> }>,
+  ): Promise<void> {
+    const pool = getPool();
+    const { rows: projectRows } = await pool.query<{ company_id: string | null }>(
+      `select company_id from projects where id = $1`,
+      [projectId],
+    );
+    const companyId = projectRows[0]?.company_id;
+    if (!companyId) return;
+
+    const emails = new Set<string>();
+    for (const role of roles) {
+      for (const person of role.assignedTo ?? []) {
+        const email = person?.email?.trim().toLowerCase();
+        if (email) emails.add(email);
+      }
+    }
+
+    const userIdByEmail = new Map<string, string>();
+    if (emails.size) {
+      const { rows } = await pool.query<{ id: string; email: string }>(
+        `select id, email from users where company_id = $1 and lower(email) = any($2::text[])`,
+        [companyId, [...emails]],
+      );
+      for (const r of rows) userIdByEmail.set(r.email.toLowerCase(), r.id);
+    }
+
+    const desired = new Map<string, { userId: string; roleTitle: string }>();
+    for (const role of roles) {
+      for (const person of role.assignedTo ?? []) {
+        const email = person?.email?.trim().toLowerCase();
+        const userId = email ? userIdByEmail.get(email) : undefined;
+        if (!userId) continue;
+        desired.set(`${userId}:${role.title}`, { userId, roleTitle: role.title });
+      }
+    }
+
+    const { rows: existingRows } = await pool.query<{ user_id: string; role_title: string }>(
+      `select user_id, role_title from project_members where project_id = $1`,
+      [projectId],
+    );
+
+    const toInsert = [...desired.values()].filter(
+      (d) => !existingRows.some((r) => r.user_id === d.userId && r.role_title === d.roleTitle),
+    );
+    const toDelete = existingRows.filter(
+      (r) => !desired.has(`${r.user_id}:${r.role_title}`),
+    );
+
+    if (toInsert.length) {
+      const params: any[] = [];
+      const placeholders = toInsert.map((d) => {
+        params.push(projectId, d.userId, d.roleTitle);
+        return `($${params.length - 2}, $${params.length - 1}, $${params.length})`;
+      });
+      await pool.query(
+        `insert into project_members (project_id, user_id, role_title) values ${placeholders.join(', ')}
+         on conflict (project_id, user_id, role_title) do nothing`,
+        params,
+      );
+    }
+
+    for (const row of toDelete) {
+      await pool.query(
+        `delete from project_members where project_id = $1 and user_id = $2 and role_title = $3`,
+        [projectId, row.user_id, row.role_title],
+      );
+    }
   }
 
   // Read-modify-write helpers like createAmendment() need to append to a nested array

@@ -5,6 +5,7 @@ import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { AuditLog } from '../components/AuditLog';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { LockedStateContainer } from '../components/LockedStateContainer';
+import { PersonAutocomplete } from '../components/PersonAutocomplete';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
@@ -74,6 +75,7 @@ export function ProjectSetupPage() {
   });
 
   const [roles, setRoles] = useState<Role[]>(DEFAULT_ROLES);
+  const [companyUsers, setCompanyUsers] = useState<Array<{ id: string; name: string; email: string }>>([]);
 
   const { protocolFinalized, isLocked: protocolIsLocked, latestAmendment } = useProtocolStatus(projectId);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
@@ -114,6 +116,15 @@ export function ProjectSetupPage() {
     const rolesComplete = roles.every(role => role.status === 'assigned');
     setIsSetupComplete(identityComplete && rolesComplete);
   }, [projectData, roles]);
+
+  // Real users in the company, for the role-assignment search — a role can only count as
+  // "assigned" (see isKnownCompanyUser) once it's tied to one of these, not arbitrary text.
+  useEffect(() => {
+    fetch('/api/settings/company/user-directory')
+      .then(r => r.ok ? r.json() : [])
+      .then((users: Array<{ id: string; name: string; email: string }>) => setCompanyUsers(users))
+      .catch(() => setCompanyUsers([]));
+  }, []);
 
   // Load saved data from backend on mount. Merge backend roles with DEFAULT_ROLES so that
   // any roles added after initial setup still appear (backward-compatible with older projects).
@@ -202,20 +213,27 @@ export function ProjectSetupPage() {
     setRoles(prev => prev.map((role, i) => i !== roleIndex ? role : { ...role, assignedTo: [...role.assignedTo, { name: '', email: '' }] }));
   };
 
+  // A role only counts as "assigned" once its person matches a real user in the company
+  // directory — free text that happens to look like a name/email doesn't qualify. This is
+  // what stops a misspelled or made-up email from being savable as a completed assignment,
+  // and it's also the gate BUGG 8 relies on before writing a project_members row.
+  const isKnownCompanyUser = (person: { name: string; email: string }) =>
+    companyUsers.some(u => u.email.toLowerCase() === person.email.trim().toLowerCase());
+
   const removePersonFromRole = (roleIndex: number, personIndex: number) => {
     setRoles(prev => prev.map((role, i) => {
       if (i !== roleIndex) return role;
       const updatedPeople = role.assignedTo.filter((_, idx) => idx !== personIndex);
-      return { ...role, assignedTo: updatedPeople, status: updatedPeople.some(p => p.name.trim() !== '' && p.email.trim() !== '') ? 'assigned' : 'pending' };
+      return { ...role, assignedTo: updatedPeople, status: updatedPeople.some(isKnownCompanyUser) ? 'assigned' : 'pending' };
     }));
   };
 
-  const handleRoleAssignment = (roleIndex: number, personIndex: number, field: 'name' | 'email', value: string) => {
+  const handlePersonChange = (roleIndex: number, personIndex: number, person: { name: string; email: string }) => {
     setRoles(prev => prev.map((role, i) => {
       if (i !== roleIndex) return role;
       const updatedPeople = [...role.assignedTo];
-      updatedPeople[personIndex] = { ...updatedPeople[personIndex], [field]: value };
-      return { ...role, assignedTo: updatedPeople, status: updatedPeople.some(p => p.name.trim() !== '' && p.email.trim() !== '') ? 'assigned' : 'pending' };
+      updatedPeople[personIndex] = person;
+      return { ...role, assignedTo: updatedPeople, status: updatedPeople.some(isKnownCompanyUser) ? 'assigned' : 'pending' };
     }));
   };
 
@@ -495,23 +513,44 @@ export function ProjectSetupPage() {
                         <UserPlus className="w-4 h-4" /> Add Person to {role.title}
                       </button>
                     )}
-                    {role.assignedTo.map((person, personIndex) => (
+                    {role.assignedTo.map((person, personIndex) => {
+                      const hasTypedSomething = person.name.trim() !== '' || person.email.trim() !== '';
+                      const unmatched = hasTypedSomething && !isKnownCompanyUser(person);
+                      return (
                       <div key={personIndex} className="bg-slate-50 p-3 rounded-lg border border-slate-200">
                         <div className="grid grid-cols-2 gap-3 mb-2">
                           <div>
                             <label className="block text-xs font-medium text-slate-600 mb-1">Name</label>
-                            <input type="text" value={person.name} onChange={(e) => handleRoleAssignment(roleIndex, personIndex, 'name', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" placeholder="Full name" />
+                            <PersonAutocomplete
+                              field="name"
+                              value={person}
+                              onChange={(p) => handlePersonChange(roleIndex, personIndex, p)}
+                              suggestions={companyUsers}
+                              placeholder="Search by name…"
+                            />
                           </div>
                           <div>
                             <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
-                            <input type="email" value={person.email} onChange={(e) => handleRoleAssignment(roleIndex, personIndex, 'email', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" placeholder="email@example.com" />
+                            <PersonAutocomplete
+                              field="email"
+                              value={person}
+                              onChange={(p) => handlePersonChange(roleIndex, personIndex, p)}
+                              suggestions={companyUsers}
+                              placeholder="Search by email…"
+                            />
                           </div>
                         </div>
+                        {unmatched && (
+                          <p className="text-xs text-rose-700 mb-2">
+                            No matching user in your company — select someone from the suggestions to assign this role.
+                          </p>
+                        )}
                         <button type="button" onClick={() => removePersonFromRole(roleIndex, personIndex)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 border border-slate-300 rounded transition-colors">
                           <X className="w-3.5 h-3.5" /> Remove
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                     {role.assignedTo.length > 0 && (
                       <button type="button" onClick={() => addPersonToRole(roleIndex)} className="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
                         <UserPlus className="w-4 h-4" /> Add Another Person

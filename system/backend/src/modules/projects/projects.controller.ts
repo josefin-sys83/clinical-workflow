@@ -96,6 +96,7 @@ export class ProjectsController {
     }
     const result = await this.projects.update(projectId, body);
     if (body.data?.roles) {
+      await this.projects.syncProjectMembers(projectId, body.data.roles);
       const oldRoles: any[] = existing?.data?.roles || [];
       const changes: string[] = [];
       for (const newRole of body.data.roles) {

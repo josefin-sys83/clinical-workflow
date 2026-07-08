@@ -14,7 +14,14 @@ export class MeController {
   async getMe(@Req() req: any) {
     const u = req.user;
     const email = await this.meService.getEmail(u.userId);
-    return { id: u.userId, name: u.name, email, roles: u.roles, company_id: u.companyId ?? null };
+    return {
+      id: u.userId,
+      name: u.name,
+      email,
+      roles: u.roles,
+      company_id: u.companyId ?? null,
+      must_reset_password: u.mustResetPassword ?? false,
+    };
   }
 
   @Get('actions')
