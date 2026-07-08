@@ -97,8 +97,24 @@ export class ProjectsController {
   }
 
   @Patch('/:projectId')
-  async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectDto) {
+  async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectDto, @Req() req: any) {
     const existing = await this.projects.get(projectId);
+
+    // Role assignments decide who can later sign this project's protocol/report (see
+    // createSignature()'s claimedRole check) and, via ProjectsService.syncProjectMembers(),
+    // who shows up as a real project member — this endpoint's otherwise-arbitrary `data`
+    // blob merge is not an appropriate place for any project-scoped user to grant
+    // themselves (or anyone) a role. This product's role model only has two system roles
+    // (admin/author, see AdminService/SettingsService) with no separate "project manager"
+    // system role to delegate to instead, so admin is the natural boundary. Only blocks
+    // when roles actually differ from what's stored — same pattern as the scope-lock check
+    // below — so callers that round-trip the full data blob without touching roles aren't affected.
+    const rolesChanged = body.data?.roles !== undefined &&
+      JSON.stringify(body.data.roles) !== JSON.stringify(existing?.data?.roles);
+    if (rolesChanged && !req.user?.roles?.includes('admin')) {
+      throw new ForbiddenException('Only a company admin can change project role assignments');
+    }
+
     // Check if scope is locked (protocol has been finalized). Callers that save
     // unrelated data (e.g. report section state) commonly round-trip the full
     // project `data` blob, so `scope` is present but unchanged — only block when
@@ -207,6 +223,24 @@ export class ProjectsController {
     );
     if (!claimedRole) {
       throw new ForbiddenException(`You are not assigned to the "${body.roleTitle}" role on this project`);
+    }
+
+    // `role` must be one of the real signing slots (reusing the same map the
+    // auto-finalize logic below uses) so we know which workflow step this signature is
+    // actually for, and that step must already be 'signed' — the state
+    // advanceWorkflowStep() puts it in once mark_ready/start_review/approve/sign have all
+    // genuinely happened — before a signature can be recorded at all. Without this, a
+    // document that was never authored, reviewed, or approved (still 'draft') could be
+    // "signed" directly, indistinguishable in the UI from a properly executed one.
+    const stepConfigForRole = SIGNATURE_STEP_ROLES[body.role];
+    if (!stepConfigForRole) {
+      throw new BadRequestException(`Unknown signature role "${body.role}"`);
+    }
+    const preSignSnapshot = await this.workflow.getSnapshot(projectId);
+    if (preSignSnapshot.steps?.[stepConfigForRole.stepId]?.state !== 'signed') {
+      throw new BadRequestException(
+        `${stepConfigForRole.stepId} must be fully reviewed and approved (workflow state 'signed') before it can be signed — current state: ${preSignSnapshot.steps?.[stepConfigForRole.stepId]?.state ?? 'unknown'}`,
+      );
     }
 
     const id = randomUUID();

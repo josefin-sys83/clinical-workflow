@@ -17,6 +17,40 @@ export class AiService {
   // If absent, the whole prompt is sent as a single user message (backward compatible).
   private readonly PROMPT_CONTENT_DELIMITER = '\n\n---CONTENT-TO-REVIEW---\n\n';
 
+  // The model's own "status: complete" self-report is not sufficient evidence that content
+  // actually exists — it can be socially engineered (via injected instructions embedded in
+  // the reviewed content itself) into inventing plausible-sounding quotes for a section that
+  // was never actually written. This checks that a claimed quote genuinely appears (modulo
+  // whitespace/case) in the real source text before trusting a "complete" verdict.
+  private quoteAppearsInSource(quote: unknown, sourceContent: string): boolean {
+    if (typeof quote !== 'string') return false;
+    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    const normalizedQuote = normalize(quote);
+    // A trivially short "quote" (or empty string) could match almost anything and proves
+    // nothing about whether the claimed content is actually present.
+    if (normalizedQuote.length < 8) return false;
+    return normalize(sourceContent).includes(normalizedQuote);
+  }
+
+  // Downgrades any requiredElements entry whose claimed evidence can't be found verbatim in
+  // the actual section content — regardless of what status the model reported — so a
+  // fabricated "complete" verdict can never reach the UI as a trustworthy result. Elements
+  // already reported missing/partial are left as-is; only unverifiable "complete"/"partial"
+  // claims are downgraded, since those are the ones asserting specific text exists.
+  private verifyRequiredElementEvidence(parsed: any, sourceContent: string): any {
+    if (!Array.isArray(parsed?.requiredElements)) return parsed;
+    parsed.requiredElements = parsed.requiredElements.map((el: any) => {
+      if (el?.status !== 'complete' && el?.status !== 'partial') return el;
+      if (this.quoteAppearsInSource(el.evidence, sourceContent)) return el;
+      return {
+        ...el,
+        status: 'missing',
+        evidence: `Could not verify — the AI reported this element as "${el.status}" but the cited evidence does not appear verbatim in the section content, so it has been flagged for manual review instead of trusted automatically.`,
+      };
+    });
+    return parsed;
+  }
+
   private getCoreRegulatoryContext(targetMarkets: string[], deviceCategory: string): string {
     const isEU = targetMarkets.some(m => m.includes('EU') || m.includes('Europe'));
     const isUS = targetMarkets.some(m => m.includes('US') || m.includes('FDA') || m.includes('United States'));
@@ -521,7 +555,8 @@ No markdown, just the JSON.`;
         console.error('[analyzeSection] No JSON object found in AI response:', result.slice(0, 200));
         return { error: true, message: 'AI analysis failed to return a valid result.' };
       }
-      return JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]);
+      return this.verifyRequiredElementEvidence(parsed, sectionContent);
     } catch (e) {
       console.error('[analyzeSection] JSON parse failed:', e, 'raw:', result?.slice(0, 200));
       return { error: true, message: 'AI analysis failed to return a valid result.' };
