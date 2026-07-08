@@ -22,6 +22,7 @@ import ReportReview from './pages/ReportReview';
 import PdfReport from './pages/PdfReport';
 import AddendumPage from './pages/Addendum';
 import { AmendmentFormPage } from '@/modules/Amendmentform/pages/AmendmentFormPage';
+import { WorkflowStepGuard } from '@/shared/auth/WorkflowStepGuard';
 
 function NotFound() {
   return (
@@ -74,9 +75,16 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <Settings /> },
       { path: 'projects/:projectId', Component: ProjectView },
       { path: 'projects/:projectId/workflow/project-setup', element: <ProjectSetup /> },
-      { path: 'projects/:projectId/workflow/synopsis', element: <Synopsis /> },
-      { path: 'projects/:projectId/workflow/scope', element: <Scope /> },
-      { path: 'projects/:projectId/workflow/protocol/make', element: <MakeProtocolKeyed /> },
+      // Gated: these are the transitions where landing on the page with none of its
+      // prerequisite data (no synopsis, no scope, no roles) reproducibly hangs on an
+      // infinite "generating..." state rather than degrading gracefully — see gate.ts.
+      // protocol-review/pdf and report-make/review/pdf are intentionally left ungated:
+      // several existing seeded projects have workflow_step_state that was never
+      // backfilled to match their actual (further-along) section-approval progress, and
+      // those later pages already handle "no data yet" gracefully rather than hanging.
+      { path: 'projects/:projectId/workflow/synopsis', element: <WorkflowStepGuard stepId="synopsis"><Synopsis /></WorkflowStepGuard> },
+      { path: 'projects/:projectId/workflow/scope', element: <WorkflowStepGuard stepId="scope"><Scope /></WorkflowStepGuard> },
+      { path: 'projects/:projectId/workflow/protocol/make', element: <WorkflowStepGuard stepId="protocol-make"><MakeProtocolKeyed /></WorkflowStepGuard> },
       { path: 'projects/:projectId/workflow/protocol/review', element: <ProtocolReview /> },
       { path: 'projects/:projectId/workflow/protocol/pdf', element: <PdfProtocol /> },
       { path: 'projects/:projectId/workflow/protocol/amendment', element: <AmendmentFormPage /> },

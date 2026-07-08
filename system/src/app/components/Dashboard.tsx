@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Filter } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { listProjects, listCompletedProjects, createProject } from '@/shared/api/projects';
+import { listProjects, listCompletedProjects } from '@/shared/api/projects';
 import { getMyActions, type RequiredAction } from '@/shared/api/me';
 import { AIAssistant } from './AIAssistant';
 import { ProjectCard } from './ProjectCard';
 import { ActionsByProject } from './ActionsByProject';
 import { Button } from './ui/button';
+import { NewProjectDialog } from './NewProjectDialog';
 import { theme } from '@/app/theme';
 
 type FilterMode = 'all' | 'signatures' | 'blockers' | 'review' | 'input-needed';
@@ -17,6 +18,7 @@ export function Dashboard() {
   const [projects, setProjects] = useState<any[]>([]);
   const [completedProjects, setCompletedProjects] = useState<any[]>([]);
   const [requiredActions, setRequiredActions] = useState<RequiredAction[]>([]);
+  const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -47,13 +49,8 @@ export function Dashboard() {
     navigate(link);
   };
 
-  const handleNewProject = async () => {
-    try {
-      const project = await createProject({ name: 'New Project', deviceName: 'TBD' });
-      navigate(`/projects/${project.id}/workflow/project-setup`);
-    } catch (e: any) {
-      console.error('Failed to create project', e);
-    }
+  const handleNewProject = () => {
+    setNewProjectDialogOpen(true);
   };
 
   const filteredItems = useMemo(() => {
@@ -146,6 +143,7 @@ export function Dashboard() {
         </section>
       </main>
 
+      <NewProjectDialog open={newProjectDialogOpen} onClose={() => setNewProjectDialogOpen(false)} />
       <AIAssistant />
     </div>
   );

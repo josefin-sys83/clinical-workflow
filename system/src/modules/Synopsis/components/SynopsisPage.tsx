@@ -167,7 +167,9 @@ export function SynopsisPage() {
       if (maxStep < 3) localStorage.setItem(`maxStep_${projectId}`, '3');
       await saveToBackend({ uploadedFileName, readinessChecklist, aiReviewComplete, synopsisStatus: 'completed' });
       await postAudit(projectId!, 'synopsis.step.completed', 'Synopsis step completed — all readiness criteria met', 'synopsis', 'unknown', { uploadedFileName, passedCriteria: readinessChecklist.filter(i => i.status === 'complete').length });
-      advanceWorkflowStep({ projectId: projectId!, stepId: 'synopsis', to: 'approved' });
+      // Awaited so the scope route's WorkflowStepGuard (which re-fetches the workflow
+      // snapshot on mount) sees synopsis already 'approved' instead of racing it.
+      await advanceWorkflowStep({ projectId: projectId!, stepId: 'synopsis', to: 'approved' });
       navigate(`/projects/${projectId}/workflow/scope`);
     } else {
       alert('Please complete all readiness checklist items before proceeding.');

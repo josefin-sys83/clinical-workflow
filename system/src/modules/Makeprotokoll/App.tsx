@@ -41,9 +41,15 @@ export default function App() {
   const [roles, setRoles] = React.useState<any[]>([]);
   const [protocol, setProtocol] = React.useState<any>(null);
   const [generatingProtocol, setGeneratingProtocol] = React.useState(false);
+  // Covers the brief window between clicking Retry and generatingProtocol flipping true
+  // (the initial GET that decides whether to generate at all) — without it, Retry gave
+  // no visible feedback for that gap and looked like the click hadn't registered.
+  const [checkingProtocol, setCheckingProtocol] = React.useState(false);
+  const [generationProgress, setGenerationProgress] = React.useState<{ completed: number; total: number; currentLabel: string | null } | null>(null);
   const [protocolError, setProtocolError] = React.useState<string | null>(null);
 const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
   const [sectionAnalysisFailed, setSectionAnalysisFailed] = React.useState<Record<string, boolean>>({});
+  const [sectionAnalyzing, setSectionAnalyzing] = React.useState<Record<string, boolean>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
@@ -88,6 +94,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       if (protocolLoadInFlightRef.current === projectId) protocolLoadInFlightRef.current = null;
     };
     setProtocolError(null);
+    setCheckingProtocol(true);
     fetch(apiBase + '/api/projects/' + projectId)
       .then(r => r.json())
       .then(p => {
@@ -100,8 +107,10 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
               analyzeSectionWithAI(s.title, s.content, s.id);
           });
           runSynopsisConsistencyCheck();
+          setCheckingProtocol(false);
           clearInFlight();
         } else {
+          setCheckingProtocol(false);
           setGeneratingProtocol(true);
           fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol', { method: 'POST' })
             .then(async r => {
@@ -135,9 +144,33 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       .catch((err: any) => {
         console.error('Failed to load project', err);
         setProtocolError('Failed to load project data. Please refresh the page.');
+        setCheckingProtocol(false);
         clearInFlight();
       });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Polls real backend progress ("3 of 9 sections done") while a protocol generation
+  // run is in flight, so the spinner shown below can say something more useful than a
+  // static "please wait" for a call that can legitimately take a couple of minutes.
+  React.useEffect(() => {
+    if (!generatingProtocol || !projectId) {
+      setGenerationProgress(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = () => {
+      fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol/progress')
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (cancelled || !data) return;
+          setGenerationProgress(data.active ? { completed: data.completed, total: data.total, currentLabel: data.currentLabel } : null);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [generatingProtocol, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Real authenticated identity, used to determine which sections/issues are
   // actually "mine" — independent of the project's role assignments below.
@@ -869,9 +902,11 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       </div>
                       <button
                         onClick={loadOrGenerateProtocol}
-                        className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded flex-shrink-0"
+                        disabled={generatingProtocol || checkingProtocol}
+                        className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white text-xs rounded flex-shrink-0 flex items-center gap-1.5"
                       >
-                        Retry
+                        {(generatingProtocol || checkingProtocol) && <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+                        {generatingProtocol || checkingProtocol ? 'Retrying…' : 'Retry'}
                       </button>
                     </div>
                   )}
@@ -893,7 +928,23 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                 {generatingProtocol ? (
                   <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-500">
                     <div className="w-8 h-8 border-2 border-purple-300 border-t-purple-600 rounded-full animate-spin" />
-                    <p className="text-sm">Generating protocol sections with AI...</p>
+                    {generationProgress && generationProgress.total > 0 ? (
+                      <>
+                        <p className="text-sm">
+                          Generating section {Math.min(generationProgress.completed + 1, generationProgress.total)} of {generationProgress.total}
+                          {generationProgress.currentLabel ? `: ${generationProgress.currentLabel}` : '...'}
+                        </p>
+                        <div className="w-64 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-purple-500 transition-all duration-500"
+                            style={{ width: `${Math.round((generationProgress.completed / generationProgress.total) * 100)}%` }}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-sm">Generating protocol sections with AI...</p>
+                    )}
+                    <p className="text-xs text-slate-400">This can take up to 2–3 minutes for a full protocol. Please don't close this page — it hasn't frozen.</p>
                   </div>
                 ) : protocolSections.length === 0 ? (
                   <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-500 border border-dashed border-slate-300 rounded-lg">
@@ -903,9 +954,11 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     </p>
                     <button
                       onClick={loadOrGenerateProtocol}
-                      className="mt-1 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-xs rounded transition-colors"
+                      disabled={checkingProtocol}
+                      className="mt-1 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white text-xs rounded transition-colors flex items-center gap-1.5"
                     >
-                      Generate Protocol
+                      {checkingProtocol && <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+                      {checkingProtocol ? 'Checking…' : 'Generate Protocol'}
                     </button>
                   </div>
                 ) : (
@@ -930,7 +983,12 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         onUnlock={(reason) => handleUnlockSection(section.id, reason)}
                         deadline={protocolMakeDeadline}
                         analysisFailed={!!sectionAnalysisFailed[section.id]}
-                        onRetryAnalysis={() => analyzeSectionWithAI(section.title, section.content, section.id)}
+                        analysisRetrying={!!sectionAnalyzing[section.id]}
+                        onRetryAnalysis={() => {
+                          setSectionAnalyzing(prev => ({ ...prev, [section.id]: true }));
+                          analyzeSectionWithAI(section.title, section.content, section.id)
+                            .finally(() => setSectionAnalyzing(prev => ({ ...prev, [section.id]: false })));
+                        }}
                       />
                     ))}
                   </div>
@@ -1024,6 +1082,18 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                 </div>
               )}
 
+              {generatingProtocol || protocolSections.length === 0 ? (
+                // Every check below is computed with .every()/.some() over protocolSections,
+                // which is vacuously "all passed" on an empty array — showing "No issues
+                // found" / "7/7 checks passed" while there's no content yet to check is
+                // actively misleading, not just unhelpful. Show a neutral placeholder instead.
+                <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400">
+                  <Clock className="w-8 h-8 mb-2" />
+                  <p className="text-sm text-slate-500">Nothing to check yet</p>
+                  <p className="text-xs text-slate-400 mt-1">Issues and export readiness will appear here once the protocol has been generated.</p>
+                </div>
+              ) : (
+                <>
               {/* Fixed Header */}
               <div className="p-4 border-b border-slate-200 flex-shrink-0 sticky top-0 bg-white z-10">
                 <h3 className="text-sm font-semibold text-slate-900 mb-1">Issues & Consistency</h3>
@@ -1203,6 +1273,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                   ]}
                 />
               </div>
+                </>
+              )}
             </div>
           </div>
         </div>

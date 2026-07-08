@@ -1,5 +1,19 @@
 import { GatewayTimeoutException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 
+// Exported so callers (e.g. the progress-polling endpoint) can know the total section
+// count up front without duplicating this list or waiting for generation to start.
+export const PROTOCOL_SECTION_TITLES = [
+  'Protocol Overview',
+  'Study Rationale & Objectives',
+  'Device Description & Intended Clinical Use',
+  'Study Design',
+  'Subject Eligibility Criteria',
+  'Study Procedures & Assessments',
+  'Safety Monitoring & Reporting',
+  'Statistical Considerations',
+  'Ethics & Regulatory Considerations',
+];
+
 @Injectable()
 export class AiService {
   private readonly endpoint = process.env.AZURE_OPENAI_ENDPOINT;
@@ -421,30 +435,41 @@ ${additionalFixes ? `\nADDITIONAL REQUIRED FIXES (regeneration addressing specif
 
   // Small batches (rather than one Promise.all across all sections) keep concurrent
   // Azure OpenAI requests low enough to avoid tripping per-minute rate limits.
-  async mapInBatches<T, R>(items: T[], batchSize: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  // onItemDone (optional) fires after each individual item settles, not just each
+  // batch, so callers can report fine-grained progress (e.g. "3 of 9 sections done")
+  // for calls that run long enough that a caller-facing progress indicator matters.
+  async mapInBatches<T, R>(
+    items: T[],
+    batchSize: number,
+    fn: (item: T) => Promise<R>,
+    onItemDone?: (item: T) => void,
+  ): Promise<R[]> {
     const results: R[] = [];
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
-      results.push(...await Promise.all(batch.map(fn)));
+      results.push(...await Promise.all(batch.map(async item => {
+        const result = await fn(item);
+        onItemDone?.(item);
+        return result;
+      })));
     }
     return results;
   }
 
-  async generateProtocol(projectData: any, roles: any[], synopsis: string, scope: any): Promise<any> {
-    const sectionTitles = [
-      'Protocol Overview',
-      'Study Rationale & Objectives',
-      'Device Description & Intended Clinical Use',
-      'Study Design',
-      'Subject Eligibility Criteria',
-      'Study Procedures & Assessments',
-      'Safety Monitoring & Reporting',
-      'Statistical Considerations',
-      'Ethics & Regulatory Considerations'
-    ];
+  async generateProtocol(
+    projectData: any,
+    roles: any[],
+    synopsis: string,
+    scope: any,
+    onSectionDone?: (title: string) => void,
+  ): Promise<any> {
+    const sectionTitles = PROTOCOL_SECTION_TITLES;
 
-    const contents = await this.mapInBatches(sectionTitles, 3, title =>
-      this.generateProtocolSection(title, projectData, synopsis, scope)
+    const contents = await this.mapInBatches(
+      sectionTitles,
+      3,
+      title => this.generateProtocolSection(title, projectData, synopsis, scope),
+      title => onSectionDone?.(title),
     );
 
     const sections = sectionTitles.map((title, i) => ({

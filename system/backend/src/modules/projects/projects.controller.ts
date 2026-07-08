@@ -4,7 +4,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
 import { CreateProjectDto, UpdateProjectDto, UpdateSectionContentDto } from './dto';
 import { ProjectsService } from './projects.service';
-import { AiService } from '../ai/ai.service';
+import { AiService, PROTOCOL_SECTION_TITLES } from '../ai/ai.service';
+import { GenerationProgressService } from '../ai/generation-progress.service';
 import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
@@ -43,6 +44,7 @@ export class ProjectsController {
     private readonly audit: AuditService,
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
+    private readonly generationProgress: GenerationProgressService,
   ) {}
 
   @Get()
@@ -452,6 +454,13 @@ export class ProjectsController {
     return results;
   }
 
+  @Get('/:projectId/generate-protocol/progress')
+  getGenerateProtocolProgress(@Param('projectId') projectId: string) {
+    const entry = this.generationProgress.get(`protocol:${projectId}`);
+    if (!entry) return { active: false, completed: 0, total: 0, currentLabel: null };
+    return { active: true, ...entry };
+  }
+
   @Post('/:projectId/generate-protocol')
   @UseGuards(AiThrottlerGuard)
   async generateProtocol(@Param('projectId') projectId: string) {
@@ -466,9 +475,14 @@ export class ProjectsController {
     const deviceCategory = scope?.deviceCategory || '';
     const intendedUse = scope?.intendedUse || '';
 
+    const progressKey = `protocol:${projectId}`;
     let protocol: any;
     try {
-      protocol = await this.ai.generateProtocol(projectData, roles, synopsisText, scope);
+      this.generationProgress.start(progressKey, PROTOCOL_SECTION_TITLES.length);
+      protocol = await this.ai.generateProtocol(
+        projectData, roles, synopsisText, scope,
+        (title) => this.generationProgress.increment(progressKey, title),
+      );
     } catch (err) {
       // The real error (whatever an AI integration happens to throw — could include
       // upstream response bodies, internal URLs, etc.) is logged and audited
@@ -483,6 +497,8 @@ export class ProjectsController {
         metadataJson: JSON.stringify({ error: message, failedAt: new Date().toISOString() })
       });
       throw new InternalServerErrorException('Protocol generation failed. Please try again or contact support if the problem persists.');
+    } finally {
+      this.generationProgress.clear(progressKey);
     }
     if (!protocol) return null;
 

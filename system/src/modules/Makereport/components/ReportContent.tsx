@@ -844,9 +844,12 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
                   {/* AI draft generation in progress (real backend AI call) */}
                   {generatingSectionId === section.id && !hasContent && !section.aiDraft && (
-                    <div className="mb-4 flex items-center gap-2 text-[#6B7280]" style={{ fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
-                      <span className="inline-block w-3.5 h-3.5 border-2 border-[#D1D5DB] border-t-[#2563EB] rounded-full animate-spin" />
-                      Generating AI draft…
+                    <div className="mb-4 flex flex-col gap-1 text-[#6B7280]" style={{ fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block w-3.5 h-3.5 border-2 border-[#D1D5DB] border-t-[#2563EB] rounded-full animate-spin" />
+                        Generating AI draft for this section…
+                      </div>
+                      <span className="text-[11px] text-[#9CA3AF] pl-5">This can take up to a minute. The page hasn't frozen — please wait.</span>
                     </div>
                   )}
 
