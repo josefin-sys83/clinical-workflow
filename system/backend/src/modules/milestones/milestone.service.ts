@@ -158,7 +158,7 @@ export class MilestoneService {
     const leadTimes = this.LEAD_TIMES[level];
 
     const complexityLabels: Record<ComplexityLevel, string> = {
-      low: 'Låg', medium: 'Medel', high: 'Hög', very_high: 'Mycket hög',
+      low: 'Low', medium: 'Medium', high: 'High', very_high: 'Very High',
     };
 
     const ethicsDate = projectData.ethicsSubmissionTarget

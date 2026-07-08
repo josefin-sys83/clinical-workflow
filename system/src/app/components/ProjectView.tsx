@@ -84,6 +84,21 @@ export function ProjectView() {
             </div>
           </div>
           <div className="border-t pt-6">
+            <p className="text-sm text-gray-600 mb-4 max-w-2xl">
+              This project doesn't have any content yet. Clicking "Open workflow" starts the
+              guided process for building out the clinical investigation: you'll first fill in
+              the project's basic identity and assign the required team roles, then the
+              synopsis and scope, before the protocol and report can be authored. Each phase
+              unlocks the next once its requirements are met.
+            </p>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 mb-5">
+              {['Setup', 'Synopsis', 'Scope', 'Protocol', 'Report'].map((label, i, arr) => (
+                <span key={label} className="flex items-center gap-2">
+                  <span className="px-2 py-1 bg-gray-100 rounded">{label}</span>
+                  {i < arr.length - 1 && <span aria-hidden="true">→</span>}
+                </span>
+              ))}
+            </div>
             <Button onClick={() => navigate(`/projects/${projectId}/workflow/project-setup`)}>
               Open workflow
             </Button>

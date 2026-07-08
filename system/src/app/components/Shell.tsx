@@ -84,10 +84,25 @@ export function Shell() {
   useEffect(() => {
     const token = getToken();
     if (!token) return;
-    fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : null)
-      .then((u: { name: string } | null) => { if (u) setCurrentUser(u); })
-      .catch(() => {});
+    let cancelled = false;
+    // A transient backend hiccup here (a mid-request restart, a dropped connection) used
+    // to leave currentUser permanently null for the rest of the session — the header
+    // avatar/name would just vanish with no explanation, easily misread as "signed out"
+    // even though the JWT was still valid. Retry a couple of times before giving up.
+    const attempt = (retriesLeft: number) => {
+      fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => (r.ok ? r.json() : null))
+        .then((u: { name: string } | null) => {
+          if (cancelled) return;
+          if (u) setCurrentUser(u);
+          else if (retriesLeft > 0) setTimeout(() => attempt(retriesLeft - 1), 2000);
+        })
+        .catch(() => {
+          if (!cancelled && retriesLeft > 0) setTimeout(() => attempt(retriesLeft - 1), 2000);
+        });
+    };
+    attempt(2);
+    return () => { cancelled = true; };
   }, []);
 
   const handleSignOut = () => {
@@ -249,7 +264,7 @@ export function Shell() {
         {/* Header – matches Make Protocol's header exactly */}
         <header className="h-14 border-b bg-card flex items-center px-4 gap-3 flex-shrink-0">
           <div className="text-sm font-semibold truncate text-slate-900">
-            {current?.label ?? 'Clinical Platform'}
+            {current?.label ?? 'Clinical Investigation Platform'}
           </div>
           <div className="flex-1" />
           <Button

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { flushSync } from 'react-dom';
+import { useNavigate, useParams, useBlocker } from 'react-router-dom';
 import { Lock, CheckCircle2, Circle, Info, X, UserPlus, History, AlertCircle } from 'lucide-react';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { AuditLog } from '../components/AuditLog';
@@ -89,6 +90,31 @@ export function ProjectSetupPage() {
   const previousProjectDataRef = useRef<ProjectData>(projectData);
   const previousRolesRef = useRef<Role[]>(roles);
   const isInitialMount = useRef(true);
+  // Snapshot of the last-saved-to-server state, used purely to detect unsaved edits (see
+  // the unsaved-changes navigation guard below) — distinct from previousProjectDataRef/
+  // previousRolesRef above, which track the previous *local* value for audit-log diffing.
+  const [savedSnapshot, setSavedSnapshot] = useState<{ projectData: ProjectData; roles: Role[] } | null>(null);
+  const isDirty = savedSnapshot !== null && (
+    JSON.stringify(projectData) !== JSON.stringify(savedSnapshot.projectData) ||
+    JSON.stringify(roles) !== JSON.stringify(savedSnapshot.roles)
+  );
+
+  // Covers a real page unload (tab close, refresh, typing a new URL) — the browser shows
+  // its own native "leave site?" prompt. This does NOT fire for same-app client-side
+  // navigation (Link clicks, the Back/Forward buttons), which is why useBlocker below is
+  // also needed: React Router intercepts those before the page ever unloads.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
+
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) => isDirty && currentLocation.pathname !== nextLocation.pathname
+  );
 
   const logAudit = (entry: Omit<AuditLogEntry, 'id' | 'timestamp' | 'userBy' | 'userEmail'>) => {
     const now = new Date();
@@ -137,9 +163,11 @@ export function ProjectSetupPage() {
         return r.json();
       })
       .then(project => {
+        let loadedProjectData = projectData;
+        let loadedRoles = roles;
         if (project.data?.projectData) {
           const pd = project.data.projectData;
-          setProjectData({
+          loadedProjectData = {
             projectName: pd.projectName || '',
             sponsor: pd.sponsor || '',
             deviceName: pd.deviceName || '',
@@ -150,17 +178,19 @@ export function ProjectSetupPage() {
             ethicsSubmissionTarget: pd.ethicsSubmissionTarget || pd.plannedStudyStart || '',
             firstPatientInTarget: pd.firstPatientInTarget || '',
             regulatorySubmissionTarget: pd.regulatorySubmissionTarget || pd.targetSubmissionReadiness || '',
-          });
+          };
+          setProjectData(loadedProjectData);
         }
         if (project.data?.roles) {
           const saved: Role[] = project.data.roles;
           // Merge: keep saved role data, but add any DEFAULT_ROLES not yet in the saved list
-          const merged = DEFAULT_ROLES.map(def => {
+          loadedRoles = DEFAULT_ROLES.map(def => {
             const match = saved.find(s => s.title === def.title);
             return match ? match : def;
           });
-          setRoles(merged);
+          setRoles(loadedRoles);
         }
+        setSavedSnapshot({ projectData: loadedProjectData, roles: loadedRoles });
       })
       .catch((e) => {
         console.error('Failed to load project', e);
@@ -284,7 +314,15 @@ export function ProjectSetupPage() {
       return;
     }
     setIsSaving(false);
-    advanceWorkflowStep({ projectId: projectId!, stepId: 'project-setup', to: 'approved' });
+    // flushSync forces the re-render (and with it, isDirty recomputing to false) to happen
+    // before navigate() below runs — otherwise the unsaved-changes blocker still sees the
+    // pre-save isDirty=true from the last committed render and blocks this exact navigation.
+    flushSync(() => setSavedSnapshot({ projectData, roles }));
+    // Awaited (unlike the fire-and-forget pattern elsewhere) because WorkflowStepGuard on
+    // the synopsis route below re-fetches the workflow snapshot as soon as it mounts — if
+    // this hadn't landed yet, the guard would see project-setup still 'draft' and bounce
+    // the user right back here.
+    await advanceWorkflowStep({ projectId: projectId!, stepId: 'project-setup', to: 'approved' });
     const current = parseInt(localStorage.getItem(`maxStep_${projectId}`) || '0');
     if (current < 2) localStorage.setItem(`maxStep_${projectId}`, '2');
     navigate(`/projects/${projectId}/workflow/synopsis`);
@@ -300,10 +338,10 @@ export function ProjectSetupPage() {
     if (markets.includes('China')) points += 4;
     if (markets.includes('Canada')) points += 1;
     if (markets.includes('Australia')) points += 1;
-    if (points <= 4) return 'Låg';
-    if (points <= 8) return 'Medel';
-    if (points <= 13) return 'Hög';
-    return 'Mycket hög';
+    if (points <= 4) return 'Low';
+    if (points <= 8) return 'Medium';
+    if (points <= 13) return 'High';
+    return 'Very High';
   };
 
   return (
@@ -382,7 +420,7 @@ export function ProjectSetupPage() {
           </div>
         )}
 
-        <div className={protocolIsLocked ? 'pointer-events-none opacity-50 select-none' : ''}>
+        <div className={protocolIsLocked || loadError ? 'pointer-events-none opacity-50 select-none' : ''}>
         <div className="max-w-6xl mx-auto px-6 pt-6">
           <div className="flex items-center gap-8 pb-6 border-b border-slate-200">
             <div>
@@ -500,6 +538,21 @@ export function ProjectSetupPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-slate-900">{role.title}</span>
                       {role.mandatory && <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-700 rounded">Required</span>}
+                      {role.description && (
+                        <span
+                          className="relative inline-flex"
+                          onMouseEnter={() => setHoveredRole(roleIndex)}
+                          onMouseLeave={() => setHoveredRole(null)}
+                        >
+                          <Info className="w-3.5 h-3.5 text-slate-400 cursor-help" />
+                          {hoveredRole === roleIndex && (
+                            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-64 p-2.5 bg-slate-900 text-white text-xs rounded-lg shadow-lg z-20">
+                              {role.description}
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+                            </div>
+                          )}
+                        </span>
+                      )}
                     </div>
                     {role.status === 'assigned' && (
                       <span className="inline-flex items-center gap-1.5 text-sm text-blue-700">
@@ -646,6 +699,31 @@ export function ProjectSetupPage() {
       </main>
 
       <AuditLog entries={auditTrail} onExport={handleExportAuditTrail} isOpen={isAuditTrailOpen} onToggle={() => setIsAuditTrailOpen(!isAuditTrailOpen)} />
+
+      {blocker.state === 'blocked' && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 p-6">
+            <h2 className="text-base font-semibold text-slate-900 mb-2">Leave without saving?</h2>
+            <p className="text-sm text-slate-600 mb-6">
+              You have unsaved changes on this page. If you leave now, those changes will be lost.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => blocker.reset?.()}
+                className="px-4 py-2 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
+              >
+                Stay on this page
+              </button>
+              <button
+                onClick={() => blocker.proceed?.()}
+                className="px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg"
+              >
+                Leave anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

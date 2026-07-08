@@ -19,10 +19,26 @@ export default function Login() {
   const [resetError, setResetError] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
 
+  // Deliberately basic (not RFC 5322): this only needs to catch the common case of a
+  // mistyped/incomplete address and say so specifically, before it's indistinguishable
+  // from a wrong password at the server. It is not a substitute for server-side validation.
+  const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError('');
+    // Validated here (form has noValidate) rather than left to the browser's native
+    // "Please fill out this field" bubble, which looks and behaves nothing like the
+    // app's own error banner below.
+    if (!email.trim() || !password) {
+      setError('Please enter both your email and password.');
+      return;
+    }
+    if (!EMAIL_FORMAT_RE.test(email.trim())) {
+      setError("That doesn't look like a valid email address. Please check the format (e.g. you@company.com).");
+      return;
+    }
+    setLoading(true);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -160,7 +176,7 @@ export default function Login() {
           <>
             {/* Form card */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-7">
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} className="space-y-4" noValidate>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">
                     Email
@@ -173,7 +189,6 @@ export default function Login() {
                     placeholder="you@company.com"
                     autoComplete="email"
                     autoFocus
-                    required
                   />
                 </div>
 
@@ -188,7 +203,6 @@ export default function Login() {
                     className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
                     placeholder="••••••••"
                     autoComplete="current-password"
-                    required
                   />
                 </div>
 
@@ -214,6 +228,10 @@ export default function Login() {
                   )}
                 </button>
               </form>
+
+              <p className="text-center text-sm text-slate-500 mt-4">
+                Forgot your password? Contact your company administrator to have it reset.
+              </p>
             </div>
 
             {/* Demo credentials hint — local/dev only, never shown in a production build */}
