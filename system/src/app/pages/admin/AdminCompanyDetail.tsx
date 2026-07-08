@@ -194,7 +194,7 @@ export function AdminCompanyDetail() {
         method: 'POST',
         body: JSON.stringify(userForm),
       });
-      setUserForm({ name: '', email: '', password: '', system_role: 'author' });
+      setUserForm({ name: '', email: '', password: '', system_role: 'admin' });
       setShowUserForm(false);
       setError('');
       load();
