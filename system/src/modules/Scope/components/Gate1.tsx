@@ -18,6 +18,7 @@ import { Input } from "./ui/input";
 import { Alert, AlertDescription } from "./ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./ui/accordion";
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { mergeMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
 import { theme } from '@/app/theme';
 
 interface Requirement {
@@ -26,7 +27,7 @@ interface Requirement {
   description: string;
   status: "suggested" | "accepted" | "not-applicable";
   justification?: string;
-  source?: "ai-suggested" | "user-defined" | "library";
+  source?: "ai-suggested" | "user-defined" | "library" | "mandatory";
 }
 
 interface LibraryRequirement {
@@ -379,15 +380,47 @@ Return ONLY a JSON array, no markdown:
   }
 ]`;
 
-      const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
-      });
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        setRequirements(data);
-        await postAudit(projectId!, 'scope.ai.requirements.generated', `AI generated ${data.length} suggested requirements for ${deviceCategory} / ${effectiveIntendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: effectiveIntendedUse, requirementCount: data.length, targetMarkets });
+      // The AI call is wrapped in its own try/catch, separate from the outer one, so a
+      // failed or malformed AI response still falls through to the mandatory-standards
+      // merge below rather than leaving `requirements` empty (handleConfirmScope already
+      // cleared it to [] before calling this).
+      let aiRequirements: Requirement[] = [];
+      try {
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt })
+        });
+        const data = await res.json();
+        if (Array.isArray(data)) aiRequirements = data;
+      } catch (e) {
+        console.error('AI requirement generation failed', e);
+      }
+
+      // Baseline standards (ISO 14971, ISO 13485 — see mandatoryStandards.ts) are required
+      // for essentially every clinical investigation, but the AI prompt above only
+      // guarantees a handful of device/market-specific ones by name (ISO 14155 for EU,
+      // IMDRF N41 for AI/ML, ...). Nothing enforced that the LLM's free-form suggestions
+      // would include the baseline ones too — Setup's "Auto-Detected Requirements" panel
+      // flagged them, but that panel is display-only and never persisted, so an AI response
+      // that omitted them meant they silently vanished from the one requirement list that
+      // actually gates this step. Backfill anything missing rather than risk that.
+      const targetMarketsList: string[] = project.data?.projectData?.targetMarkets || [];
+      const merged = mergeMandatoryStandards<Requirement>(aiRequirements, targetMarketsList, (def) => ({
+        id: def.id,
+        title: def.title,
+        description: def.description,
+        status: 'suggested',
+        source: 'mandatory',
+      }));
+      setRequirements(merged);
+
+      if (aiRequirements.length > 0) {
+        await postAudit(projectId!, 'scope.ai.requirements.generated', `AI generated ${aiRequirements.length} suggested requirements for ${deviceCategory} / ${effectiveIntendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: effectiveIntendedUse, requirementCount: aiRequirements.length, targetMarkets });
+      }
+      const backfilled = merged.filter(r => r.source === 'mandatory');
+      if (backfilled.length > 0) {
+        await postAudit(projectId!, 'scope.requirements.mandatory_backfilled', `Mandatory standard(s) not present in the AI-generated list were automatically added: ${backfilled.map(b => b.title).join(', ')}`, 'scope', 'unknown', { titles: backfilled.map(b => b.title) });
       }
     } catch (e) {
       console.error('Failed to generate requirements', e);
@@ -415,7 +448,23 @@ Return ONLY a JSON array, no markdown:
         if (s.intendedUse) setIntendedUse(s.intendedUse);
         if (s.customIntendedUse) setCustomIntendedUse(s.customIntendedUse);
         if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
-        if (s.requirements) setRequirements(s.requirements);
+        if (s.requirements && s.requirements.length > 0) {
+          // Self-heals projects whose requirement list was already generated/saved before
+          // this backfill existed (or from a run where the AI simply omitted a mandatory
+          // standard) — every time the list is loaded, not just when it's freshly
+          // (re-)generated in generateRequirements() below. Only triggers when a real,
+          // non-empty saved list exists, so a genuinely fresh/unconfirmed scope page still
+          // shows its normal empty state rather than pre-populating mandatory items before
+          // the user has even confirmed a device category or target market.
+          const targetMarketsList: string[] = project.data?.projectData?.targetMarkets || [];
+          setRequirements(mergeMandatoryStandards<Requirement>(s.requirements, targetMarketsList, (def) => ({
+            id: def.id,
+            title: def.title,
+            description: def.description,
+            status: 'suggested',
+            source: 'mandatory',
+          })));
+        }
         // Pre-populate from projectData if scope not yet saved
         if (!s.deviceCategory && project.data?.projectData?.deviceCategory) {
           setDeviceCategory(project.data.projectData.deviceCategory);
@@ -950,6 +999,11 @@ Return ONLY a JSON array, no markdown:
                         {req.source === "user-defined" && (
                           <Badge variant="outline" className="bg-muted text-muted-foreground border-muted-foreground/30 text-xs">
                             User-defined
+                          </Badge>
+                        )}
+                        {req.source === "mandatory" && (
+                          <Badge variant="outline" className={`${theme.status.warning} ${theme.border.warning} text-xs`} title="Always required for a clinical investigation of this kind — added automatically because it wasn't present in the AI-generated suggestions.">
+                            Mandatory Standard
                           </Badge>
                         )}
                       </div>

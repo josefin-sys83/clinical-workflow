@@ -10,6 +10,7 @@ import { PersonAutocomplete } from '../components/PersonAutocomplete';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+import { getMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
 import { theme } from '@/app/theme';
 
 interface Role {
@@ -222,7 +223,10 @@ export function ProjectSetupPage() {
     if (projectData.targetMarkets.includes('China')) requirements.frameworks.push('NMPA - Medical Device Regulations');
     if (projectData.targetMarkets.length > 0) {
       requirements.documents.push('Clinical Investigation Protocol', "Investigator's Brochure", 'Informed Consent Form (ICF)', 'Risk Management File (ISO 14971)', 'Clinical Evaluation Report (CER)', 'Statistical Analysis Plan (SAP)');
-      requirements.standards.push('ISO 14971:2019 - Risk Management', 'ISO 13485:2016 - Quality Management Systems');
+      // Sourced from the same mandatoryStandards module Gate1.tsx (Scope step) uses to
+      // backfill its AI-generated requirement list — see that module for why these two
+      // previously-independent computations needed a shared source of truth.
+      requirements.standards.push(...getMandatoryStandards(projectData.targetMarkets).map(s => s.title));
     }
     return requirements;
   };
