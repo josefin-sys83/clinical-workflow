@@ -196,6 +196,18 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
     if (ref) ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [currentSection, scrollTrigger]);
 
+  // Stable fingerprint of the (id, content, state) of every section — recomputed only when
+  // one of those actually changes, unlike `sections` itself, which gets a brand new array
+  // reference on every setSections() call anywhere in this tree (including ones completely
+  // unrelated to content, like a comment being added). Using the raw array as the effect
+  // dependency below made this effect re-walk every section on every such update; harmless
+  // once everything is fingerprinted-and-cached, but pure overhead, and it makes the one
+  // real bug below (analyzing already-approved sections) fire far more often than it needs
+  // to whenever the loop's initial burst overlaps with those unrelated updates.
+  const sectionsFingerprint = sections
+    .map(s => `${s.id}:${s.state}:${s.content.length}:${(s as any).appendices?.length ?? 0}`)
+    .join('|');
+
   // Run AI analysis whenever content changes or a forced refresh is requested
   useEffect(() => {
     // Forced refresh: clear all tracked fingerprints so every section re-analyzes
@@ -211,6 +223,12 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       const isAppendices = s.id === 'section-appendices';
       const hasContent = !!s.content?.trim();
       if (!hasContent && !isAppendices) return;
+      // An approved/locked section is done — re-running AI analysis on it every time this
+      // component mounts (i.e. every page visit) burns a real AI call and a DB write for a
+      // result nobody will act on, and does it even on documents that have already been
+      // through e-signature. Mirrors Makeprotokoll's analogous `approvalStatus !== 'approved'`
+      // check, which report-side never had.
+      if (s.state === 'approved' || s.state === 'locked') return;
       // For appendices: fingerprint on the appendices list so re-analysis fires if the list changes
       const fingerprint = isAppendices
         ? `appendices:${(s as any).appendices?.length ?? 0}:${(s as any).appendices?.map((a: any) => a.id).join(',') ?? ''}`
@@ -232,7 +250,8 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         await Promise.all(batch.map(item => analyzeSectionWithAI(item.id, item.title, item.content)));
       }
     })();
-  }, [sections, forceAnalyzeVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionsFingerprint, forceAnalyzeVersion]);
 
   const getAssetIcon = (type: string) => {
     switch (type) {
@@ -376,6 +395,20 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         body: JSON.stringify({ sectionTitle, sectionContent, ...(appendicesList ? { appendicesList } : {}) }),
       });
       const result = await res.json();
+
+      // A failed AI call (e.g. blocked because the report is already signed, rate-limited,
+      // or any other backend error) is an explicit error state, not an empty success —
+      // mirrors Makeprotokoll's analyzeSectionWithAI, which this was meant to but never
+      // actually did. Without this check, every failed call still fell through to
+      // onSectionAiIssuesChange(sectionId, []) below, which persists via
+      // saveReportSectionState on every single call regardless of outcome — silently
+      // overwriting a section's real, previously-recorded issues with an empty array, and
+      // producing one extra GET+PATCH round trip per section on every page load.
+      if (!res.ok || result?.error) {
+        console.error('Report section analysis failed', result?.message || res.statusText);
+        return;
+      }
+
       let issues: any[] = result.issues || (Array.isArray(result) ? result : []);
       const suppressed = wontFixDescRef.current[sectionId] || [];
       if (suppressed.length > 0) {

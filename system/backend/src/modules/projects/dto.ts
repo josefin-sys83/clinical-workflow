@@ -1,9 +1,19 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 
+// class-validator's @IsNotEmpty() only rejects '', null, and undefined — a string of
+// nothing but whitespace passes it, which let "Create Project" (see NewProjectDialog,
+// whose HTML `required` has the same blind spot) create a permanently-blank-looking
+// project: there's no delete-project endpoint anywhere in this app, so that's not a
+// cosmetic annoyance, it's permanent clutter. Trimming before validation closes that,
+// for both this and the identical deviceName case.
+const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+
 export class CreateProjectDto {
   @ApiProperty({ example: 'Acme Study 2026-01' })
+  @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)
@@ -11,6 +21,7 @@ export class CreateProjectDto {
   name!: string;
 
   @ApiProperty({ required: false })
+  @Transform(trim)
   @IsOptional()
   @IsString()
   @MaxLength(200)
