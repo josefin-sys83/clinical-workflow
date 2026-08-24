@@ -36,11 +36,11 @@ create index if not exists ix_users_email   on users(email);
 -- project_members  (replaces projects.data.roles JSON blob)
 -- FK constraints added separately below.
 -- ---------------------------------------------------------------------------
--- project_id is text to match the existing projects.id text column.
+-- project_id is text to match the existing projects.id text column. xxxxx no it isnt
 -- user_id is uuid to match the new users.id uuid column.
 create table if not exists project_members (
   id           uuid        primary key default gen_random_uuid(),
-  project_id   text        not null,
+  project_id   uuid       not null,
   user_id      uuid        not null,
   role_title   text        not null,
   created_at   timestamptz not null default now(),

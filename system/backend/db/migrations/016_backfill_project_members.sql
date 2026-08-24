@@ -5,6 +5,7 @@
 -- project's own company are inserted — free text that never matched an account (or
 -- belongs to a different company) is left out, same as the live sync path in
 -- ProjectsService.syncProjectMembers().
+
 with role_people as (
   select
     p.id as project_id,
