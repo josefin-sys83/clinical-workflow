@@ -18,7 +18,6 @@ import { Input } from "./ui/input";
 import { Alert, AlertDescription } from "./ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./ui/accordion";
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
-import { mergeMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
 import { theme } from '@/app/theme';
 
 interface Requirement {
@@ -36,6 +35,49 @@ interface LibraryRequirement {
   description: string;
   category: "clinical" | "regulatory" | "software-ai" | "risk-safety" | "operational";
 }
+
+interface ProjectStandard {
+  id: number;
+  code: string;
+  title: string;
+}
+
+const reconcileMandatoryStandards = (
+  currentRequirements: Requirement[],
+  projectStandards: ProjectStandard[],
+): Requirement[] => {
+  const existingMandatoryById = new Map(
+    currentRequirements
+      .filter(requirement => requirement.source === "mandatory")
+      .map(requirement => [requirement.id, requirement]),
+  );
+
+  const mandatoryRequirements: Requirement[] = projectStandards.map(standard => {
+    const id = `standard-${standard.id}`;
+    const existing = existingMandatoryById.get(id);
+
+    return {
+      id,
+      title: `${standard.code} — ${standard.title}`,
+      description: `This standard applies to the project based on its risk class, device category, and target markets.`,
+      status: existing?.status ?? "suggested",
+      justification: existing?.justification,
+      source: "mandatory",
+    };
+  });
+
+  const mandatoryCodes = projectStandards.map(standard => standard.code.toLowerCase());
+  const nonMandatoryRequirements = currentRequirements.filter(requirement => {
+    if (requirement.source === "mandatory") return false;
+
+    // If the AI happened to suggest the same standard, keep only the authoritative
+    // mandatory version returned through project_standards.
+    const normalizedTitle = requirement.title.toLowerCase();
+    return !mandatoryCodes.some(code => normalizedTitle.includes(code));
+  });
+
+  return [...mandatoryRequirements, ...nonMandatoryRequirements];
+};
 
 // Standard Requirements Library
 const REQUIREMENTS_LIBRARY: LibraryRequirement[] = [
@@ -328,6 +370,14 @@ export function Gate1() {
 
   const [generatingRequirements, setGeneratingRequirements] = useState(false);
 
+  const fetchProjectStandards = async (): Promise<ProjectStandard[]> => {
+    const response = await fetch(`${apiBase}/api/projects/${projectId}/standards`);
+    if (!response.ok) {
+      throw new Error(`Failed to load project standards (${response.status})`);
+    }
+    return response.json();
+  };
+
   const generateRequirements = async () => {
     setGeneratingRequirements(true);
     try {
@@ -397,30 +447,18 @@ Return ONLY a JSON array, no markdown:
         console.error('AI requirement generation failed', e);
       }
 
-      // Baseline standards (ISO 14971, ISO 13485 — see mandatoryStandards.ts) are required
-      // for essentially every clinical investigation, but the AI prompt above only
-      // guarantees a handful of device/market-specific ones by name (ISO 14155 for EU,
-      // IMDRF N41 for AI/ML, ...). Nothing enforced that the LLM's free-form suggestions
-      // would include the baseline ones too — Setup's "Auto-Detected Requirements" panel
-      // flagged them, but that panel is display-only and never persisted, so an AI response
-      // that omitted them meant they silently vanished from the one requirement list that
-      // actually gates this step. Backfill anything missing rather than risk that.
-      const targetMarketsList: string[] = project.data?.projectData?.targetMarkets || [];
-      const merged = mergeMandatoryStandards<Requirement>(aiRequirements, targetMarketsList, (def) => ({
-        id: def.id,
-        title: def.title,
-        description: def.description,
-        status: 'suggested',
-        source: 'mandatory',
-      }));
+      // project_standards is the source of truth for mandatory standards. It was
+      // calculated from the project's risk, device category, and target markets.
+      const projectStandards = await fetchProjectStandards();
+      const merged = reconcileMandatoryStandards(aiRequirements, projectStandards);
       setRequirements(merged);
 
       if (aiRequirements.length > 0) {
         await postAudit(projectId!, 'scope.ai.requirements.generated', `AI generated ${aiRequirements.length} suggested requirements for ${deviceCategory} / ${effectiveIntendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: effectiveIntendedUse, requirementCount: aiRequirements.length, targetMarkets });
       }
-      const backfilled = merged.filter(r => r.source === 'mandatory');
-      if (backfilled.length > 0) {
-        await postAudit(projectId!, 'scope.requirements.mandatory_backfilled', `Mandatory standard(s) not present in the AI-generated list were automatically added: ${backfilled.map(b => b.title).join(', ')}`, 'scope', 'unknown', { titles: backfilled.map(b => b.title) });
+      const mandatory = merged.filter(r => r.source === 'mandatory');
+      if (mandatory.length > 0) {
+        await postAudit(projectId!, 'scope.requirements.mandatory_loaded', `Mandatory project standards loaded: ${mandatory.map(item => item.title).join(', ')}`, 'scope', 'unknown', { titles: mandatory.map(item => item.title) });
       }
     } catch (e) {
       console.error('Failed to generate requirements', e);
@@ -448,22 +486,16 @@ Return ONLY a JSON array, no markdown:
         if (s.intendedUse) setIntendedUse(s.intendedUse);
         if (s.customIntendedUse) setCustomIntendedUse(s.customIntendedUse);
         if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
-        if (s.requirements && s.requirements.length > 0) {
-          // Self-heals projects whose requirement list was already generated/saved before
-          // this backfill existed (or from a run where the AI simply omitted a mandatory
-          // standard) — every time the list is loaded, not just when it's freshly
-          // (re-)generated in generateRequirements() below. Only triggers when a real,
-          // non-empty saved list exists, so a genuinely fresh/unconfirmed scope page still
-          // shows its normal empty state rather than pre-populating mandatory items before
-          // the user has even confirmed a device category or target market.
-          const targetMarketsList: string[] = project.data?.projectData?.targetMarkets || [];
-          setRequirements(mergeMandatoryStandards<Requirement>(s.requirements, targetMarketsList, (def) => ({
-            id: def.id,
-            title: def.title,
-            description: def.description,
-            status: 'suggested',
-            source: 'mandatory',
-          })));
+        const savedRequirements: Requirement[] = Array.isArray(s.requirements) ? s.requirements : [];
+        if (savedRequirements.length > 0 || s.scopeConfirmed) {
+          try {
+            const projectStandards = await fetchProjectStandards();
+            setRequirements(reconcileMandatoryStandards(savedRequirements, projectStandards));
+          } catch (error) {
+            // Do not destroy a saved requirement list if the standards request fails.
+            console.error('Failed to reconcile mandatory project standards', error);
+            setRequirements(savedRequirements);
+          }
         }
         // Pre-populate from projectData if scope not yet saved
         if (!s.deviceCategory && project.data?.projectData?.deviceCategory) {
@@ -718,6 +750,29 @@ Return ONLY a JSON array, no markdown:
       postAudit(projectId!, 'scope.requirement.custom_added', `Custom requirement added: ${title}`, 'scope', 'unknown', { requirementTitle: title, description: customRequirementDialog.description });
       setCustomRequirementDialog({ open: false, title: "", description: "", document: null });
     }
+  };
+
+  const handleRemoveRequirement = (requirementId: string) => {
+    const requirement = requirements.find(item => item.id === requirementId);
+
+    // This guard is required even though the UI does not render a remove button
+    // for mandatory rows. It prevents a future caller from bypassing the rule.
+    if (!requirement || requirement.source === "mandatory") return;
+
+    setRequirements(current => current.filter(item => item.id !== requirementId));
+    void postAudit(
+      projectId!,
+      'scope.requirement.removed',
+      `Requirement removed: ${requirement.title}`,
+      'scope',
+      'unknown',
+      {
+        requirementId: requirement.id,
+        requirementTitle: requirement.title,
+        requirementSource: requirement.source,
+        previousStatus: requirement.status,
+      },
+    );
   };
 
   const handleAssignRole = (roleId: string, personName: string, personEmail: string) => {
@@ -1002,7 +1057,7 @@ Return ONLY a JSON array, no markdown:
                           </Badge>
                         )}
                         {req.source === "mandatory" && (
-                          <Badge variant="outline" className={`${theme.status.warning} ${theme.border.warning} text-xs`} title="Always required for a clinical investigation of this kind — added automatically because it wasn't present in the AI-generated suggestions.">
+                          <Badge variant="outline" className={`${theme.status.warning} ${theme.border.warning} text-xs`} title="Required for this project based on its configured risk class, device category, and target markets.">
                             Mandatory Standard
                           </Badge>
                         )}
@@ -1054,6 +1109,19 @@ Return ONLY a JSON array, no markdown:
                       >
                         Not Applicable
                       </Button>
+                      {req.source !== "mandatory" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={isScopeLocked}
+                          onClick={() => handleRemoveRequirement(req.id)}
+                          aria-label={`Remove ${req.title}`}
+                          title="Remove requirement"
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}

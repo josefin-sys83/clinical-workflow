@@ -17,7 +17,7 @@ export type Project = {
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly admin: AdminService) {}
+  constructor(private readonly admin: AdminService) { }
 
   // Resolves the authenticated user's real name/email from the DB, so callers
   // that need a trustworthy identity (e.g. electronic signatures) never have
@@ -81,7 +81,7 @@ export class ProjectsService {
 
   async get(id: string): Promise<Project> {
     const { rows } = await getPool().query(
-      `select id, name, description, status, data, created_at as "createdAt", updated_at as "updatedAt"
+      `select id, name, description, project_number, status, data, created_at as "createdAt", updated_at as "updatedAt"
        from projects where id=$1`,
       [id],
     );
@@ -90,159 +90,335 @@ export class ProjectsService {
     return p;
   }
 
-  // Finds the highest existing numeric suffix for the given year (not a row count),
-  // so a gap anywhere in the sequence (e.g. an earlier deletion) can never cause the
-  // next id to collide with one that's still in use.
-  //
-  // Information leak (low severity, no data access): the sequence is counted globally
-  // across every company's projects, not scoped by company_id. Any user creating a
-  // project — regardless of which company they belong to — can infer a rough estimate
-  // of the system's total project count from the id they're assigned.
-  private async generateProjectId(client: PoolClient): Promise<string> {
+
+
+  private async generateProjectNumber(client: PoolClient): Promise<string> {
     const year = new Date().getFullYear();
-    const { rows } = await client.query(
-      `select coalesce(max((substring(id from '^\\d{4}-(\\d+)$'))::int), 0) as max_seq
-       from projects where id like $1`,
-      [`${year}-%`],
+
+    // Advisory lock for the specific year.
+    // Blocks all other concurrent requests for the same year until this transaction commits.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`project-number-${year}`]
     );
+
+    const { rows } = await client.query(
+      `SELECT COALESCE(
+       MAX((substring(project_number from '^\\d{4}-(\\d+)$'))::int),
+       0
+     ) AS max_seq
+     FROM projects
+     WHERE project_number LIKE $1`,
+      [`${year}-%`]
+    );
+
     const next = Number(rows[0].max_seq) + 1;
-    const padded = String(next).padStart(3, '0');
-    return `${year}-${padded}`;
+    return `${year}-${String(next).padStart(3, '0')}`;
   }
+
+  // async create(dto: CreateProjectDto, companyId?: string): Promise<Project> {
+  //   const now = new Date().toISOString();
+  //   const client = await getPool().connect();
+  //   let id = '';
+  //   try {
+  //     await client.query('BEGIN');
+
+  //     // enforceProjectLimit() takes `for update` on the company row and holds it for
+  //     // the rest of this transaction, so a second concurrent create() for the same
+  //     // company blocks here until this one commits (or rolls back) — serializing the
+  //     // plan-limit check against the insert below instead of both reading the same
+  //     // stale project count and both passing.
+  //     if (companyId) {
+  //       await this.admin.enforceProjectLimit(companyId, client);
+  //       await this.admin.touchLastActive(companyId, client);
+  //     }
+
+  //     // generateProjectId() reads the current max suffix without its own locking, so
+  //     // two concurrent creates (for different companies, hence no shared company lock)
+  //     // can still compute the same id. The `projects_pkey` unique constraint is the
+  //     // real race guard: on a collision (23505) roll back to the savepoint — which
+  //     // undoes only the failed insert, not the company lock/limit check above — and
+  //     // retry against the now-updated max.
+  //     const maxAttempts = 5;
+  //     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  //       await client.query('SAVEPOINT create_project_attempt');
+  //       id = await this.generateProjectId(client);
+  //       try {
+  //         await client.query(
+  //           `insert into projects (id, name, description, status, company_id, created_at, updated_at)
+  //            values ($1,$2,$3,'active',$4,$5,$5)`,
+  //           [id, dto.name, dto.description ?? null, companyId ?? null, now],
+  //         );
+  //         await client.query('RELEASE SAVEPOINT create_project_attempt');
+  //         break;
+  //       } catch (err: any) {
+  //         await client.query('ROLLBACK TO SAVEPOINT create_project_attempt');
+  //         if (err?.code === '23505' && attempt < maxAttempts) continue;
+  //         throw err;
+  //       }
+  //     }
+
+  //     await client.query(
+  //       `insert into workflow_step_state (project_id, step_id, state, updated_at)
+  //        select $1, step_id, 'draft', $2 from workflow_steps`,
+  //       [id, now],
+  //     );
+  //     await client.query('COMMIT');
+  //   } catch (err) {
+  //     await client.query('ROLLBACK').catch(() => {});
+  //     throw err;
+  //   } finally {
+  //     client.release();
+  //   }
+  //   return this.get(id);
+  // }
 
   async create(dto: CreateProjectDto, companyId?: string): Promise<Project> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
-    let id = '';
+
     try {
       await client.query('BEGIN');
-
-      // enforceProjectLimit() takes `for update` on the company row and holds it for
-      // the rest of this transaction, so a second concurrent create() for the same
-      // company blocks here until this one commits (or rolls back) — serializing the
-      // plan-limit check against the insert below instead of both reading the same
-      // stale project count and both passing.
       if (companyId) {
         await this.admin.enforceProjectLimit(companyId, client);
         await this.admin.touchLastActive(companyId, client);
       }
 
-      // generateProjectId() reads the current max suffix without its own locking, so
-      // two concurrent creates (for different companies, hence no shared company lock)
-      // can still compute the same id. The `projects_pkey` unique constraint is the
-      // real race guard: on a collision (23505) roll back to the savepoint — which
-      // undoes only the failed insert, not the company lock/limit check above — and
-      // retry against the now-updated max.
-      const maxAttempts = 5;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        await client.query('SAVEPOINT create_project_attempt');
-        id = await this.generateProjectId(client);
-        try {
-          await client.query(
-            `insert into projects (id, name, description, status, company_id, created_at, updated_at)
-             values ($1,$2,$3,'active',$4,$5,$5)`,
-            [id, dto.name, dto.description ?? null, companyId ?? null, now],
-          );
-          await client.query('RELEASE SAVEPOINT create_project_attempt');
-          break;
-        } catch (err: any) {
-          await client.query('ROLLBACK TO SAVEPOINT create_project_attempt');
-          if (err?.code === '23505' && attempt < maxAttempts) continue;
-          throw err;
+      const projectNumber = await this.generateProjectNumber(client);
+      const id = crypto.randomUUID();
+
+      // Default risk to 'I' if not provided
+      const risk = dto.risk ?? 'I';
+
+       await client.query(
+        `INSERT INTO projects 
+       (id, project_number, name, status, company_id, risk, created_at, updated_at)
+       VALUES ($1, $2, $3, 'active', $4, $5, $6, $6)
+       RETURNING id`,
+        [id, projectNumber, dto.name, companyId ?? null, risk, now]
+      );
+
+      await client.query(
+        `INSERT INTO workflow_step_state (project_id, step_id, state, updated_at)
+       SELECT $1, step_id, 'draft', $2 FROM workflow_steps`,
+        [id, now]
+      );
+
+      await client.query('COMMIT');
+      return this.get(id);
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => { });
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+async update(id: string, patch: { name?: string; description?: string; data?: any }): Promise<Project> {
+  const now = new Date().toISOString();
+
+  if (patch.data) {
+    patch = { ...patch, data: sanitizeIncomingProjectData(patch.data) };
+  }
+
+  if (patch.data) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Lock and fetch existing data
+      const { rows } = await client.query(
+        `SELECT data FROM projects WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException('Project not found');
+      }
+      const existingData = rows[0].data || {};
+      const mergedData: any = { ...existingData };
+
+      // 2. Deep‑merge patch.data into existing data
+      for (const key of Object.keys(patch.data)) {
+        if (
+          patch.data[key] !== null &&
+          typeof patch.data[key] === 'object' &&
+          !Array.isArray(patch.data[key]) &&
+          existingData[key] !== null &&
+          typeof existingData[key] === 'object' &&
+          !Array.isArray(existingData[key])
+        ) {
+          mergedData[key] = { ...existingData[key], ...patch.data[key] };
+        } else {
+          mergedData[key] = patch.data[key];
         }
       }
 
+      // 3. Extract risk from merged projectData (if present)
+      let riskValue: string | null = null;
+      if (mergedData.projectData?.risk) {
+        riskValue = mergedData.projectData.risk;
+      }
+
+      // 4. Update the project row
       await client.query(
-        `insert into workflow_step_state (project_id, step_id, state, updated_at)
-         select $1, step_id, 'draft', $2 from workflow_steps`,
-        [id, now],
+        `UPDATE projects SET
+          name = COALESCE($2, name),
+          description = COALESCE($3, description),
+          data = $4,
+          risk = COALESCE($5, risk),
+          updated_at = $6
+        WHERE id = $1`,
+        [
+          id,
+          patch.name ?? null,
+          patch.description ?? null,
+          JSON.stringify(mergedData),
+          riskValue,
+          now,
+        ]
       );
+
+      // ==========================================================
+      // 5. Sync project_markets and project_standards (inside transaction)
+      // ==========================================================
+      const projectData = mergedData.projectData;
+      if (projectData) {
+        const { targetMarkets = [], risk, deviceCategory } = projectData;
+        const marketCodes: string[] = targetMarkets;
+
+        // --- 5a. Sync project_markets ---
+        await client.query(`DELETE FROM project_markets WHERE project_id = $1`, [id]);
+
+        if (marketCodes.length > 0) {
+          const marketIds = await client.query(
+            `SELECT id FROM markets WHERE code = ANY($1::text[])`,
+            [marketCodes]
+          );
+          if (marketIds.rows.length > 0) {
+            const valuesClause = marketIds.rows.map((_, i) => `($1, $${i + 2})`).join(',');
+            await client.query(
+              `INSERT INTO project_markets (project_id, market_id) VALUES ${valuesClause}`,
+              [id, ...marketIds.rows.map((m) => m.id)]
+            );
+          }
+        }
+
+        // --- 5b. Sync project_standards ---
+        // Compute standards using the same logic as getRequirements, but with the transaction client
+        // (so all queries run inside the same BEGIN/COMMIT).
+        const standardsResult = await client.query(
+          `SELECT s.id, s.code, s.title
+           FROM standard_rules sr
+           JOIN standards s ON s.id = sr.standard_id
+           WHERE
+             sr.always_applies = true
+             OR (
+               (sr.market_codes IS NULL OR sr.market_codes && $1::text[])
+               AND
+               (sr.risk_classes IS NULL OR $2 = ANY(sr.risk_classes))
+               AND
+               (sr.device_categories IS NULL OR $3 = ANY(sr.device_categories))
+             )
+           GROUP BY s.id, s.code, s.title
+           ORDER BY s.code`,
+          [marketCodes, risk, deviceCategory]
+        );
+        const standardIds: number[] = standardsResult.rows.map((s: any) => s.id);
+
+        await client.query(`DELETE FROM project_standards WHERE project_id = $1`, [id]);
+
+        if (standardIds.length > 0) {
+          const valuesClause = standardIds.map((_, i) => `($1, $${i + 2})`).join(',');
+          await client.query(
+            `INSERT INTO project_standards (project_id, standard_id) VALUES ${valuesClause}`,
+            [id, ...standardIds]
+          );
+        }
+      }
+
+      // 6. Commit everything together
       await client.query('COMMIT');
+      return this.get(id);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
       client.release();
     }
+  } else {
+    // No data patch – just update name/description without transaction
+    await getPool().query(
+      `UPDATE projects SET
+        name = COALESCE($2, name),
+        description = COALESCE($3, description),
+        updated_at = $4
+      WHERE id = $1`,
+      [id, patch.name ?? null, patch.description ?? null, now]
+    );
     return this.get(id);
   }
+}
+  async getRequirements(risk: string, deviceCategory: string, marketCodes: string[]): Promise<any> {
+    // Get frameworks from markets table
+    const marketsResult = await getPool().query(
+      `SELECT code, framework FROM markets WHERE code = ANY($1::text[])`,
+      [marketCodes]
+    );
+    const frameworks = marketsResult.rows.map(r => r.framework);
 
-  async update(id: string, patch: { name?: string; description?: string; data?: any }): Promise<Project> {
-    const now = new Date().toISOString();
+    // Get standards based on standard_rules
+    const rulesResult = await getPool().query(
+      `SELECT s.id, s.code, s.title
+   FROM standard_rules sr
+   JOIN standards s ON s.id = sr.standard_id
+   WHERE
+     sr.always_applies = true
+     OR (
+       (sr.market_codes IS NULL OR sr.market_codes && $1::text[])
+       AND
+       (sr.risk_classes IS NULL OR $2 = ANY(sr.risk_classes))
+       AND
+       (sr.device_categories IS NULL OR $3 = ANY(sr.device_categories))
+     )
+   GROUP BY s.id, s.code, s.title
+   ORDER BY s.code`,
+      [marketCodes, risk, deviceCategory]
+    );
+    const standards = rulesResult.rows;
 
-    // Sanitize protocol/report section HTML here, at the single choke point every
-    // update() caller (generic PATCH, generateReport(), updateSection(), etc.) goes
-    // through — see sanitizeIncomingProjectData() for why per-endpoint sanitization
-    // alone isn't sufficient.
-    if (patch.data) {
-      patch = { ...patch, data: sanitizeIncomingProjectData(patch.data) };
-    }
-
-    // If data is provided, merge with existing data instead of overwriting.
-    // Deep-merge one level so nested keys like `synopsis` are merged rather than replaced.
-    if (patch.data) {
-      // Read-modify-write on `data` is not atomic by itself: two concurrent PATCH
-      // requests could both read the same snapshot and the later write would
-      // silently discard the earlier one's changes. `SELECT ... FOR UPDATE` takes
-      // a row lock for the transaction, so a second concurrent call blocks until
-      // the first commits and then reads its already-merged result — serializing
-      // updates to the same project without changing the merge semantics above.
-      const client = await getPool().connect();
-      try {
-        await client.query('BEGIN');
-        const { rows } = await client.query(
-          `select data from projects where id=$1 for update`,
-          [id],
-        );
-        if (!rows[0]) {
-          await client.query('ROLLBACK');
-          throw new NotFoundException('Project not found');
-        }
-        const existingData = rows[0].data || {};
-        const mergedData: any = { ...existingData };
-        for (const key of Object.keys(patch.data)) {
-          if (
-            patch.data[key] !== null &&
-            typeof patch.data[key] === 'object' &&
-            !Array.isArray(patch.data[key]) &&
-            existingData[key] !== null &&
-            typeof existingData[key] === 'object' &&
-            !Array.isArray(existingData[key])
-          ) {
-            mergedData[key] = { ...existingData[key], ...patch.data[key] };
-          } else {
-            mergedData[key] = patch.data[key];
-          }
-        }
-        await client.query(
-          `update projects set
-            name=coalesce($2,name),
-            description=coalesce($3,description),
-            data=$4,
-            updated_at=$5
-           where id=$1`,
-          [id, patch.name ?? null, patch.description ?? null, JSON.stringify(mergedData), now],
-        );
-        await client.query('COMMIT');
-      } catch (err) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw err;
-      } finally {
-        client.release();
-      }
-    } else {
-      await getPool().query(
-        `update projects set
-          name=coalesce($2,name),
-          description=coalesce($3,description),
-          updated_at=$4
-         where id=$1`,
-        [id, patch.name ?? null, patch.description ?? null, now],
-      );
-    }
-    return this.get(id);
+    return { frameworks, standards };
   }
 
+  /**
+   * Returns the standards that have already been calculated for one project.
+   *
+   * `standards` is the global catalogue. `project_standards` is the authoritative
+   * list of standards that are mandatory for this particular project after its
+   * risk class, device category and target markets have been evaluated.
+   */
+  async getProjectStandards(projectId: string): Promise<Array<{
+    id: number;
+    code: string;
+    title: string;
+  }>> {
+    const { rows } = await getPool().query(
+      `SELECT s.id, s.code, s.title
+       FROM project_standards ps
+       JOIN standards s ON s.id = ps.standard_id
+       WHERE ps.project_id = $1
+       ORDER BY s.code`,
+      [projectId],
+    );
+
+    return rows;
+  }
+
+async getMarkets(): Promise<any> {
+  const { rows } = await getPool().query(
+    `SELECT code, name, framework FROM markets ORDER BY name`,
+  );
+  return rows;
+}
   // Keeps project_members (the real, queryable source of "who holds what role on this
   // project" — see settings.service.ts getCompanyData()) in sync with the roles the
   // caller just saved into data.roles. A person only becomes a project_members row once
@@ -354,7 +530,7 @@ export class ProjectsService {
       );
       await client.query('COMMIT');
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      await client.query('ROLLBACK').catch(() => { });
       throw err;
     } finally {
       client.release();
@@ -396,7 +572,7 @@ export class ProjectsService {
       await client.query('COMMIT');
       return { signatures: newSignatures };
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      await client.query('ROLLBACK').catch(() => { });
       throw err;
     } finally {
       client.release();
@@ -437,7 +613,7 @@ export class ProjectsService {
       ]);
       await client.query('COMMIT');
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      await client.query('ROLLBACK').catch(() => { });
       throw err;
     } finally {
       client.release();

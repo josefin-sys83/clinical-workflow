@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 
 // class-validator's @IsNotEmpty() only rejects '', null, and undefined — a string of
@@ -28,14 +28,13 @@ export class CreateProjectDto {
   @NoNullBytes()
   deviceName?: string;
 
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  @NoNullBytes()
-  description?: string;
-}
 
+
+
+  @IsOptional()
+  @IsIn(['I', 'IIa', 'IIb', 'III'])
+  risk?: 'I' | 'IIa' | 'IIb' | 'III';
+}
 // Mirrors CreateProjectDto's validation for name/description so PATCH can't be used to bypass
 // the length/content limits enforced at creation. `data` is an intentionally open-ended nested
 // blob (protocol/report sections, synopsis, scope, roles, etc.) that isn't practical to model

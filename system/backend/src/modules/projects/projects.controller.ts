@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException, ForbiddenException, UnauthorizedException, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
@@ -16,6 +16,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { SYNOPSIS_UPLOAD_OPTIONS, getSafeDownloadHeaders } from '../../common/upload-security';
+import { getPool } from 'src/db/pg';
 
 // The PDF steps (protocol-pdf/report-pdf) only ever reach the workflow's 'signed' state
 // through advanceWorkflowStep() — nothing in the UI ever calls the document-artifact
@@ -47,7 +48,7 @@ export class ProjectsController {
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
     private readonly generationProgress: GenerationProgressService,
-  ) {}
+  ) { }
 
   // Same "done" set the frontend's shared/workflow/gate.ts uses to decide a step is
   // actually complete, duplicated here because the frontend's WorkflowStepGuard is a
@@ -87,7 +88,19 @@ export class ProjectsController {
       throw new BadRequestException('Synopsis and scope must both be completed before protocol generation can start.');
     }
   }
-
+ @Get('/requirements')
+  async getRequirements(
+    @Query('risk') risk: string,
+    @Query('deviceCategory') deviceCategory: string,
+    @Query('markets') markets: string, // comma-separated
+  ) {
+    const marketCodes = markets ? markets.split(',') : [];
+    return this.projects.getRequirements(risk, deviceCategory, marketCodes);
+  }
+  @Get('markets')
+async getMarkets() {
+  return this.projects.getMarkets();
+}
   @Get()
   list(@Req() req: any) {
     return this.projects.list(req.user?.companyId, req.user?.isSuperadmin);
@@ -96,6 +109,11 @@ export class ProjectsController {
   @Get('/completed')
   listCompleted(@Req() req: any) {
     return this.projects.listCompleted(req.user?.companyId, req.user?.isSuperadmin);
+  }
+
+  @Get('/:projectId/standards')
+  getProjectStandards(@Param('projectId') projectId: string) {
+    return this.projects.getProjectStandards(projectId);
   }
 
   @Get('/:projectId/report-sections')
@@ -141,103 +159,94 @@ export class ProjectsController {
   }
 
   @Patch('/:projectId')
-  async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectDto, @Req() req: any) {
-    const existing = await this.projects.get(projectId);
+async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectDto, @Req() req: any) {
+  const existing = await this.projects.get(projectId);
 
-    // Role assignments decide who can later sign this project's protocol/report (see
-    // createSignature()'s claimedRole check) and, via ProjectsService.syncProjectMembers(),
-    // who shows up as a real project member — this endpoint's otherwise-arbitrary `data`
-    // blob merge is not an appropriate place for any project-scoped user to grant
-    // themselves (or anyone) a role. This product's role model only has two system roles
-    // (admin/author, see AdminService/SettingsService) with no separate "project manager"
-    // system role to delegate to instead, so admin is the natural boundary. Only blocks
-    // when roles actually differ from what's stored — same pattern as the scope-lock check
-    // below — so callers that round-trip the full data blob without touching roles aren't affected.
-    const rolesChanged = body.data?.roles !== undefined &&
-      JSON.stringify(body.data.roles) !== JSON.stringify(existing?.data?.roles);
-    if (rolesChanged && !req.user?.roles?.includes('admin')) {
-      throw new ForbiddenException('Only a company admin can change project role assignments');
-    }
-
-    // Check if scope is locked (protocol has been finalized). Callers that save
-    // unrelated data (e.g. report section state) commonly round-trip the full
-    // project `data` blob, so `scope` is present but unchanged — only block when
-    // the incoming scope actually differs from what's stored, not merely present.
-    const scopeChanged = body.data?.scope !== undefined &&
-      JSON.stringify(body.data.scope) !== JSON.stringify(existing?.data?.scope);
-    if (scopeChanged) {
-      const workflowSteps = await this.workflow.getSnapshot(projectId);
-      const protocolFinal = workflowSteps?.steps?.['protocol-pdf']?.state === 'final';
-      if (protocolFinal) {
-        return { error: 'Scope is locked after protocol finalization', locked: true };
-      }
-    }
-    const result = await this.projects.update(projectId, body);
-    if (body.data?.roles) {
-      await this.projects.syncProjectMembers(projectId, body.data.roles);
-      const oldRoles: any[] = existing?.data?.roles || [];
-      const changes: string[] = [];
-      for (const newRole of body.data.roles) {
-        const oldRole = oldRoles.find((r: any) => r.title === newRole.title);
-        const oldPeople = (oldRole?.assignedTo || []).map((p: any) => p.name + ' (' + p.email + ')').join(', ') || 'unassigned';
-        const newPeople = (newRole.assignedTo || []).map((p: any) => p.name + ' (' + p.email + ')').join(', ') || 'unassigned';
-        if (oldPeople !== newPeople) {
-          changes.push(newRole.title + ': ' + oldPeople + ' -> ' + newPeople);
-        }
-      }
-      if (changes.length > 0) {
-        await this.audit.create(projectId, {
-          type: 'project.roles.updated',
-          message: 'Project roles updated',
-          stepId: 'project-setup',
-          actorUserId: 'unknown',
-          metadataJson: JSON.stringify({ roles: changes.join(' | ') })
-        });
-      }
-    }
-    if (body.name) {
-      await this.audit.create(projectId, {
-        type: 'project.setup.completed',
-        message: 'Project setup completed: ' + body.name,
-        stepId: 'project-setup',
-        actorUserId: 'unknown',
-        metadataJson: JSON.stringify({ projectName: body.name, description: body.description })
-      });
-    }
-
-    // This endpoint accepts an arbitrary `data` blob, so a caller can silently overwrite
-    // or delete any nested field (e.g. clearing protocol.amendments) without it ever
-    // showing up in the audit trail — the blocks above only cover `roles` and `name`
-    // specifically. Log one diff-summary entry per call covering every top-level `data`
-    // key that actually changed, so the audit trail reflects every write through this
-    // endpoint, not just the ones a dedicated code path happened to call out.
-    if (body.data) {
-      const changedKeys: string[] = [];
-      const summaries: string[] = [];
-      const changes: Record<string, { before: any; after: any }> = {};
-      for (const key of Object.keys(body.data)) {
-        const before = existing?.data?.[key];
-        const after = result?.data?.[key];
-        if (JSON.stringify(before) !== JSON.stringify(after)) {
-          changedKeys.push(key);
-          summaries.push(summarizeFieldChange(key, before, after));
-          changes[key] = { before, after };
-        }
-      }
-      if (changedKeys.length > 0) {
-        await this.audit.create(projectId, {
-          type: 'project.data.updated',
-          message: `Project data updated: ${summaries.join('; ')}`,
-          stepId: 'project-setup',
-          actorUserId: 'unknown',
-          metadataJson: JSON.stringify({ changedKeys, changes }),
-        });
-      }
-    }
-
-    return result;
+  // 1. Role assignments: only admins can change them
+  const rolesChanged = body.data?.roles !== undefined &&
+    JSON.stringify(body.data.roles) !== JSON.stringify(existing?.data?.roles);
+  if (rolesChanged && !req.user?.roles?.includes('admin')) {
+    throw new ForbiddenException('Only a company admin can change project role assignments');
   }
 
+  // 2. Scope lock check (only block if scope actually changed)
+  const scopeChanged = body.data?.scope !== undefined &&
+    JSON.stringify(body.data.scope) !== JSON.stringify(existing?.data?.scope);
+  if (scopeChanged) {
+    const workflowSteps = await this.workflow.getSnapshot(projectId);
+    const protocolFinal = workflowSteps?.steps?.['protocol-pdf']?.state === 'final';
+    if (protocolFinal) {
+      return { error: 'Scope is locked after protocol finalization', locked: true };
+    }
+  }
+
+  // 3. Update the project row (including markets/standards sync inside the transaction)
+  const result = await this.projects.update(projectId, body);
+
+  // 4. Sync project members and audit role changes (if roles provided)
+  if (body.data?.roles) {
+    await this.projects.syncProjectMembers(projectId, body.data.roles);
+    const oldRoles: any[] = existing?.data?.roles || [];
+    const changes: string[] = [];
+    for (const newRole of body.data.roles) {
+      const oldRole = oldRoles.find((r: any) => r.title === newRole.title);
+      const oldPeople = (oldRole?.assignedTo || []).map((p: any) => p.name + ' (' + p.email + ')').join(', ') || 'unassigned';
+      const newPeople = (newRole.assignedTo || []).map((p: any) => p.name + ' (' + p.email + ')').join(', ') || 'unassigned';
+      if (oldPeople !== newPeople) {
+        changes.push(newRole.title + ': ' + oldPeople + ' -> ' + newPeople);
+      }
+    }
+    if (changes.length > 0) {
+      await this.audit.create(projectId, {
+        type: 'project.roles.updated',
+        message: 'Project roles updated',
+        stepId: 'project-setup',
+        actorUserId: 'unknown',
+        metadataJson: JSON.stringify({ roles: changes.join(' | ') }),
+      });
+    }
+  }
+
+  // 5. Audit project name change (if provided)
+  if (body.name) {
+    await this.audit.create(projectId, {
+      type: 'project.setup.completed',
+      message: 'Project setup completed: ' + body.name,
+      stepId: 'project-setup',
+      actorUserId: 'unknown',
+      metadataJson: JSON.stringify({ projectName: body.name, description: body.description })
+    });
+  }
+
+  // 6. General diff-summary audit for every top‑level data key
+  if (body.data) {
+    const changedKeys: string[] = [];
+    const summaries: string[] = [];
+    const changes: Record<string, { before: any; after: any }> = {};
+    for (const key of Object.keys(body.data)) {
+      const before = existing?.data?.[key];
+      const after = result?.data?.[key];
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        changedKeys.push(key);
+        summaries.push(summarizeFieldChange(key, before, after));
+        changes[key] = { before, after };
+      }
+    }
+    if (changedKeys.length > 0) {
+      await this.audit.create(projectId, {
+        type: 'project.data.updated',
+        message: `Project data updated: ${summaries.join('; ')}`,
+        stepId: 'project-setup',
+        actorUserId: 'unknown',
+        metadataJson: JSON.stringify({ changedKeys, changes }),
+      });
+    }
+  }
+
+  return result;
+}
+
+ 
   // ── Electronic signature (21 CFR Part 11 / EU MDR compliant) ───────────────
   @Post('/:projectId/signatures')
   async createSignature(
@@ -399,10 +408,10 @@ export class ProjectsController {
     const hasTable = (s: string) => /^\|.+\|/m.test(s);
     const hasImage = (s: string) => /!\[.*?\]\(.*?\)/.test(s);
     const structuralNotes: string[] = [];
-    if (!hasTable(prevContent) && hasTable(newContent))  structuralNotes.push('Table added');
-    if (hasTable(prevContent)  && !hasTable(newContent)) structuralNotes.push('Table removed');
-    if (!hasImage(prevContent) && hasImage(newContent))  structuralNotes.push('Image added');
-    if (hasImage(prevContent)  && !hasImage(newContent)) structuralNotes.push('Image removed');
+    if (!hasTable(prevContent) && hasTable(newContent)) structuralNotes.push('Table added');
+    if (hasTable(prevContent) && !hasTable(newContent)) structuralNotes.push('Table removed');
+    if (!hasImage(prevContent) && hasImage(newContent)) structuralNotes.push('Image added');
+    if (hasImage(prevContent) && !hasImage(newContent)) structuralNotes.push('Image removed');
     const messageSuffix = structuralNotes.length > 0 ? ` (${structuralNotes.join(', ')})` : '';
 
     // Log audit event
@@ -953,10 +962,10 @@ export class ProjectsController {
       rawSynopsis.primaryEndpoint ? 'Primary Endpoint: ' + rawSynopsis.primaryEndpoint : '',
       rawSynopsis.readinessChecklist
         ? rawSynopsis.readinessChecklist
-            .filter((i: any) => i.status === 'complete')
-            .map((i: any) => i.label + ': ' + (i.reason || ''))
-            .join('\n')
-            .slice(0, 1000)
+          .filter((i: any) => i.status === 'complete')
+          .map((i: any) => i.label + ': ' + (i.reason || ''))
+          .join('\n')
+          .slice(0, 1000)
         : '',
     ].filter(Boolean);
     const enrichedSynopsis = {
@@ -1068,10 +1077,10 @@ export class ProjectsController {
       rawSynopsis.primaryEndpoint ? 'Primary Endpoint: ' + rawSynopsis.primaryEndpoint : '',
       rawSynopsis.readinessChecklist
         ? rawSynopsis.readinessChecklist
-            .filter((i: any) => i.status === 'complete')
-            .map((i: any) => i.label + ': ' + (i.reason || ''))
-            .join('\n')
-            .slice(0, 1000)
+          .filter((i: any) => i.status === 'complete')
+          .map((i: any) => i.label + ': ' + (i.reason || ''))
+          .join('\n')
+          .slice(0, 1000)
         : '',
     ].filter(Boolean);
     const enrichedSynopsis = { ...rawSynopsis, synopsisText: synopsisTextParts.join('\n') };
@@ -1282,6 +1291,65 @@ export class ProjectsController {
 
     return this.milestones.computeMilestones(project, workflowStates);
   }
+
+ @Post('/:projectId/workflow/force-synopsis')
+async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
+  // Restrict to dev or admin
+  if (process.env.NODE_ENV === 'production' && !req.user?.roles?.includes('admin')) {
+    throw new ForbiddenException('This endpoint is only available in development or for admins');
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+
+    // Check current state
+    const { rows } = await client.query(
+      `SELECT state FROM workflow_step_state WHERE project_id = $1 AND step_id = 'synopsis' FOR UPDATE`,
+      [projectId]
+    );
+    if (rows.length === 0) {
+      // If no row exists, we need to insert it with state 'approved'
+      await client.query(
+        `INSERT INTO workflow_step_state (project_id, step_id, state, updated_at)
+         VALUES ($1, 'synopsis', 'approved', NOW())`,
+        [projectId]
+      );
+      await client.query('COMMIT');
+      return { ok: true, message: 'Synopsis step inserted and set to approved' };
+    }
+
+    const currentState = rows[0].state;
+    if (['approved', 'signed', 'final'].includes(currentState)) {
+      await client.query('ROLLBACK');
+      return { ok: true, message: 'Synopsis already advanced' };
+    }
+
+    // Force update to 'approved'
+    await client.query(
+      `UPDATE workflow_step_state SET state = 'approved', updated_at = NOW()
+       WHERE project_id = $1 AND step_id = 'synopsis'`,
+      [projectId]
+    );
+
+    // Optionally log an audit event
+    await this.audit.create(projectId, {
+      type: 'workflow.bypass',
+      message: 'Synopsis step forced to approved via admin bypass',
+      stepId: 'synopsis',
+      actorUserId: req.user?.userId || 'system',
+      metadataJson: JSON.stringify({ bypassedAt: new Date().toISOString() }),
+    }).catch(() => {}); // ignore audit errors
+
+    await client.query('COMMIT');
+    return { ok: true, message: 'Synopsis step forced to approved' };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 }
 
 // Produces a short, human-readable note for one changed top-level `data` key. Nested

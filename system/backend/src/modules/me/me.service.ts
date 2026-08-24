@@ -10,38 +10,38 @@ type ActionDef = {
 
 const ROLE_STEP_ACTIONS: Record<string, Record<string, ActionDef>> = {
   'Medical Writer': {
-    'protocol-make': { action: 'Input needed', actionType: 'input',     document: 'Clinical Investigation Protocol', description: 'Protocol sections require authoring' },
-    'report-make':   { action: 'Input needed', actionType: 'input',     document: 'Clinical Investigation Report',  description: 'Report sections require authoring' },
+    'protocol-make': { action: 'Input needed', actionType: 'input', document: 'Clinical Investigation Protocol', description: 'Protocol sections require authoring' },
+    'report-make': { action: 'Input needed', actionType: 'input', document: 'Clinical Investigation Report', description: 'Report sections require authoring' },
   },
   'Protocol Lead': {
-    'protocol-make':   { action: 'Input needed', actionType: 'input',     document: 'Clinical Investigation Protocol', description: 'Protocol requires your input as Protocol Lead' },
-    'protocol-review': { action: 'Review',       actionType: 'review',    document: 'Clinical Investigation Protocol', description: 'Protocol requires your review' },
-    'report-review':   { action: 'Review',       actionType: 'review',    document: 'Clinical Investigation Report',  description: 'Report requires your review' },
-    'report-pdf':      { action: 'Sign',         actionType: 'signature', document: 'Clinical Investigation Report',  description: 'Report PDF requires your signature as Protocol Lead' },
+    'protocol-make': { action: 'Input needed', actionType: 'input', document: 'Clinical Investigation Protocol', description: 'Protocol requires your input as Protocol Lead' },
+    'protocol-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Protocol', description: 'Protocol requires your review' },
+    'report-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report', description: 'Report requires your review' },
+    'report-pdf': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Report', description: 'Report PDF requires your signature as Protocol Lead' },
   },
   'Principal Investigator': {
-    'protocol-review': { action: 'Review', actionType: 'review',    document: 'Clinical Investigation Protocol', description: 'Protocol requires your clinical review' },
-    'protocol-pdf':    { action: 'Sign',   actionType: 'signature', document: 'Clinical Investigation Protocol', description: 'Protocol PDF requires your signature' },
-    'report-review':   { action: 'Review', actionType: 'review',    document: 'Clinical Investigation Report',  description: 'Report requires your clinical review' },
-    'report-pdf':      { action: 'Sign',   actionType: 'signature', document: 'Clinical Investigation Report',  description: 'Report PDF requires your signature' },
+    'protocol-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Protocol', description: 'Protocol requires your clinical review' },
+    'protocol-pdf': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Protocol', description: 'Protocol PDF requires your signature' },
+    'report-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report', description: 'Report requires your clinical review' },
+    'report-pdf': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Report', description: 'Report PDF requires your signature' },
   },
   'Statistician': {
     'protocol-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Protocol', description: 'Protocol requires your statistical review' },
-    'report-review':   { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report',  description: 'Report requires your statistical review' },
+    'report-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report', description: 'Report requires your statistical review' },
   },
   'Regulatory Affairs': {
     'protocol-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Protocol', description: 'Protocol requires your regulatory review' },
-    'report-review':   { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report',  description: 'Report requires your regulatory review' },
+    'report-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report', description: 'Report requires your regulatory review' },
   },
   'Quality Assurance': {
     'protocol-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Protocol', description: 'Protocol requires your QA review' },
-    'report-review':   { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report',  description: 'Report requires your QA review' },
+    'report-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report', description: 'Report requires your QA review' },
   },
   'Clinical Affairs VP': {
     'protocol-review': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Protocol', description: 'Protocol requires your executive approval' },
-    'protocol-pdf':    { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Protocol', description: 'Protocol PDF requires your signature' },
-    'report-review':   { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Report',  description: 'Report requires your executive approval' },
-    'report-pdf':      { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Report',  description: 'Report PDF requires your signature' },
+    'protocol-pdf': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Protocol', description: 'Protocol PDF requires your signature' },
+    'report-review': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Report', description: 'Report requires your executive approval' },
+    'report-pdf': { action: 'Sign', actionType: 'signature', document: 'Clinical Investigation Report', description: 'Report PDF requires your signature' },
   },
   'Project Manager': {
     'project-setup': { action: 'Input needed', actionType: 'input', document: 'Project Setup', description: 'Project setup requires your completion' },
@@ -49,20 +49,20 @@ const ROLE_STEP_ACTIONS: Record<string, Record<string, ActionDef>> = {
 };
 
 const STEP_PATHS: Record<string, string> = {
-  'project-setup':   'project-setup',
-  'protocol-make':   'protocol/make',
+  'project-setup': 'project-setup',
+  'protocol-make': 'protocol/make',
   'protocol-review': 'protocol/review',
-  'protocol-pdf':    'protocol/pdf',
-  'report-make':     'report/make',
-  'report-review':   'report/review',
-  'report-pdf':      'report/pdf',
+  'protocol-pdf': 'protocol/pdf',
+  'report-make': 'report/make',
+  'report-review': 'report/review',
+  'report-pdf': 'report/pdf',
 };
 
 const PRIORITY_BY_TYPE: Record<string, 'High' | 'Medium' | 'Low'> = {
   signature: 'High',
-  review:    'Medium',
-  input:     'Medium',
-  blocker:   'High',
+  review: 'Medium',
+  input: 'Medium',
+  blocker: 'High',
 };
 
 export type RequiredAction = {
@@ -89,12 +89,9 @@ export class MeService {
   async getActions(userId: string, companyId?: string | null, isSuperadmin?: boolean): Promise<RequiredAction[]> {
     const pool = getPool();
 
-    const { rows: userRows } = await pool.query<{ email: string }>(
-      'SELECT email FROM users WHERE id = $1',
-      [userId],
-    );
-    if (!userRows[0]) return [];
-    const userEmail = userRows[0].email.toLowerCase();
+    const userEmail = (await this.getEmail(userId))?.toLowerCase();
+
+    if (!userEmail) return [];
 
     // Scoped by company_id (superadmins see across all companies, matching
     // ProjectsService.list()) and selecting only data->'roles' instead of the full
@@ -103,19 +100,19 @@ export class MeService {
     // has nothing to do with computing required actions.
     const { rows: projects } = isSuperadmin
       ? await pool.query<{ id: string; name: string; roles: any }>(
-          `SELECT id, name, data->'roles' AS roles FROM projects WHERE status = 'active'`,
-        )
+        `SELECT id, name, data->'roles' AS roles FROM projects WHERE status = 'active'`,
+      )
       : await pool.query<{ id: string; name: string; roles: any }>(
-          `SELECT id, name, data->'roles' AS roles FROM projects WHERE status = 'active' AND company_id = $1`,
-          [companyId ?? null],
-        );
+        `SELECT id, name, data->'roles' AS roles FROM projects WHERE status = 'active' AND company_id = $1`,
+        [companyId ?? null],
+      );
 
     const projectIds = projects.map((p) => p.id);
     const { rows: stepStateRows } = projectIds.length
       ? await pool.query<{ project_id: string; step_id: string; state: string }>(
-          `SELECT project_id, step_id, state FROM workflow_step_state WHERE project_id = ANY($1::text[])`,
-          [projectIds],
-        )
+        `SELECT project_id, step_id, state FROM workflow_step_state WHERE project_id = ANY($1::uuid[])`,
+        [projectIds],
+      )
       : { rows: [] as { project_id: string; step_id: string; state: string }[] };
 
     const stateByKey = new Map<string, string>();

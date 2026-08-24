@@ -9,6 +9,7 @@ import { theme } from '@/app/theme';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { AIInsightBadge } from '@/shared/components/AIInsightBadge';
+import { AuditEntry } from './AuditTrail';
 
 
 interface ReadinessItem {

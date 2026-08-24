@@ -1,6 +1,7 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Building2, ShieldCheck, LogOut, Users, LayoutDashboard } from 'lucide-react';
-import { logout } from '@/shared/auth/token';
+import{useLogout} from '@/shared/hooks/LogOut'
+import { LogoutButton } from '@/app/components/LogoutButton';
 
 const NAV = [
   { label: 'Overview',  href: '/admin/overview',  icon: LayoutDashboard },
@@ -11,11 +12,8 @@ const NAV = [
 export function AdminLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+const handleLogout = useLogout();
 
-  const handleLogout = () => {
-    void logout();
-    navigate('/login');
-  };
 
   return (
     <div className="min-h-screen flex bg-slate-50">
@@ -49,17 +47,15 @@ export function AdminLayout() {
           })}
         </nav>
         <div className="px-5 py-4 border-t border-slate-200 space-y-2">
-          <Link to="/dashboard" className="text-xs text-slate-500 hover:text-slate-700">
+          <Link to="/dashboard" className="text-xs text-slate-500 hover:text-slate-700 ">
             ← Back to app
           </Link>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 text-xs text-slate-500 hover:text-rose-700 transition-colors w-full"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Log out
-          </button>
+     <LogoutButton
+  onLogout={handleLogout}
+  className="flex items-center gap-2 px-0 py-1 text-xs text-slate-500 hover:text-rose-700 transition-colors"
+/>
         </div>
+        
       </aside>
 
       {/* Main */}

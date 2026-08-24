@@ -18,10 +18,6 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
 
   if (!open) return null;
 
-  // This component renders `null` rather than unmounting when `open` is false (see the
-  // early return above), so its useState above survives a close — without an explicit
-  // reset, Cancel-ing and reopening for a genuinely new project silently repopulates
-  // whatever was typed into a previous, abandoned attempt.
   const handleClose = () => {
     setName('');
     setDeviceName('');

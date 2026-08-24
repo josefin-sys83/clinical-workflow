@@ -24,6 +24,9 @@ import type { DocumentLifecycleState, WorkflowStepId } from '@/shared/workflow/t
 import { AuditTrailButton } from '@/shared/components/AuditTrailButton';
 import { Button } from '@/app/components/ui/button';
 import { getToken, isSuperadmin, logout } from '@/shared/auth/token';
+import { LogoutButton } from './LogoutButton';
+import {useLogout} from '@/shared/hooks/LogOut'
+
 
 function isDone(state: DocumentLifecycleState | undefined): boolean {
   return state === 'approved' || state === 'signed' || state === 'final';
@@ -80,7 +83,7 @@ export function Shell() {
   const projectId = params.projectId;
   const current = getStepByPathname(location.pathname);
   const { snapshot, refresh } = useWorkflowSnapshot({ projectId });
-
+  const handleLogout=useLogout()
   useEffect(() => {
     const token = getToken();
     if (!token) return;
@@ -105,10 +108,7 @@ export function Shell() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleSignOut = () => {
-    void logout();
-    navigate('/login');
-  };
+
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -305,7 +305,7 @@ export function Shell() {
                   </span>
                 </button>
                 {showUserMenu && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                  <div className="absolute  flex flex-col right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
                     <button
                       onClick={() => { setShowUserMenu(false); navigate('/settings'); }}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
@@ -313,14 +313,11 @@ export function Shell() {
                       <Settings className="h-4 w-4 text-gray-500" />
                       <span>Settings</span>
                     </button>
-                    <div className="border-t border-gray-200" />
-                    <button
-                      onClick={handleSignOut}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      <LogOut className="h-4 w-4 text-gray-500" />
-                      <span>Log out</span>
-                    </button>
+                     <LogoutButton onLogout={handleLogout} className='w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors'/>
+                   
+                    
+                 
+
                   </div>
                 )}
               </div>
