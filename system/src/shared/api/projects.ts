@@ -23,7 +23,7 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
     method: 'POST',
     body: JSON.stringify({
       name: input.name,
-      deviceName: input.deviceName ?? 'TBD',
+      deviceName: input.deviceName,
     }),
   });
 }

@@ -1,0 +1,8 @@
+BEGIN;
+
+ALTER TABLE projects
+  ALTER COLUMN risk DROP NOT NULL;
+
+
+
+COMMIT;

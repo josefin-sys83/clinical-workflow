@@ -22,6 +22,8 @@ interface Role {
   description: string;
 }
 
+type RiskClass = 'I' | 'IIa' | 'IIb' | 'III';
+
 interface ProjectData {
   projectName: string;
   sponsor: string;
@@ -30,7 +32,7 @@ interface ProjectData {
   deviceCategory: string;
   intendedUse: string;
   targetMarkets: string[];
-  risk: 'I' | 'IIa' | 'IIb' | 'III';
+  risk: RiskClass | '';
   ethicsSubmissionTarget: string;
   firstPatientInTarget: string;
   regulatorySubmissionTarget: string;
@@ -90,7 +92,7 @@ export function ProjectSetupPage() {
     deviceCategory: '',
     intendedUse: '',
     targetMarkets: [],
-    risk: 'I',
+    risk: '',
     ethicsSubmissionTarget: '',
     firstPatientInTarget: '',
     regulatorySubmissionTarget: '',
@@ -196,7 +198,7 @@ export function ProjectSetupPage() {
   }, [roles]);
 
   useEffect(() => {
-    const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.targetMarkets.length > 0;
+    const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.risk !== '' && projectData.targetMarkets.length > 0;
     const rolesComplete = roles.every(role => role.status === 'assigned');
     setIsSetupComplete(identityComplete && rolesComplete);
   }, [projectData, roles]);
@@ -224,32 +226,41 @@ export function ProjectSetupPage() {
         let loadedProjectData = projectData;
         let loadedRoles = roles;
         setProjectNumber(project.project_number || '');
-        if (project.data?.projectData) {
-          const pd = project.data.projectData;
-          loadedProjectData = {
-            projectName: pd.projectName || '',
-            sponsor: pd.sponsor || '',
-            deviceName: pd.deviceName || '',
-            risk: pd.risk,
-            indication: pd.indication || '',
-            deviceCategory: pd.deviceCategory || '',
-            intendedUse: pd.intendedUse || '',
-            targetMarkets: pd.targetMarkets || [],
-            ethicsSubmissionTarget: pd.ethicsSubmissionTarget || pd.plannedStudyStart || '',
-            firstPatientInTarget: pd.firstPatientInTarget || '',
-            regulatorySubmissionTarget: pd.regulatorySubmissionTarget || pd.targetSubmissionReadiness || '',
+        const pd = project.data?.projectData || {};
+
+        // Relational fields come from their authoritative SQL columns/join tables.
+        // Only the non-relational setup details are read from JSONB.
+        loadedProjectData = {
+          projectName: project.name || '',
+          sponsor: pd.sponsor || '',
+          deviceName: pd.deviceName || '',
+          risk: project.risk || '',
+          indication: pd.indication || '',
+          deviceCategory: project.deviceCategory || '',
+          intendedUse: pd.intendedUse || '',
+          targetMarkets: project.targetMarkets || [],
+          ethicsSubmissionTarget: pd.ethicsSubmissionTarget || pd.plannedStudyStart || '',
+          firstPatientInTarget: pd.firstPatientInTarget || '',
+          regulatorySubmissionTarget: pd.regulatorySubmissionTarget || pd.targetSubmissionReadiness || '',
+        };
+        setProjectData(loadedProjectData);
+
+        // The API returns role assignments from project_members. UI-only role metadata
+        // remains defined by DEFAULT_ROLES and is never persisted in JSONB.
+        const savedAssignments: Array<{
+          title: string;
+          assignedTo: Array<{ name: string; email: string }>;
+        }> = project.roles || [];
+        loadedRoles = DEFAULT_ROLES.map(def => {
+          const match = savedAssignments.find(saved => saved.title === def.title);
+          const assignedTo = match?.assignedTo || [];
+          return {
+            ...def,
+            assignedTo,
+            status: assignedTo.length > 0 ? 'assigned' : 'pending',
           };
-          setProjectData(loadedProjectData);
-        }
-        if (project.data?.roles) {
-          const saved: Role[] = project.data.roles;
-          // Merge: keep saved role data, but add any DEFAULT_ROLES not yet in the saved list
-          loadedRoles = DEFAULT_ROLES.map(def => {
-            const match = saved.find(s => s.title === def.title);
-            return match ? match : def;
-          });
-          setRoles(loadedRoles);
-        }
+        });
+        setRoles(loadedRoles);
         setSavedSnapshot({ projectData: loadedProjectData, roles: loadedRoles });
       })
       .catch((e) => {
@@ -312,7 +323,7 @@ export function ProjectSetupPage() {
     URL.revokeObjectURL(url);
   };
 
-  const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.targetMarkets.length > 0;
+  const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.risk !== '' && projectData.targetMarkets.length > 0;
   const projectManagerAssigned = roles[0].status === 'assigned';
   const allRolesAssigned = roles.every(role => role.status === 'assigned');
 
@@ -331,17 +342,32 @@ export function ProjectSetupPage() {
     try {
       let response;
       let newProjectId = projectId;
+      const {
+        projectName,
+        risk,
+        deviceCategory,
+        targetMarkets,
+        ...jsonProjectData
+      } = projectData;
+      const setupPayload = {
+        name: projectName,
+        risk: risk || null,
+        deviceCategory: deviceCategory || null,
+        targetMarkets,
+        roles: roles.map(role => ({
+          title: role.title,
+          assignedTo: role.assignedTo,
+        })),
+        description: `Device: ${projectData.deviceName} | Sponsor: ${projectData.sponsor}`,
+        data: { projectData: jsonProjectData },
+      };
 
       if (isNew) {
         // ---------- CREATION MODE: POST /api/projects ----------
         response = await fetch(`/api/projects`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: projectData.projectName,
-            deviceName: projectData.deviceName || undefined, // optional
-            risk: projectData.risk, // required
-          }),
+          body: JSON.stringify(setupPayload),
         });
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
@@ -357,11 +383,7 @@ export function ProjectSetupPage() {
       response = await fetch(`/api/projects/${projectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: projectData.projectName,
-          description: `Device: ${projectData.deviceName} | Sponsor: ${projectData.sponsor}`,
-          data: { projectData, roles },
-        }),
+        body: JSON.stringify(setupPayload),
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
@@ -552,9 +574,10 @@ export function ProjectSetupPage() {
                   <select
                     required
                     value={projectData.risk}
-                    onChange={(e) => handleInputChange('risk', e.target.value as 'I' | 'IIa' | 'IIb' | 'III')}
+                    onChange={(e) => handleInputChange('risk', e.target.value as RiskClass | '')}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
                   >
+                    <option value="">Select risk class...</option>
                     <option value="I">I</option>
                     <option value="IIa">IIa</option>
                     <option value="IIb">IIb</option>

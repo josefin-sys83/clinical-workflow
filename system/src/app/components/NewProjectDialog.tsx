@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
 import { createProject } from '@/shared/api/projects';
+import { apiErrorMessage } from '@/shared/api/http';
 
 interface NewProjectDialogProps {
   open: boolean;
@@ -34,8 +35,13 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
       handleClose();
       navigate(`/projects/${project.id}/workflow/project-setup`);
     } catch (err: any) {
-      setError('Failed to create project. Please try again.');
-    } finally {
+  setError(
+ apiErrorMessage(
+      err,
+      'Failed to create project. Please try again.',
+    ),
+  );
+} finally {
       setLoading(false);
     }
   };

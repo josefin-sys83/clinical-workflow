@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  ArrayUnique,
+  IsArray,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 
 // class-validator's @IsNotEmpty() only rejects '', null, and undefined — a string of
@@ -9,7 +17,8 @@ import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 // project: there's no delete-project endpoint anywhere in this app, so that's not a
 // cosmetic annoyance, it's permanent clutter. Trimming before validation closes that,
 // for both this and the identical deviceName case.
-const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+const trim = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
 
 export class CreateProjectDto {
   @ApiProperty({ example: 'Acme Study 2026-01' })
@@ -28,32 +37,104 @@ export class CreateProjectDto {
   @NoNullBytes()
   deviceName?: string;
 
-
-
-
+  @ApiProperty({ required: false, nullable: true, enum: ['I', 'IIa', 'IIb', 'III'] })
   @IsOptional()
   @IsIn(['I', 'IIa', 'IIb', 'III'])
-  risk?: 'I' | 'IIa' | 'IIb' | 'III';
-}
-// Mirrors CreateProjectDto's validation for name/description so PATCH can't be used to bypass
-// the length/content limits enforced at creation. `data` is an intentionally open-ended nested
-// blob (protocol/report sections, synopsis, scope, roles, etc.) that isn't practical to model
-// as a strict nested DTO here, but it still gets the null-byte check recursively — that's the
-// specific failure mode that previously reached Postgres as an unhandled 500.
-export class UpdateProjectDto {
-  @ApiProperty({ required: false })
+  risk?: 'I' | 'IIa' | 'IIb' | 'III' | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    enum: ['samd', 'ai-ml', 'simd', 'ivd', 'aimd', 'implantable', 'non-implantable', 'active', 'combination', 'accessory'],
+  })
   @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  @NoNullBytes()
-  name?: string;
+  @IsIn(['samd', 'ai-ml', 'simd', 'ivd', 'aimd', 'implantable', 'non-implantable', 'active', 'combination', 'accessory'])
+  deviceCategory?: string | null;
 
   @ApiProperty({ required: false })
+  @Transform(trim)
   @IsOptional()
   @IsString()
   @MaxLength(2000)
   @NoNullBytes()
   description?: string;
+
+  @ApiProperty({ required: false, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @NoNullBytes()
+  targetMarkets?: string[];
+
+  @ApiProperty({ required: false, type: Array })
+  @IsOptional()
+  @IsArray()
+  @NoNullBytes()
+  roles?: Array<{
+    title: string;
+    assignedTo?: Array<{ name?: string; email?: string }>;
+  }>;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @NoNullBytes()
+  data?: any;
+}
+
+// Mirrors CreateProjectDto's validation for name/description so PATCH can't be used to bypass
+// the length/content limits enforced at creation. `data` remains an intentionally open-ended
+// nested blob for protocol/report sections, synopsis, scope, and non-relational setup details.
+export class UpdateProjectDto {
+  @ApiProperty({ required: false })
+  @Transform(trim)
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  @NoNullBytes()
+  name?: string;
+
+  @ApiProperty({ required: false })
+  @Transform(trim)
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  @NoNullBytes()
+  description?: string;
+
+  @ApiProperty({ required: false, nullable: true, enum: ['I', 'IIa', 'IIb', 'III'] })
+  @IsOptional()
+  @IsIn(['I', 'IIa', 'IIb', 'III'])
+  risk?: 'I' | 'IIa' | 'IIb' | 'III' | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    enum: ['samd', 'ai-ml', 'simd', 'ivd', 'aimd', 'implantable', 'non-implantable', 'active', 'combination', 'accessory'],
+  })
+  @IsOptional()
+  @IsIn(['samd', 'ai-ml', 'simd', 'ivd', 'aimd', 'implantable', 'non-implantable', 'active', 'combination', 'accessory'])
+  deviceCategory?: string | null;
+
+  @ApiProperty({ required: false, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @NoNullBytes()
+  targetMarkets?: string[];
+
+  // The controller/service only use title and assignedTo. No UI-only role metadata
+  // is stored in projects.data.
+  @ApiProperty({ required: false, type: Array })
+  @IsOptional()
+  @IsArray()
+  @NoNullBytes()
+  roles?: Array<{
+    title: string;
+    assignedTo?: Array<{ name?: string; email?: string }>;
+  }>;
 
   @ApiProperty({ required: false })
   @IsOptional()

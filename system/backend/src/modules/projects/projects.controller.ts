@@ -120,7 +120,6 @@ async getMarkets() {
   async getReportSections(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
     const scope = project?.data?.scope || {};
-    const projectData = project?.data?.projectData || {};
 
     const inferredFromRequirements: string[] = (scope?.requirements || [])
       .filter((r: any) => r.status === 'accepted')
@@ -132,15 +131,15 @@ async getMarkets() {
       .filter(Boolean);
     const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
     const targetMarkets: string[] =
-      scope?.targetMarkets ||
-      projectData?.targetMarkets ||
-      (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+      project.targetMarkets.length > 0
+        ? project.targetMarkets
+        : (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
 
     const sections = this.getDynamicReportSections(targetMarkets, scope);
     return {
       sections,
       targetMarkets,
-      deviceCategory: scope?.deviceCategory || '',
+      deviceCategory: project.deviceCategory || '',
       studyType: project?.data?.synopsis?.studyType || '',
     };
   }
@@ -163,8 +162,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   const existing = await this.projects.get(projectId);
 
   // 1. Role assignments: only admins can change them
-  const rolesChanged = body.data?.roles !== undefined &&
-    JSON.stringify(body.data.roles) !== JSON.stringify(existing?.data?.roles);
+  const rolesChanged = body.roles !== undefined &&
+    JSON.stringify(normalizeRoleAssignments(body.roles)) !==
+      JSON.stringify(normalizeRoleAssignments(existing.roles));
   if (rolesChanged && !req.user?.roles?.includes('admin')) {
     throw new ForbiddenException('Only a company admin can change project role assignments');
   }
@@ -183,12 +183,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   // 3. Update the project row (including markets/standards sync inside the transaction)
   const result = await this.projects.update(projectId, body);
 
-  // 4. Sync project members and audit role changes (if roles provided)
-  if (body.data?.roles) {
-    await this.projects.syncProjectMembers(projectId, body.data.roles);
-    const oldRoles: any[] = existing?.data?.roles || [];
+  // 4. Project members were synchronized atomically by projects.update().
+  // Audit role changes using relational assignments returned by projects.get().
+  if (body.roles) {
+    const oldRoles: any[] = existing.roles || [];
     const changes: string[] = [];
-    for (const newRole of body.data.roles) {
+    for (const newRole of body.roles) {
       const oldRole = oldRoles.find((r: any) => r.title === newRole.title);
       const oldPeople = (oldRole?.assignedTo || []).map((p: any) => p.name + ' (' + p.email + ')').join(', ') || 'unassigned';
       const newPeople = (newRole.assignedTo || []).map((p: any) => p.name + ' (' + p.email + ')').join(', ') || 'unassigned';
@@ -218,7 +218,41 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     });
   }
 
-  // 6. General diff-summary audit for every top‑level data key
+  // 6. Audit relational setup values separately because they no longer live in JSONB.
+  const relationalChanges: Record<string, { before: any; after: any }> = {};
+  if (body.risk !== undefined && body.risk !== existing.risk) {
+    relationalChanges.risk = { before: existing.risk, after: result.risk };
+  }
+  if (
+    body.deviceCategory !== undefined &&
+    body.deviceCategory !== existing.deviceCategory
+  ) {
+    relationalChanges.deviceCategory = {
+      before: existing.deviceCategory,
+      after: result.deviceCategory,
+    };
+  }
+  if (body.targetMarkets !== undefined) {
+    const beforeMarkets = [...existing.targetMarkets].sort();
+    const afterMarkets = [...result.targetMarkets].sort();
+    if (JSON.stringify(beforeMarkets) !== JSON.stringify(afterMarkets)) {
+      relationalChanges.targetMarkets = {
+        before: beforeMarkets,
+        after: afterMarkets,
+      };
+    }
+  }
+  if (Object.keys(relationalChanges).length > 0) {
+    await this.audit.create(projectId, {
+      type: 'project.setup.relational.updated',
+      message: `Project setup fields updated: ${Object.keys(relationalChanges).join(', ')}`,
+      stepId: 'project-setup',
+      actorUserId: 'unknown',
+      metadataJson: JSON.stringify({ changes: relationalChanges }),
+    });
+  }
+
+  // 7. General diff-summary audit for every top-level JSON data key
   if (body.data) {
     const changedKeys: string[] = [];
     const summaries: string[] = [];
@@ -269,7 +303,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     if (!identity) throw new UnauthorizedException('Unable to resolve signer identity');
 
     const project = await this.projects.get(projectId);
-    const projectRoles: any[] = project?.data?.roles || [];
+    const projectRoles: any[] = project.roles || [];
     const claimedRole = projectRoles.find((r: any) =>
       r.title === body.roleTitle &&
       (r.assignedTo || []).some((p: any) => p.email?.toLowerCase() === identity.email?.toLowerCase())
@@ -469,7 +503,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
     const existing = await this.projects.get(projectId);
     const existingSynopsis = existing?.data?.synopsis || {};
-    const targetMarkets = existing?.data?.projectData?.targetMarkets || existing?.data?.scope?.targetMarkets || [];
+    const targetMarkets = existing.targetMarkets || [];
 
     const results = await this.ai.analyzeSynopsis(text, targetMarkets);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
@@ -519,13 +553,13 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     await this.assertProtocolPrerequisites(projectId);
     const project = await this.projects.get(projectId);
     const projectData = project?.data?.projectData || {};
-    const roles = project?.data?.roles || [];
+    const roles = project.roles || [];
     const scope = project?.data?.scope || {};
     const synopsisData = project?.data?.synopsis || {};
     const synopsisText = synopsisData.extractedText ||
       (synopsisData.readinessChecklist?.map((i: any) => i.reason).filter(Boolean).join(' ') ?? '');
-    const targetMarkets = projectData?.targetMarkets || ['EU'];
-    const deviceCategory = scope?.deviceCategory || '';
+    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
+    const deviceCategory = project.deviceCategory || '';
     const intendedUse = scope?.intendedUse || '';
 
     const progressKey = `protocol:${projectId}`;
@@ -626,8 +660,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   }
 
   private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined) {
-    const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
-    const deviceCategory = project?.data?.scope?.deviceCategory || '';
+    const targetMarkets = project?.targetMarkets?.length > 0 ? project.targetMarkets : ['EU'];
+    const deviceCategory = project?.deviceCategory || '';
     const intendedUse = project?.data?.scope?.intendedUse || '';
 
     const protocol = project?.data?.protocol || {};
@@ -924,7 +958,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
     const projectData = project?.data?.projectData || {};
-    const roles = project?.data?.roles || [];
+    const roles = project.roles || [];
     const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
     const existingReport = project?.data?.report || {};
@@ -941,9 +975,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       .filter(Boolean);
     const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
     const targetMarkets: string[] =
-      scope?.targetMarkets ||
-      projectData?.targetMarkets ||
-      (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+      project.targetMarkets.length > 0
+        ? project.targetMarkets
+        : (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
 
     // Resolve device name from multiple sources
     const deviceName: string =
@@ -1035,7 +1069,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
     const projectData = project?.data?.projectData || {};
-    const roles = project?.data?.roles || [];
+    const roles = project.roles || [];
     const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
     const existingReport = project?.data?.report || {};
@@ -1058,9 +1092,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       .filter(Boolean);
     const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
     const targetMarkets: string[] =
-      scope?.targetMarkets ||
-      projectData?.targetMarkets ||
-      (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+      project.targetMarkets.length > 0
+        ? project.targetMarkets
+        : (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
 
     const deviceName: string =
       projectData?.deviceName ||
@@ -1138,8 +1172,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   ) {
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
-    const targetMarkets = project?.data?.projectData?.targetMarkets || project?.data?.scope?.targetMarkets || ['EU'];
-    const deviceCategory = project?.data?.scope?.deviceCategory || '';
+    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
+    const deviceCategory = project.deviceCategory || '';
     const intendedUse = project?.data?.scope?.intendedUse || '';
 
     const protocol = project?.data?.protocol || {};
@@ -1176,8 +1210,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol || {};
     const report = project?.data?.report || {};
-    const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
-    const deviceCategory = project?.data?.scope?.deviceCategory || '';
+    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
+    const deviceCategory = project.deviceCategory || '';
 
     const protocolSections = (protocol.sections || []).map((s: any) => ({
       title: s.title,
@@ -1244,7 +1278,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   async validateStatistics(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
     const reportSections = project?.data?.report?.sections || {};
-    const targetMarkets = project?.data?.projectData?.targetMarkets || ['EU'];
+    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
 
     // Find relevant sections
     const findSection = (keywords: string[]) => {
@@ -1356,6 +1390,18 @@ async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
 // array fields (e.g. data.protocol.amendments) are the common shape for the kind of
 // silent, hard-to-notice change this audit entry exists to catch, so a length change one
 // level down is called out specifically instead of just "protocol changed".
+function normalizeRoleAssignments(roles: any[] | undefined): string[] {
+  if (!roles) return [];
+  return roles
+    .flatMap(role =>
+      (role.assignedTo || []).map((person: any) =>
+        `${String(role.title || '').trim()}|${String(person.email || '').trim().toLowerCase()}`,
+      ),
+    )
+    .filter(Boolean)
+    .sort();
+}
+
 function summarizeFieldChange(key: string, oldVal: any, newVal: any): string {
   if (
     oldVal && newVal &&
