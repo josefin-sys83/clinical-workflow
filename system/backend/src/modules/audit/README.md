@@ -32,10 +32,10 @@ await audit.record({
   entityLabel: user.name,
   actor: req.user,
   metadata: { role: user.system_role },
-});
+}, client);
 ```
 
-For a database mutation that already uses a transaction, pass its `PoolClient`:
+`record()` requires the business transaction's `PoolClient`:
 
 ```ts
 await audit.record(event, client);
@@ -43,6 +43,10 @@ await audit.record(event, client);
 
 This makes the mutation and audit insert commit or roll back together. Never
 catch and ignore an audit error around a state-changing operation.
+
+There is no browser-facing create-audit endpoint and no compatibility
+`AuditService.create()` wrapper. Actor identity must come from verified backend
+authentication context, never from a request-body `actorUserId`.
 
 ## Readability and history
 

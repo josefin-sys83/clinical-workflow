@@ -18,8 +18,6 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentsService } from './documents.service';
 import { JwtAuthGuard, ProjectAccessGuard, Roles, RolesGuard } from '../auth';
 import { FinalizeDocumentDto, CreateAddendumDto, UpdateAddendumDto } from './dto';
-import { AuditService } from '../audit/audit.service';
-import { WorkflowService } from '../workflow/workflow.service';
 import { ADDENDUM_UPLOAD_OPTIONS } from '../../common/upload-security';
 
 @ApiTags('documents')
@@ -27,11 +25,7 @@ import { ADDENDUM_UPLOAD_OPTIONS } from '../../common/upload-security';
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
 @Controller('api/projects/:projectId/documents')
 export class DocumentsController {
-  constructor(
-    private readonly docs: DocumentsService,
-    private readonly audit: AuditService,
-    private readonly workflow: WorkflowService,
-  ) {}
+  constructor(private readonly docs: DocumentsService) {}
 
   @Post(':docType/finalize')
   @Roles('admin', 'approver')
@@ -45,31 +39,13 @@ export class DocumentsController {
     const userId = user?.userId;
     const roles: string[] | undefined = Array.isArray(user?.roles) ? user.roles : undefined;
 
-    const created = await this.docs.finalize({ projectId, docType, userId, userRoles: roles, note: body?.note });
-
-    // Mark the corresponding PDF step finalized. finalize() and transition() write
-    // through separate services/connections, so they can't share one DB transaction —
-    // if the transition fails, compensate by deleting the artifact we just created so
-    // the endpoint is all-or-nothing instead of leaving a permanent orphaned artifact.
-    const stepId = docType === 'protocol' ? 'protocol-pdf' : 'report-pdf';
-    try {
-      await this.workflow.transition(projectId, stepId, {
-        action: 'finalize',
-        reason: body?.note ?? `Finalized ${docType} export (${created.sha256.slice(0, 12)}…)`,
-        actorUserId: userId,
-      } as any);
-    } catch (err) {
-      await this.docs.deleteArtifact({ projectId, docType, artifactId: created.id }).catch(() => {});
-      throw err;
-    }
-
-    await this.audit.record({
+    const created = await this.docs.finalize({
       projectId,
-      stepId,
-      type: 'document.finalized',
-      message: `Finalized ${docType} export`,
-      actorUserId: userId ?? null,
-      metadata: { artifactId: created.id, sha256: created.sha256, fileName: created.fileName },
+      docType,
+      userId,
+      userRoles: roles,
+      note: body?.note,
+      actor: user,
     });
 
     return {
@@ -104,16 +80,7 @@ export class DocumentsController {
   ) {
     const user: any = (req as any).user;
     const userId = user?.userId;
-    const result = await this.docs.verify({ projectId, artifactId, verifierUserId: userId });
-    await this.audit.record({
-      projectId,
-      stepId: 'documents',
-      type: 'document.verified',
-      message: `Verified artifact ${artifactId}`,
-      actorUserId: userId ?? null,
-      metadata: result,
-    });
-    return result;
+    return this.docs.verify({ projectId, artifactId, verifierUserId: userId, actor: user });
   }
 
   @Post('artifacts/:artifactId/sign')
@@ -132,17 +99,8 @@ export class DocumentsController {
       artifactId,
       signerUserId: userId,
       signerRoles: roles,
+      actor: user,
     });
-
-    await this.audit.record({
-      projectId,
-      stepId: 'documents',
-      type: 'document.signed',
-      message: `Signed artifact ${artifactId}`,
-      actorUserId: userId ?? null,
-      metadata: signed,
-    });
-
     return signed;
   }
 
@@ -164,21 +122,7 @@ export class DocumentsController {
   ) {
     const user: any = (req as any).user;
     const userId = user?.userId;
-    const result = await this.docs.verifyChain({ projectId, artifactId, verifierUserId: userId });
-
-    await this.audit.record({
-      projectId,
-      stepId: 'documents',
-      type: 'document.chain_verified',
-      message: `Verified signature chain for artifact ${artifactId}`,
-      actorUserId: userId ?? null,
-      metadata: {
-        artifactMatch: result.artifact.match,
-        signatures: result.signatures.map((s: any) => ({ signatureId: s.signatureId, match: s.match, keyId: s.keyId })),
-      },
-    });
-
-    return result;
+    return this.docs.verifyChain({ projectId, artifactId, verifierUserId: userId, actor: user });
   }
 
 
@@ -214,16 +158,7 @@ export class DocumentsController {
       title: body.title,
       description: body.description,
       changeReason: body.changeReason,
-      actorUserId: userId ?? null,
-    });
-
-    await this.audit.record({
-      projectId,
-      stepId: docType === 'protocol' ? 'protocol-pdf' : 'report-pdf',
-      type: 'addendum.created',
-      message: `Created addendum ${created.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: created.id, letter: created.letter, releaseArtifactId },
+      actor: user,
     });
 
     return created;
@@ -258,15 +193,7 @@ export class DocumentsController {
       title: body.title,
       description: body.description,
       changeReason: body.changeReason,
-    });
-
-    await this.audit.record({
-      projectId,
-      stepId: docType === 'protocol' ? 'protocol-pdf' : 'report-pdf',
-      type: 'addendum.updated',
-      message: `Updated addendum ${updated.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: updated.id, letter: updated.letter },
+      actor: user,
     });
 
     return updated;
@@ -282,18 +209,7 @@ export class DocumentsController {
   ) {
     const user: any = (req as any).user;
     const userId = user?.userId;
-    const res = await this.docs.startAddendumReview({ projectId, docType, addendumId });
-
-    await this.audit.record({
-      projectId,
-      stepId: docType === 'protocol' ? 'protocol-review' : 'report-review',
-      type: 'addendum.review_started',
-      message: `Started review for addendum ${res.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: res.id, letter: res.letter },
-    });
-
-    return res;
+    return this.docs.startAddendumReview({ projectId, docType, addendumId, actor: user });
   }
 
   @Post(':docType/addendums/:addendumId/review/approve')
@@ -312,18 +228,9 @@ export class DocumentsController {
       projectId,
       docType,
       addendumId,
-      actorUserId: userId ?? null,
+      actor: user,
       approve: true,
       comment: body?.comment,
-    });
-
-    await this.audit.record({
-      projectId,
-      stepId: docType === 'protocol' ? 'protocol-review' : 'report-review',
-      type: 'addendum.approved',
-      message: `Approved addendum ${res.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: res.id, letter: res.letter },
     });
 
     return res;
@@ -345,18 +252,9 @@ export class DocumentsController {
       projectId,
       docType,
       addendumId,
-      actorUserId: userId ?? null,
+      actor: user,
       approve: false,
       comment: body?.comment,
-    });
-
-    await this.audit.record({
-      projectId,
-      stepId: docType === 'protocol' ? 'protocol-review' : 'report-review',
-      type: 'addendum.rejected',
-      message: `Rejected addendum ${res.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: res.id, letter: res.letter },
     });
 
     return res;
@@ -380,15 +278,7 @@ export class DocumentsController {
       addendumId,
       signerUserId: userId ?? null,
       signerRoles: roles,
-    });
-
-    await this.audit.record({
-      projectId,
-      stepId: 'documents',
-      type: 'addendum.signed',
-      message: `Signed addendum ${res.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: res.id, letter: res.letter, signedArtifactId: res.signedArtifactId },
+      actor: user,
     });
 
     return res;
@@ -404,18 +294,7 @@ export class DocumentsController {
   ) {
     const user: any = (req as any).user;
     const userId = user?.userId;
-    const res = await this.docs.lockAddendum({ projectId, docType, addendumId });
-
-    await this.audit.record({
-      projectId,
-      stepId: 'documents',
-      type: 'addendum.locked',
-      message: `Locked addendum ${res.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId: res.id, letter: res.letter },
-    });
-
-    return res;
+    return this.docs.lockAddendum({ projectId, docType, addendumId, actor: user });
   }
 
   @Get(':docType/addendums/:addendumId/files')
@@ -452,20 +331,14 @@ export class DocumentsController {
     }
 
     await this.docs.uploadAddendumFile({
+      projectId,
+      docType,
       addendumId,
       filename: file.originalname,
       mimeType: file.mimetype ?? 'application/octet-stream',
       bytes: file.buffer,
       uploaderUserId: userId ?? null,
-    });
-
-    await this.audit.record({
-      projectId,
-      stepId: 'documents',
-      type: 'addendum.file_uploaded',
-      message: `Uploaded file to addendum ${current.letter}`,
-      actorUserId: userId ?? null,
-      metadata: { addendumId, filename: file.originalname },
+      actor: user,
     });
 
     return await this.docs.listAddendumFiles({ addendumId });

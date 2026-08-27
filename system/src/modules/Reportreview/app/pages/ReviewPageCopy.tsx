@@ -12,7 +12,6 @@ import {
   auditTrail,
   projectRoles,
 } from '../data/mockReportData';
-import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { transitionWorkflow } from '@/shared/services/workflowService';
 import { buildWorkflowPath } from '@/shared/workflow/steps';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -68,11 +67,6 @@ export default function ReviewPageCopy() {
           };
           setAuditEntries((prev) => [auditEntry, ...prev]);
 
-          (async () => {
-            if (!projectId) return;
-            await createProjectAuditEvent({ projectId, domain: 'report', stepId: 'report-review', type: 'risk_accepted', summary: auditEntry.action, details: auditEntry.details });
-          })();
-          
           return updatedFinding;
         }
         return finding;
@@ -96,7 +90,6 @@ export default function ReviewPageCopy() {
 
     if (!projectId) return;
     await transitionWorkflow({ projectId, stepId: 'report-review', to: 'approved', note: 'Report approved in review UI' });
-    await createProjectAuditEvent({ projectId, domain: 'report', stepId: 'report-review', type: 'note', summary: auditEntry.action, details: auditEntry.details });
 
     navigate(buildWorkflowPath(projectId, 'report-pdf'));
   };
@@ -104,8 +97,7 @@ export default function ReviewPageCopy() {
   const handleRequestChanges = async () => {
     if (!projectId) return;
     await transitionWorkflow({ projectId, stepId: 'report-review', to: 'blocked', note: 'Changes requested during report review' });
-    await createProjectAuditEvent({ projectId, domain: 'report', stepId: 'report-review', type: 'changes_requested', summary: 'Changes requested', details: 'Reviewer requested changes (blocked) from Report Review UI.' });
-    alert('Changes requested. Logged to audit trail (mock API).');
+    alert('Changes requested.');
   };
 
   // Check if report can be approved

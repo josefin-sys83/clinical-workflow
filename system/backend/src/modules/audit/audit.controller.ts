@@ -1,8 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Query, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { ProjectAccessGuard } from "../auth/project-access.guard";
-import { CreateAuditEventDto } from "./dto";
 import { AuditService } from "./audit.service";
 
 @ApiBearerAuth()
@@ -17,17 +16,6 @@ export class AuditController {
     return this.audit.list(projectId, stepId);
   }
 
-  @Post()
-  create(@Param("projectId") projectId: string, @Body() dto: CreateAuditEventDto, @Req() req: any) {
-    // Identity and tenant ownership come from the verified JWT/project guard, never
-    // from actorUserId supplied by the browser.
-    return this.audit.create(projectId, dto, {
-      userId: req.user.userId,
-      name: req.user.name,
-      roles: req.user.roles,
-      isSuperadmin: req.user.isSuperadmin,
-    });
-  }
 }
 
 @ApiBearerAuth()

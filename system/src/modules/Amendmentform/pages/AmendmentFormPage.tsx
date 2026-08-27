@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Lock, Info, CheckCircle2, ShieldCheck, ChevronDown } from 'lucide-react';
 import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { advanceWorkflowStep } from '@/shared/services/workflowService';
 
 const pageStyle: React.CSSProperties = {
   background: '#fff',
@@ -437,16 +438,11 @@ export function AmendmentFormPage() {
     if (!requestChangesComment.trim() || !projectId) return;
     setRequestChangesSubmitting(true);
     try {
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'changes_requested',
-          message: `Request Changes (Amendment Form): ${requestChangesComment.trim()}`,
-          stepId: 'protocol-pdf',
-          actorUserId: protocolLeadName,
-          metadataJson: JSON.stringify({ comment: requestChangesComment.trim() }),
-        }),
+      await advanceWorkflowStep({
+        projectId,
+        stepId: 'protocol-pdf',
+        to: 'blocked',
+        note: `Amendment form changes requested: ${requestChangesComment.trim()}`,
       });
       navigate(`/projects/${projectId}/workflow/protocol/make`);
     } catch (e) {

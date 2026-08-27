@@ -3,10 +3,9 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
 import { CreateProjectDto, UpdateProjectDto, UpdateSectionContentDto } from './dto';
-import { ProjectsService } from './projects.service';
+import { ProjectsService, type ProjectAuditEvent } from './projects.service';
 import { AiService, PROTOCOL_SECTION_TITLES } from '../ai/ai.service';
 import { GenerationProgressService } from '../ai/generation-progress.service';
-import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -16,7 +15,6 @@ import { RolesGuard } from '../auth/roles.guard';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { SYNOPSIS_UPLOAD_OPTIONS, getSafeDownloadHeaders } from '../../common/upload-security';
-import { getPool } from 'src/db/pg';
 
 // The PDF steps (protocol-pdf/report-pdf) only ever reach the workflow's 'signed' state
 // through advanceWorkflowStep() — nothing in the UI ever calls the document-artifact
@@ -44,7 +42,6 @@ export class ProjectsController {
   constructor(
     private readonly projects: ProjectsService,
     private readonly ai: AiService,
-    private readonly audit: AuditService,
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
     private readonly generationProgress: GenerationProgressService,
@@ -185,16 +182,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     }
   }
 
-  // 3. Update the project row (including markets/standards sync inside the transaction)
-  const result = await this.projects.update(projectId, body, {
-    userId: req.user?.userId,
-    name: req.user?.name,
-    roles: req.user?.roles,
-    isSuperadmin: req.user?.isSuperadmin,
-  });
-
-  // 4. Project members were synchronized atomically by projects.update().
-  // Audit role changes using relational assignments returned by projects.get().
+  // Build readable audit events before the write, then hand them to ProjectsService so
+  // every event is inserted with the same transaction client as the project mutation.
+  const auditEvents: ProjectAuditEvent[] = [];
   if (body.roles) {
     const oldRoles: any[] = existing.roles || [];
     const changes: string[] = [];
@@ -207,44 +197,43 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       }
     }
     if (changes.length > 0) {
-      await this.audit.create(projectId, {
+      auditEvents.push({
         type: 'project.roles.updated',
         message: 'Project roles updated',
         stepId: 'project-setup',
-        actorUserId: req.user?.userId ?? 'unknown',
-        metadataJson: JSON.stringify({ roles: changes.join(' | ') }),
+        entityType: 'project_member',
+        entityId: projectId,
+        entityLabel: 'Project roles',
+        metadata: { roles: changes },
       });
     }
   }
 
-  // 5. Audit project name change (if provided)
-  if (body.name) {
-    await this.audit.create(projectId, {
+  if (body.name !== undefined && body.name !== existing.name) {
+    auditEvents.push({
       type: 'project.setup.completed',
       message: 'Project setup completed: ' + body.name,
       stepId: 'project-setup',
-      actorUserId: req.user?.userId ?? 'unknown',
-      metadataJson: JSON.stringify({ projectName: body.name, description: body.description })
+      entityType: 'project',
+      entityId: projectId,
+      entityLabel: body.name,
+      metadata: { projectName: body.name, description: body.description ?? null },
     });
   }
 
-  // 6. Audit relational setup values separately because they no longer live in JSONB.
   const relationalChanges: Record<string, { before: any; after: any }> = {};
   if (body.risk !== undefined && body.risk !== existing.risk) {
-    relationalChanges.risk = { before: existing.risk, after: result.risk };
+    relationalChanges.risk = { before: existing.risk, after: body.risk };
   }
   if (
     body.deviceCategory !== undefined &&
     body.deviceCategory !== existing.deviceCategory
   ) {
-    relationalChanges.deviceCategory = {
-      before: existing.deviceCategory,
-      after: result.deviceCategory,
-    };
+    relationalChanges.deviceCategory = { before: existing.deviceCategory, after: body.deviceCategory };
   }
   if (body.targetMarkets !== undefined) {
     const beforeMarkets = [...existing.targetMarkets].sort();
-    const afterMarkets = [...result.targetMarkets].sort();
+    const afterMarkets = [...body.targetMarkets].sort();
     if (JSON.stringify(beforeMarkets) !== JSON.stringify(afterMarkets)) {
       relationalChanges.targetMarkets = {
         before: beforeMarkets,
@@ -253,23 +242,26 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     }
   }
   if (Object.keys(relationalChanges).length > 0) {
-    await this.audit.create(projectId, {
+    auditEvents.push({
       type: 'project.setup.relational.updated',
       message: `Project setup fields updated: ${Object.keys(relationalChanges).join(', ')}`,
       stepId: 'project-setup',
-      actorUserId: req.user?.userId ?? 'unknown',
-      metadataJson: JSON.stringify({ changes: relationalChanges }),
+      entityType: 'project',
+      entityId: projectId,
+      metadata: { changes: relationalChanges },
     });
   }
 
-  // 7. General diff-summary audit for every top-level JSON data key
   if (body.data) {
     const changedKeys: string[] = [];
     const summaries: string[] = [];
     const changes: Record<string, { before: any; after: any }> = {};
     for (const key of Object.keys(body.data)) {
       const before = existing?.data?.[key];
-      const after = result?.data?.[key];
+      const supplied = body.data[key];
+      const after = before && supplied && typeof before === 'object' && typeof supplied === 'object' && !Array.isArray(before) && !Array.isArray(supplied)
+        ? { ...before, ...supplied }
+        : supplied;
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         changedKeys.push(key);
         summaries.push(summarizeFieldChange(key, before, after));
@@ -277,15 +269,24 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       }
     }
     if (changedKeys.length > 0) {
-      await this.audit.create(projectId, {
+      auditEvents.push({
         type: 'project.data.updated',
         message: `Project data updated: ${summaries.join('; ')}`,
         stepId: 'project-setup',
-        actorUserId: req.user?.userId ?? 'unknown',
-        metadataJson: JSON.stringify({ changedKeys, changes }),
+        entityType: 'project',
+        entityId: projectId,
+        metadata: { changedKeys, changes },
       });
     }
   }
+
+  const result = await this.projects.update(projectId, body, {
+    userId: req.user?.userId,
+    companyId: req.user?.companyId,
+    name: req.user?.name,
+    roles: req.user?.roles,
+    isSuperadmin: req.user?.isSuperadmin,
+  }, auditEvents);
 
   return result;
 }
@@ -368,10 +369,35 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // happen inside one row-locked transaction — otherwise two signatures submitted close
     // together could each be computed against the same stale snapshot and one would
     // silently overwrite the other (pentest F8).
-    const { signatures: allSignatures } = await this.projects.updateSignaturesAtomic(projectId, (existing) => {
-      const filtered = existing.filter((s: any) => s.role !== body.role);
-      return [...filtered, sigRecord];
-    }, req.user);
+    const documentKind = body.role.startsWith('report-') ? 'Report' : 'Protocol';
+    const signatureStepId = body.role.startsWith('report-') ? 'report-pdf' : 'protocol-pdf';
+    const { signatures: allSignatures } = await this.projects.updateSignaturesAtomic(
+      projectId,
+      (existing) => {
+        const filtered = existing.filter((s: any) => s.role !== body.role);
+        return [...filtered, sigRecord];
+      },
+      req.user,
+      {
+        type: `${documentKind.toLowerCase()}.signed`,
+        message: `${documentKind} electronically signed by ${identity.name} (${body.roleTitle})`,
+        stepId: signatureStepId,
+        entityType: 'signature',
+        entityId: id,
+        entityLabel: `${documentKind} signature by ${identity.name}`,
+        metadata: {
+          signatureId: id,
+          signerName: identity.name,
+          signerEmail: identity.email,
+          signerUserId: identity.id,
+          role: body.role,
+          roleTitle: body.roleTitle,
+          documentHash: body.documentHash,
+          signedAt,
+          ipAddress,
+        },
+      },
+    );
 
     // Once every required slot for this document is signed, finalize it — this is the
     // only place that ever does, see the SIGNATURE_STEP_ROLES comment above. Only fires
@@ -389,30 +415,10 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
           await this.workflow.transition(projectId, stepConfig.stepId, {
             action: 'finalize',
             reason: `Finalized after both required signatures collected (${stepConfig.requiredRoles.join(', ')})`,
-            actorUserId: identity.id,
-          } as any);
+          }, req.user);
         }
       }
     }
-
-    // Regulatory audit record — full metadata for tamper-evident trail
-    await this.audit.create(projectId, {
-      type: 'protocol.signed',
-      message: `Protocol electronically signed by ${identity.name} (${body.roleTitle})`,
-      stepId: 'protocol-pdf',
-      actorUserId: identity.id,
-      metadataJson: JSON.stringify({
-        signatureId: id,
-        signerName: identity.name,
-        signerEmail: identity.email,
-        signerUserId: identity.id,
-        role: body.role,
-        roleTitle: body.roleTitle,
-        documentHash: body.documentHash,
-        signedAt,
-        ipAddress,
-      }),
-    });
 
     return sigRecord;
   }
@@ -422,6 +428,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     @Param('projectId') projectId: string,
     @Param('sectionId') sectionId: string,
     @Body() body: UpdateSectionContentDto,
+    @Req() req: any,
   ) {
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol;
@@ -442,10 +449,6 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const sections = protocol.sections.map((s: any) =>
       s.id === sectionId ? { ...s, ...approvalOverrides, content: sanitizedContent, updatedAt: now } : s
     );
-    await this.projects.update(projectId, {
-      data: { ...project.data, protocol: { ...protocol, sections } }
-    });
-
     // Detect structural additions/removals for summary annotation
     const prevContent = body.previousContent || '';
     const newContent = sanitizedContent;
@@ -458,14 +461,28 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     if (hasImage(prevContent) && !hasImage(newContent)) structuralNotes.push('Image removed');
     const messageSuffix = structuralNotes.length > 0 ? ` (${structuralNotes.join(', ')})` : '';
 
-    // Log audit event
-    await this.audit.create(projectId, {
-      type: 'section.content.updated',
-      message: `Section "${section?.title || sectionId}" content updated${messageSuffix}`,
-      stepId: 'protocol-make',
-      actorUserId: body.userId || 'unknown',
-      metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, updatedAt: now, editedBy: body.userName || 'Unknown user', reason: body.reason || '', previousContent: prevContent, newContent })
-    });
+    await this.projects.update(
+      projectId,
+      { data: { ...project.data, protocol: { ...protocol, sections } } },
+      req.user,
+      [{
+        type: 'section.content.updated',
+        message: `Section "${section?.title || sectionId}" content updated${messageSuffix}`,
+        stepId: 'protocol-make',
+        entityType: 'protocol_section',
+        entityId: sectionId,
+        entityLabel: section?.title || sectionId,
+        metadata: {
+          sectionId,
+          sectionTitle: section?.title,
+          updatedAt: now,
+          editedBy: req.user?.name ?? 'Unknown user',
+          reason: body.reason || '',
+          previousContent: prevContent,
+          newContent,
+        },
+      }],
+    );
 
     return { ok: true, updatedAt: now };
   }
@@ -592,12 +609,14 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       // server-side only. The client always gets the same generic, predefined message.
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[generateProtocol] failed for project ${projectId}:`, err);
-      await this.audit.create(projectId, {
+      await this.projects.recordProjectEvent(projectId, {
         type: 'protocol.generation_failed',
         message: `Protocol generation failed: ${message}`,
         stepId: 'protocol-make',
-        actorUserId: 'system',
-        metadataJson: JSON.stringify({ error: message, failedAt: new Date().toISOString() })
+        entityType: 'protocol',
+        entityId: projectId,
+        entityLabel: 'Protocol',
+        metadata: { error: message, failedAt: new Date().toISOString() },
       });
       throw new InternalServerErrorException('Protocol generation failed. Please try again or contact support if the problem persists.');
     } finally {
@@ -630,12 +649,14 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     }
 
     // Log audit event
-    await this.audit.create(projectId, {
+    await this.projects.recordProjectEvent(projectId, {
       type: 'protocol.generated',
       message: 'Protocol generated by AI',
       stepId: 'protocol-make',
-      actorUserId: 'system',
-      metadataJson: JSON.stringify({ sections: protocol.sections.length, generatedAt: new Date().toISOString() })
+      entityType: 'protocol',
+      entityId: projectId,
+      entityLabel: 'Protocol',
+      metadata: { sections: protocol.sections.length, generatedAt: new Date().toISOString() },
     });
 
     return protocol;
@@ -771,19 +792,28 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
       amendments.push(newAmendment);
       return { ...protocol, amendments };
-    }, req.user);
-
-    await this.audit.create(projectId, {
+    }, req.user, () => ({
       type: 'amendment.created',
       message: `Amendment ${newAmendment.number}: ${body.title}`,
       stepId: 'protocol-make',
-      actorUserId: req.user?.userId ?? body.createdBy,
-      metadataJson: JSON.stringify({ amendmentId: newAmendment.id, reason: body.reason, affectedProtocolSections: body.affectedProtocolSections })
-    });
+      entityType: 'amendment',
+      entityId: newAmendment.id,
+      entityLabel: body.title,
+      metadata: {
+        amendmentId: newAmendment.id,
+        reason: body.reason,
+        affectedProtocolSections: body.affectedProtocolSections,
+      },
+    }));
 
     // Block report-make while the amendment is pending approval
     try {
-      await this.workflow.transition(projectId, 'report-make', { action: 'request_changes', reason: `Amendment ${newAmendment.number} pending approval` });
+      await this.workflow.transition(
+        projectId,
+        'report-make',
+        { action: 'request_changes', reason: `Amendment ${newAmendment.number} pending approval` },
+        req.user,
+      );
     } catch (e: any) {
       console.warn('[amendment] Could not block report-make:', e?.message);
     }
@@ -798,109 +828,76 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     @Body() body: {
       action: 'approve-protocol-lead' | 'approve-vp' | 'reject' | 'finalize';
       by?: string;
-    }
+    },
+    @Req() req: any,
   ) {
-    const project = await this.projects.get(projectId);
-    const protocol = project?.data?.protocol || {};
-    const amendments: any[] = protocol.amendments || [];
+    let updatedAmendment: any;
+    let shouldUnblock = false;
 
-    const amendment = amendments.find((a: any) => a.id === amendmentId);
-    if (!amendment) return { error: 'Amendment not found' };
+    await this.projects.updateProtocolAtomic(projectId, (protocol) => {
+      const amendments: any[] = Array.isArray(protocol.amendments)
+        ? protocol.amendments.map((item: any) => ({ ...item }))
+        : [];
+      const amendment = amendments.find((item: any) => item.id === amendmentId);
+      if (!amendment) throw new BadRequestException('Amendment not found');
 
-    if (!amendment.approvals) amendment.approvals = {};
+      amendment.approvals = { ...(amendment.approvals ?? {}) };
+      const actedAt = new Date().toISOString();
+      const actorName = req.user?.name ?? 'Unknown user';
 
-    if (body.action === 'approve-protocol-lead') {
-      amendment.approvals.protocolLead = { approved: true, by: body.by, at: new Date().toISOString() };
-    } else if (body.action === 'approve-vp') {
-      amendment.approvals.clinicalAffairsVP = { approved: true, by: body.by, at: new Date().toISOString() };
-    } else if (body.action === 'reject') {
-      amendment.status = 'rejected';
-    } else if (body.action === 'finalize') {
-      amendment.status = 'finalized';
-      await this.audit.create(projectId, {
-        type: 'amendment.finalized',
-        message: `Amendment ${amendment.number}: ${amendment.title} finalized`,
-        stepId: 'protocol-make',
-        actorUserId: body.by || 'system',
-        metadataJson: JSON.stringify({ amendmentId: amendment.id }),
-      });
-      await this.projects.update(projectId, {
-        data: { ...project.data, protocol: { ...protocol, amendments, sections: protocol.sections } }
-      });
-      return amendment;
-    }
-
-    // Check if fully approved
-    const protocolLeadApproved = !!amendment.approvals.protocolLead?.approved;
-    const vpApproved = !!amendment.approvals.clinicalAffairsVP?.approved;
-
-    if ((protocolLeadApproved || vpApproved) && amendment.status !== 'rejected') {
-      amendment.status = 'approved';
-
-      // Mark affected protocol sections as amended
-      const sections = protocol.sections || [];
-      sections.forEach((s: any) => {
-        if (amendment.affectedProtocolSections.includes(s.id)) {
-          s.amended = true;
-          s.amendmentId = amendmentId;
-          s.amendmentNumber = amendment.number;
-          s.approvalStatus = 'needs-review';
-        }
-      });
-
-      // Unblock report-make only if no other amendment is still pending
-      const stillPendingAmendments = amendments.filter((a: any) =>
-        a.id !== amendmentId && a.status === 'draft'
-      );
-      const shouldUnblock = stillPendingAmendments.length === 0;
-      if (shouldUnblock) {
-        try {
-          await this.workflow.transition(projectId, 'report-make', { action: 'approve' });
-        } catch (e: any) {
-          console.warn('[amendment] Could not unblock report-make:', e?.message);
-        }
+      if (body.action === 'approve-protocol-lead') {
+        amendment.approvals.protocolLead = { approved: true, by: actorName, at: actedAt };
+      } else if (body.action === 'approve-vp') {
+        amendment.approvals.clinicalAffairsVP = { approved: true, by: actorName, at: actedAt };
+      } else if (body.action === 'reject') {
+        amendment.status = 'rejected';
+      } else {
+        amendment.status = 'finalized';
       }
 
-      await this.audit.create(projectId, {
-        type: 'amendment.approved',
-        message: `Amendment ${amendment.number}: ${amendment.title} fully approved`,
-        stepId: 'protocol-make',
-        actorUserId: body.by,
-        metadataJson: JSON.stringify({ amendmentId: amendment.id })
-      });
-    }
-
-    if (body.action === 'reject') {
-      // Unblock report-make on rejection too, only if no other amendment is still pending
-      const stillPendingAmendments = amendments.filter((a: any) =>
-        a.id !== amendmentId && a.status === 'draft'
-      );
-      const shouldUnblock = stillPendingAmendments.length === 0;
-      if (shouldUnblock) {
-        try {
-          await this.workflow.transition(projectId, 'report-make', { action: 'approve' });
-        } catch (e: any) {
-          console.warn('[amendment] Could not unblock report-make:', e?.message);
+      if (
+        body.action !== 'reject' &&
+        body.action !== 'finalize' &&
+        (amendment.approvals.protocolLead?.approved || amendment.approvals.clinicalAffairsVP?.approved)
+      ) {
+        amendment.status = 'approved';
+        const sections = Array.isArray(protocol.sections)
+          ? protocol.sections.map((section: any) => ({ ...section }))
+          : [];
+        for (const section of sections) {
+          if (amendment.affectedProtocolSections?.includes(section.id)) {
+            section.amended = true;
+            section.amendmentId = amendmentId;
+            section.amendmentNumber = amendment.number;
+            section.approvalStatus = 'needs-review';
+          }
         }
+        protocol = { ...protocol, sections };
       }
 
-      await this.audit.create(projectId, {
-        type: 'amendment.rejected',
-        message: `Amendment ${amendment.number}: ${amendment.title} rejected`,
-        stepId: 'protocol-make',
-        actorUserId: body.by,
-        metadataJson: JSON.stringify({ amendmentId: amendment.id })
-      });
+      shouldUnblock = (amendment.status === 'approved' || amendment.status === 'rejected') &&
+        !amendments.some((item: any) => item.id !== amendmentId && item.status === 'draft');
+      updatedAmendment = amendment;
+      return { ...protocol, amendments };
+    }, req.user, () => ({
+      type: `amendment.${updatedAmendment.status}`,
+      message: `Amendment ${updatedAmendment.number}: ${updatedAmendment.title} ${updatedAmendment.status}`,
+      stepId: 'protocol-make',
+      entityType: 'amendment',
+      entityId: amendmentId,
+      entityLabel: updatedAmendment.title,
+      metadata: { amendmentId, action: body.action, status: updatedAmendment.status },
+    }));
+
+    if (shouldUnblock) {
+      try {
+        await this.workflow.transition(projectId, 'report-make', { action: 'approve' }, req.user);
+      } catch (e: any) {
+        console.warn('[amendment] Could not unblock report-make:', e?.message);
+      }
     }
 
-    await this.projects.update(projectId, {
-      data: {
-        ...project.data,
-        protocol: { ...protocol, amendments, sections: protocol.sections }
-      }
-    });
-
-    return amendment;
+    return updatedAmendment;
   }
 
   @Get('/:projectId/amendments')
@@ -1048,26 +1045,31 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       newSections[s.id] = { ...(existingSections[s.id] || {}), content: generatedContents[i].trim() };
     });
 
-    await this.projects.update(projectId, {
-      data: {
-        ...project.data,
-        report: { ...existingReport, sections: newSections, sectionDefs },
+    await this.projects.update(
+      projectId,
+      {
+        data: {
+          ...project.data,
+          report: { ...existingReport, sections: newSections, sectionDefs },
+        },
       },
-    });
-
-    await this.audit.create(projectId, {
-      type: 'report.ai.generated',
-      message: 'Clinical Investigation Report generated by AI',
-      stepId: 'report-make',
-      actorUserId: 'system',
-      metadataJson: JSON.stringify({
-        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
-        sectionsGenerated: sectionDefs.length,
-        targetMarkets,
-        deviceName,
-        generatedAt: new Date().toISOString(),
-      }),
-    });
+      { name: 'System' },
+      [{
+        type: 'report.ai.generated',
+        message: 'Clinical Investigation Report generated by AI',
+        stepId: 'report-make',
+        entityType: 'report',
+        entityId: projectId,
+        entityLabel: 'Clinical Investigation Report',
+        metadata: {
+          model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
+          sectionsGenerated: sectionDefs.length,
+          targetMarkets,
+          deviceName,
+          generatedAt: new Date().toISOString(),
+        },
+      }],
+    );
 
     return sectionDefs.map((s, i) => ({
       id: s.id,
@@ -1152,31 +1154,36 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // both stored and returned directly in the HTTP response.
     const trimmedContent = sanitizeSectionHtml(content.trim());
 
-    await this.projects.update(projectId, {
-      data: {
-        ...project.data,
-        report: {
-          ...existingReport,
-          sections: {
-            ...existingSections,
-            [body.sectionId]: { ...(existingSections[body.sectionId] || {}), content: trimmedContent },
+    await this.projects.update(
+      projectId,
+      {
+        data: {
+          ...project.data,
+          report: {
+            ...existingReport,
+            sections: {
+              ...existingSections,
+              [body.sectionId]: { ...(existingSections[body.sectionId] || {}), content: trimmedContent },
+            },
           },
         },
       },
-    });
-
-    await this.audit.create(projectId, {
-      type: 'report.section.ai.generated',
-      message: `Report section "${body.sectionTitle}" generated by AI`,
-      stepId: 'report-make',
-      actorUserId: 'system',
-      metadataJson: JSON.stringify({
-        sectionId: body.sectionId,
-        sectionTitle: body.sectionTitle,
-        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
-        generatedAt: new Date().toISOString(),
-      }),
-    });
+      { name: 'System' },
+      [{
+        type: 'report.section.ai.generated',
+        message: `Report section "${body.sectionTitle}" generated by AI`,
+        stepId: 'report-make',
+        entityType: 'report_section',
+        entityId: body.sectionId,
+        entityLabel: body.sectionTitle,
+        metadata: {
+          sectionId: body.sectionId,
+          sectionTitle: body.sectionTitle,
+          model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
+          generatedAt: new Date().toISOString(),
+        },
+      }],
+    );
 
     return { sectionId: body.sectionId, content: trimmedContent };
   }
@@ -1350,70 +1357,7 @@ async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
     throw new ForbiddenException('This endpoint is only available in development or for admins');
   }
 
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
-
-    // Check current state
-    const { rows } = await client.query(
-      `SELECT state FROM workflow_step_state WHERE project_id = $1 AND step_id = 'synopsis' FOR UPDATE`,
-      [projectId]
-    );
-    if (rows.length === 0) {
-      // If no row exists, we need to insert it with state 'approved'
-      await client.query(
-        `INSERT INTO workflow_step_state (project_id, step_id, state, updated_at)
-         VALUES ($1, 'synopsis', 'approved', NOW())`,
-        [projectId]
-      );
-      await this.audit.record({
-        projectId,
-        stepId: 'synopsis',
-        type: 'workflow.bypass',
-        message: 'Created and approved the Synopsis step using the admin bypass',
-        actor: req.user,
-        entityType: 'workflow_step',
-        entityId: 'synopsis',
-        entityLabel: 'Synopsis',
-        metadata: { previousState: null, nextState: 'approved' },
-      }, client);
-      await client.query('COMMIT');
-      return { ok: true, message: 'Synopsis step inserted and set to approved' };
-    }
-
-    const currentState = rows[0].state;
-    if (['approved', 'signed', 'final'].includes(currentState)) {
-      await client.query('ROLLBACK');
-      return { ok: true, message: 'Synopsis already advanced' };
-    }
-
-    // Force update to 'approved'
-    await client.query(
-      `UPDATE workflow_step_state SET state = 'approved', updated_at = NOW()
-       WHERE project_id = $1 AND step_id = 'synopsis'`,
-      [projectId]
-    );
-
-    await this.audit.record({
-      projectId,
-      stepId: 'synopsis',
-      type: 'workflow.bypass',
-      message: 'Synopsis step forced to approved via admin bypass',
-      actor: req.user,
-      entityType: 'workflow_step',
-      entityId: 'synopsis',
-      entityLabel: 'Synopsis',
-      metadata: { previousState: currentState, nextState: 'approved' },
-    }, client);
-
-    await client.query('COMMIT');
-    return { ok: true, message: 'Synopsis step forced to approved' };
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+  return this.workflow.forceSynopsis(projectId, req.user);
 }
 }
 

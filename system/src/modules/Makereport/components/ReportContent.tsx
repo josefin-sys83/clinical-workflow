@@ -459,19 +459,6 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         }),
       });
 
-      const sec = sections.find(s => s.id === sectionId);
-      await fetch(apiBase + '/api/projects/' + projectId + '/audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'report.section.content.updated',
-          message: `Section '${sec?.title ?? sectionId}' content updated`,
-          stepId: 'report-make',
-          actorUserId: currentUser.id,
-          metadataJson: JSON.stringify({ previousContent, newContent, reason }),
-        }),
-      });
-
       onSectionUpdate(sectionId, newContent);
       // Re-run analysis on the updated content
       const sec2 = sections.find(s => s.id === sectionId);
@@ -870,7 +857,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                   {/* Guidance Panel - What this section must include */}
                   <SectionGuidancePanel
                     guidance={section.guidance}
-                    onViewDocument={(docName) => {
+                    onViewDocument={(docName:any) => {
                       console.log('View document:', docName);
                     }}
                   />

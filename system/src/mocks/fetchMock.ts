@@ -225,44 +225,6 @@ export function enableMockApi() {
         return jsonResponse(auditByProject[projectId] ?? []);
       }
 
-      // POST /api/projects/:id/audit
-      if (method === 'POST' && path.endsWith('/audit')) {
-        if (!ensureProjectExists(projectId)) return notFound('Project not found');
-        ensureWorkflow(projectId);
-
-        const bodyText = init?.body ? String(init.body) : '';
-        let body:
-          | {
-              domain?: any;
-              stepId?: any;
-              type?: any;
-              summary?: string;
-              details?: string;
-            }
-          | null = null;
-        try {
-          body = bodyText ? JSON.parse(bodyText) : null;
-        } catch {
-          body = null;
-        }
-
-        if (!body?.domain || !body?.stepId || !body?.type || !body?.summary) {
-          return jsonResponse({ message: 'domain, stepId, type and summary are required' }, { status: 400 });
-        }
-
-        const auditEvent = makeAuditEvent({
-          projectId,
-          domain: body.domain,
-          stepId: body.stepId,
-          type: body.type,
-          summary: body.summary,
-          details: body.details,
-        });
-
-        auditByProject[projectId] = [auditEvent, ...(auditByProject[projectId] ?? [])];
-        return jsonResponse(auditEvent, { status: 201 });
-      }
-
       // Fall back: return project.
       if (method === 'GET') {
         const project = projects.find((p) => p.id === projectId) ?? completedProjects.find((p) => p.id === projectId);

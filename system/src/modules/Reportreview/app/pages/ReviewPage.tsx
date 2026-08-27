@@ -6,7 +6,6 @@ import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
 import { AuditTrailModal } from '../components/AuditTrailModal';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
-import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
@@ -166,14 +165,12 @@ export default function ReviewPage() {
     if (!projectId) return;
     setApproving(true);
     try {
-      await createProjectAuditEvent({
+      await advanceWorkflowStep({
         projectId,
-        domain: 'report',
         stepId: 'report-review',
-        type: 'lifecycle_transition',
-        summary: 'Report approved for PDF finalization',
+        to: 'approved',
+        note: 'Report approved for PDF finalization',
       });
-      await advanceWorkflowStep({ projectId, stepId: 'report-review', to: 'approved' });
       navigate(`/projects/${projectId}/workflow/report/pdf`);
     } catch (e) {
       if (e instanceof WorkflowStepBlockedError) {
@@ -195,17 +192,15 @@ export default function ReviewPage() {
     if (!requestChangesComment.trim() || !projectId) return;
     setRequestChangesSubmitting(true);
     try {
-      await createProjectAuditEvent({
-        projectId,
-        domain: 'report',
-        stepId: 'report-review',
-        type: 'changes_requested',
-        summary: `Request Changes: ${requestChangesComment.trim()}`,
-      });
       // 'draft' isn't a valid transition target (stateNameToAction() has no mapping for
       // it) — 'blocked' is the correct "sent back for changes" state, same as the
       // protocol-review equivalent in ReviewPageCopy.tsx.
-      await advanceWorkflowStep({ projectId, stepId: 'report-review', to: 'blocked' });
+      await advanceWorkflowStep({
+        projectId,
+        stepId: 'report-review',
+        to: 'blocked',
+        note: requestChangesComment.trim(),
+      });
       navigate(`/projects/${projectId}/workflow/report/make`);
     } catch (e) {
       if (e instanceof WorkflowStepBlockedError) {

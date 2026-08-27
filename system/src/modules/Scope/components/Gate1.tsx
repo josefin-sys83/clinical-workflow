@@ -3,7 +3,6 @@ import { useState, useEffect, useMemo } from "react";
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
-import { postAudit } from '@/shared/api/audit';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
@@ -453,13 +452,6 @@ Return ONLY a JSON array, no markdown:
       const merged = reconcileMandatoryStandards(aiRequirements, projectStandards);
       setRequirements(merged);
 
-      if (aiRequirements.length > 0) {
-        await postAudit(projectId!, 'scope.ai.requirements.generated', `AI generated ${aiRequirements.length} suggested requirements for ${deviceCategory} / ${effectiveIntendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: effectiveIntendedUse, requirementCount: aiRequirements.length, targetMarkets });
-      }
-      const mandatory = merged.filter(r => r.source === 'mandatory');
-      if (mandatory.length > 0) {
-        await postAudit(projectId!, 'scope.requirements.mandatory_loaded', `Mandatory project standards loaded: ${mandatory.map(item => item.title).join(', ')}`, 'scope', 'unknown', { titles: mandatory.map(item => item.title) });
-      }
     } catch (e) {
       console.error('Failed to generate requirements', e);
     } finally {
@@ -470,7 +462,6 @@ Return ONLY a JSON array, no markdown:
   const handleConfirmScope = async () => {
     setScopeConfirmed(true);
     setRequirements([]);
-    await postAudit(projectId!, 'scope.confirmed', `Scope confirmed — Device: ${deviceCategory}, Intended use: ${intendedUse === 'other-custom' ? customIntendedUse : intendedUse}`, 'scope', 'unknown', { deviceCategory, intendedUse: intendedUse === 'other-custom' ? customIntendedUse : intendedUse });
     await generateRequirements();
   };
 
@@ -695,19 +686,14 @@ Return ONLY a JSON array, no markdown:
       source: "library"
     };
     setRequirements([...requirements, newRequirement]);
-    postAudit(projectId!, 'scope.requirement.added_from_library', `Requirement added from library: ${libraryReq.title}`, 'scope', 'unknown', { requirementId: libraryReq.id, requirementTitle: libraryReq.title, category: libraryReq.category });
   };
 
   const handleAcceptRequirement = (requirementId: string) => {
-    const req = requirements.find(r => r.id === requirementId);
     setRequirements(requirements.map(r => r.id === requirementId ? { ...r, status: "accepted" as const } : r));
-    if (req) postAudit(projectId!, 'scope.requirement.accepted', `Requirement accepted: ${req.title}`, 'scope', 'unknown', { requirementId, requirementTitle: req.title });
   };
 
   const handleRevertRequirement = (requirementId: string) => {
-    const req = requirements.find(r => r.id === requirementId);
     setRequirements(requirements.map(r => r.id === requirementId ? { ...r, status: "suggested" as const } : r));
-    if (req) postAudit(projectId!, 'scope.requirement.reverted', `Requirement reverted to suggested: ${req.title}`, 'scope', 'unknown', { requirementId, requirementTitle: req.title });
   };
 
   const handleMarkNotApplicable = (requirementId: string) => {
@@ -720,13 +706,11 @@ Return ONLY a JSON array, no markdown:
 
   const handleSubmitJustification = () => {
     if (justificationDialog.requirementId) {
-      const req = requirements.find(r => r.id === justificationDialog.requirementId);
       setRequirements(requirements.map(r =>
         r.id === justificationDialog.requirementId
           ? { ...r, status: "not-applicable" as const, justification: justificationDialog.justification }
           : r
       ));
-      if (req) postAudit(projectId!, 'scope.requirement.not_applicable', `Requirement marked not applicable: ${req.title}`, 'scope', 'unknown', { requirementId: justificationDialog.requirementId, requirementTitle: req.title, justification: justificationDialog.justification });
     }
     setJustificationDialog({ open: false, requirementId: null, justification: "" });
   };
@@ -747,7 +731,6 @@ Return ONLY a JSON array, no markdown:
         source: "user-defined"
       };
       setRequirements([...requirements, newRequirement]);
-      postAudit(projectId!, 'scope.requirement.custom_added', `Custom requirement added: ${title}`, 'scope', 'unknown', { requirementTitle: title, description: customRequirementDialog.description });
       setCustomRequirementDialog({ open: false, title: "", description: "", document: null });
     }
   };
@@ -760,19 +743,6 @@ Return ONLY a JSON array, no markdown:
     if (!requirement || requirement.source === "mandatory") return;
 
     setRequirements(current => current.filter(item => item.id !== requirementId));
-    void postAudit(
-      projectId!,
-      'scope.requirement.removed',
-      `Requirement removed: ${requirement.title}`,
-      'scope',
-      'unknown',
-      {
-        requirementId: requirement.id,
-        requirementTitle: requirement.title,
-        requirementSource: requirement.source,
-        previousStatus: requirement.status,
-      },
-    );
   };
 
   const handleAssignRole = (roleId: string, personName: string, personEmail: string) => {

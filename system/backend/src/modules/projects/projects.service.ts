@@ -9,7 +9,9 @@ import { CreateProjectDto } from "./dto";
 import { AdminService } from "../admin/admin.service";
 import { sanitizeIncomingProjectData } from "../../common/sanitize-section-html";
 import { AuditService } from "../audit/audit.service";
-import type { AuditActor } from "../audit/audit.service";
+import type { AuditActor, RecordAuditEvent } from "../audit/audit.service";
+
+export type ProjectAuditEvent = Omit<RecordAuditEvent, "projectId" | "actor">;
 
 export type RiskClass = "I" | "IIa" | "IIb" | "III";
 
@@ -393,6 +395,7 @@ export class ProjectsService {
       data?: any;
     },
     actor?: AuditActor,
+    auditEvents?: ProjectAuditEvent[],
   ): Promise<Project> {
     const now = new Date().toISOString();
     const sanitizedData = patch.data
@@ -418,15 +421,14 @@ export class ProjectsService {
           [id, patch.name ?? null, patch.description ?? null, now],
         );
         if (!result.rows[0]) throw new NotFoundException("Project not found");
-        await this.audit.record({
-          projectId: id,
-          type: "project.updated",
-          message: "Updated project details",
-          entityType: "project",
-          entityId: id,
-          actor: actor ?? { userId: "system", name: "System" },
-          metadata: { changedFields: Object.keys(patch) },
-        }, client);
+        await this.recordProjectMutation(
+          client,
+          id,
+          actor,
+          auditEvents,
+          "Updated project details",
+          Object.keys(patch),
+        );
         await client.query("COMMIT");
       } catch (err) {
         await client.query("ROLLBACK").catch(() => {});
@@ -470,6 +472,11 @@ export class ProjectsService {
           }
         }
       }
+
+      const requirementAuditEvents = this.deriveRequirementAuditEvents(
+        existingData,
+        mergedData,
+      );
 
       const risk = patch.risk !== undefined ? patch.risk : rows[0].risk;
       const deviceCategory =
@@ -528,18 +535,155 @@ export class ProjectsService {
         await this.syncProjectMembers(id, patch.roles, client);
       }
 
-      await this.audit.record({
-        projectId: id,
-        type: "project.updated",
-        message: "Updated project data",
-        entityType: "project",
-        entityId: id,
-        actor: actor ?? { userId: "system", name: "System" },
-        metadata: { changedFields: Object.keys(patch) },
-      }, client);
+      await this.recordProjectMutation(
+        client,
+        id,
+        actor,
+        [...(auditEvents ?? []), ...requirementAuditEvents],
+        "Updated project data",
+        Object.keys(patch),
+      );
 
       await client.query("COMMIT");
       return this.get(id);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  private deriveRequirementAuditEvents(beforeData: any, afterData: any): ProjectAuditEvent[] {
+    const before = Array.isArray(beforeData?.scope?.requirements)
+      ? beforeData.scope.requirements
+      : [];
+    const after = Array.isArray(afterData?.scope?.requirements)
+      ? afterData.scope.requirements
+      : [];
+    const beforeById = new Map<string, any>(
+      before.map((requirement: any) => [String(requirement.id), requirement]),
+    );
+    const afterById = new Map<string, any>(
+      after.map((requirement: any) => [String(requirement.id), requirement]),
+    );
+    const events: ProjectAuditEvent[] = [];
+
+    for (const requirement of before) {
+      const requirementId = String(requirement.id);
+      if (afterById.has(requirementId)) continue;
+      if (requirement.source === "mandatory") {
+        throw new BadRequestException(
+          `Mandatory requirement cannot be removed: ${requirement.title ?? requirementId}`,
+        );
+      }
+      events.push({
+        stepId: "scope",
+        type: "scope.requirement.removed",
+        message: `Removed requirement: ${requirement.title ?? requirementId}`,
+        entityType: "requirement",
+        entityId: requirementId,
+        entityLabel: requirement.title ?? requirementId,
+        metadata: {
+          requirementId,
+          requirementTitle: requirement.title ?? null,
+          requirementSource: requirement.source ?? null,
+          previousStatus: requirement.status ?? null,
+        },
+      });
+    }
+
+    for (const requirement of after) {
+      const requirementId = String(requirement.id);
+      const previous = beforeById.get(requirementId);
+      if (!previous) {
+        events.push({
+          stepId: "scope",
+          type: requirement.source === "user-defined"
+            ? "scope.requirement.custom_added"
+            : "scope.requirement.added",
+          message: `Added requirement: ${requirement.title ?? requirementId}`,
+          entityType: "requirement",
+          entityId: requirementId,
+          entityLabel: requirement.title ?? requirementId,
+          metadata: {
+            requirementId,
+            requirementTitle: requirement.title ?? null,
+            requirementSource: requirement.source ?? null,
+            status: requirement.status ?? null,
+          },
+        });
+        continue;
+      }
+
+      if (previous.status !== requirement.status) {
+        const statusLabel = requirement.status === "not-applicable"
+          ? "marked not applicable"
+          : requirement.status === "accepted"
+            ? "accepted"
+            : `changed to ${requirement.status}`;
+        events.push({
+          stepId: "scope",
+          type: `scope.requirement.${String(requirement.status).replace(/-/g, "_")}`,
+          message: `Requirement ${statusLabel}: ${requirement.title ?? requirementId}`,
+          entityType: "requirement",
+          entityId: requirementId,
+          entityLabel: requirement.title ?? requirementId,
+          metadata: {
+            requirementId,
+            requirementTitle: requirement.title ?? null,
+            beforeStatus: previous.status ?? null,
+            afterStatus: requirement.status ?? null,
+            justification: requirement.justification ?? null,
+          },
+        });
+      }
+    }
+
+    return events;
+  }
+
+  private async recordProjectMutation(
+    client: PoolClient,
+    projectId: string,
+    actor: AuditActor | undefined,
+    auditEvents: ProjectAuditEvent[] | undefined,
+    defaultMessage: string,
+    changedFields: string[],
+  ): Promise<void> {
+    const events = auditEvents?.length
+      ? auditEvents
+      : [{
+          type: "project.updated",
+          message: defaultMessage,
+          entityType: "project",
+          entityId: projectId,
+          metadata: { changedFields },
+        }];
+
+    for (const event of events) {
+      await this.audit.record({
+        ...event,
+        projectId,
+        actor: actor ?? { name: "System" },
+      }, client);
+    }
+  }
+
+  async recordProjectEvent(
+    projectId: string,
+    event: ProjectAuditEvent,
+    actor?: AuditActor,
+  ): Promise<void> {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await this.audit.record({
+        ...event,
+        projectId,
+        actor: actor ?? { name: "System" },
+      }, client);
+      await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
@@ -615,12 +759,12 @@ export class ProjectsService {
   // enforcement point, since the JSON blob itself can still hold arbitrary free text.
   // Reconciles the full set every call (insert missing, delete stale) since the caller
   // always submits the complete current roles array, not a diff.
-  async syncProjectMembers(
+  private async syncProjectMembers(
     projectId: string,
     roles: Array<{ title: string; assignedTo?: Array<{ email?: string }> }>,
-    client?: PoolClient,
+    client: PoolClient,
   ): Promise<void> {
-    const db: any = client ?? getPool();
+    const db = client;
     const { rows: projectRows } = await db.query(
       `select company_id from projects where id = $1`,
       [projectId],
@@ -712,6 +856,7 @@ export class ProjectsService {
     id: string,
     mutate: (protocol: any, data: any) => any,
     actor?: AuditActor,
+    auditEvent?: ProjectAuditEvent | (() => ProjectAuditEvent),
   ): Promise<Project> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
@@ -733,6 +878,7 @@ export class ProjectsService {
         `update projects set data=$2, updated_at=$3 where id=$1`,
         [id, JSON.stringify(mergedData), now],
       );
+      const resolvedAuditEvent = typeof auditEvent === "function" ? auditEvent() : auditEvent;
       await this.audit.record({
         projectId: id,
         type: "protocol.updated",
@@ -740,8 +886,9 @@ export class ProjectsService {
         entityType: "protocol",
         entityId: id,
         entityLabel: "Protocol",
-        actor: actor ?? { userId: "system", name: "System" },
         metadata: {},
+        ...resolvedAuditEvent,
+        actor: actor ?? { name: "System" },
       }, client);
       await client.query("COMMIT");
     } catch (err) {
@@ -766,6 +913,7 @@ export class ProjectsService {
     id: string,
     mutate: (signatures: any[], data: any) => any[],
     actor?: AuditActor,
+    auditEvent?: ProjectAuditEvent,
   ): Promise<{ signatures: any[] }> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
@@ -796,8 +944,12 @@ export class ProjectsService {
         entityType: "signature",
         entityId: id,
         entityLabel: "Electronic signatures",
-        actor: actor ?? { userId: "system", name: "System" },
-        metadata: { signatureCount: newSignatures.length },
+        ...auditEvent,
+        actor: actor ?? { name: "System" },
+        metadata: {
+          signatureCount: newSignatures.length,
+          ...(auditEvent?.metadata ?? {}),
+        },
       }, client);
       await client.query("COMMIT");
       return { signatures: newSignatures };
@@ -857,7 +1009,7 @@ export class ProjectsService {
         entityType: "synopsis",
         entityId: projectId,
         entityLabel: fileName,
-        actor: actor ?? { userId: "system", name: "System" },
+        actor: actor ?? { name: "System" },
         metadata: { fileName, mimeType, fileSize: bytes.length },
       }, client);
       await client.query("COMMIT");

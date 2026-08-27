@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
 import { EmailService } from '../email/email.service';
+import { AuditService, type AuditActor } from '../audit/audit.service';
 
 export const PLAN_LIMITS: Record<string, number> = {
   starter: 2,
@@ -29,7 +30,10 @@ function rethrowKnownUniqueViolation(err: unknown): never {
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly email: EmailService) {}
+  constructor(
+    private readonly email: EmailService,
+    private readonly audit: AuditService,
+  ) {}
 
   async getStats() {
     const pool = getPool();
@@ -60,17 +64,35 @@ export class AdminService {
     return rows;
   }
 
-  async createCompany(name: string, domain?: string) {
+  async createCompany(name: string, domain: string | undefined, actor: AuditActor) {
+    const client = await getPool().connect();
     try {
-      const { rows } = await getPool().query(
+      await client.query('BEGIN');
+      const { rows } = await client.query(
         `insert into companies (name, domain)
          values ($1, nullif($2, ''))
          returning id, name, domain, status, subscription_plan, created_at`,
         [name, domain ?? ''],
       );
-      return rows[0];
+      const company = rows[0];
+      await this.audit.record({
+        companyId: company.id,
+        scope: 'company',
+        type: 'company.created',
+        message: `Created company ${company.name}`,
+        entityType: 'company',
+        entityId: company.id,
+        entityLabel: company.name,
+        actor,
+        metadata: { domain: company.domain ?? null },
+      }, client);
+      await client.query('COMMIT');
+      return company;
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       rethrowKnownUniqueViolation(err);
+    } finally {
+      client.release();
     }
   }
 
@@ -116,9 +138,12 @@ export class AdminService {
     subscription_plan?: string;
     subscription_start?: string;
     subscription_renewal?: string;
-  }) {
+  }, actor: AuditActor) {
     const n = (v?: string) => v ?? '';
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update companies set
          name                  = $1,
          domain                = nullif($2, ''),
@@ -149,18 +174,59 @@ export class AdminService {
         id,
       ],
     );
-    if (!rows[0]) throw new NotFoundException('Company not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('Company not found');
+      const company = rows[0];
+      await this.audit.record({
+        companyId: id,
+        scope: 'company',
+        type: 'company.updated',
+        message: `Updated company ${company.name}`,
+        entityType: 'company',
+        entityId: id,
+        entityLabel: company.name,
+        actor,
+        metadata: { changedFields: Object.keys(body) },
+      }, client);
+      await client.query('COMMIT');
+      return company;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async setCompanyStatus(id: string, status: 'active' | 'suspended') {
-    const { rows } = await getPool().query(
+  async setCompanyStatus(id: string, status: 'active' | 'suspended', actor: AuditActor) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update companies set status = $1 where id = $2
        returning id, name, status`,
       [status, id],
     );
-    if (!rows[0]) throw new NotFoundException('Company not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('Company not found');
+      const company = rows[0];
+      await this.audit.record({
+        companyId: id,
+        scope: 'company',
+        type: 'company.status.changed',
+        message: `${company.name} was ${company.status === 'suspended' ? 'suspended' : 'reactivated'}`,
+        entityType: 'company',
+        entityId: id,
+        entityLabel: company.name,
+        actor,
+        metadata: { status: company.status },
+      }, client);
+      await client.query('COMMIT');
+      return company;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async createUser(
@@ -169,40 +235,103 @@ export class AdminService {
     email: string,
     password: string,
     systemRole: string,
+    actor: AuditActor,
   ) {
+    const client = await getPool().connect();
     try {
-      const { rows } = await getPool().query(
+      await client.query('BEGIN');
+      const { rows } = await client.query(
         `insert into users (company_id, name, email, password_hash, system_role)
          values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5)
          returning id, name, email, system_role, is_active, created_at`,
         [companyId, name, email, password, systemRole],
       );
-      return rows[0];
+      const user = rows[0];
+      await this.audit.record({
+        companyId,
+        scope: 'company',
+        type: 'user.created',
+        message: `Created account for ${user.name}`,
+        entityType: 'user',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { email: user.email, role: user.system_role },
+      }, client);
+      await client.query('COMMIT');
+      return user;
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       rethrowKnownUniqueViolation(err);
+    } finally {
+      client.release();
     }
   }
 
-  async setUserActive(userId: string, isActive: boolean) {
-    const { rows } = await getPool().query(
+  async setUserActive(userId: string, isActive: boolean, actor: AuditActor) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update users set is_active = $1, updated_at = now()
        where id = $2
        returning id, company_id, name, email, system_role, is_active`,
       [isActive, userId],
     );
-    if (!rows[0]) throw new NotFoundException('User not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('User not found');
+      const user = rows[0];
+      await this.audit.record({
+        companyId: user.company_id,
+        scope: user.company_id ? 'company' : 'system',
+        type: 'user.status.changed',
+        message: `${user.name}'s account was ${user.is_active ? 'activated' : 'deactivated'}`,
+        entityType: 'user',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { active: user.is_active },
+      }, client);
+      await client.query('COMMIT');
+      return user;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async setUserRole(userId: string, systemRole: string) {
-    const { rows } = await getPool().query(
+  async setUserRole(userId: string, systemRole: string, actor: AuditActor) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update users set system_role = $1, updated_at = now()
        where id = $2
        returning id, company_id, name, email, system_role, is_active`,
       [systemRole, userId],
     );
-    if (!rows[0]) throw new NotFoundException('User not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('User not found');
+      const user = rows[0];
+      await this.audit.record({
+        companyId: user.company_id,
+        scope: user.company_id ? 'company' : 'system',
+        type: 'user.role.changed',
+        message: `Changed ${user.name}'s role to ${user.system_role}`,
+        entityType: 'user',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { role: user.system_role },
+      }, client);
+      await client.query('COMMIT');
+      return user;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -246,8 +375,8 @@ export class AdminService {
     }
   }
 
-  async touchLastActive(companyId: string, client?: PoolClient): Promise<void> {
-    await (client ?? getPool()).query(
+  async touchLastActive(companyId: string, client: PoolClient): Promise<void> {
+    await client.query(
       `update companies set last_active_at = now() where id = $1`,
       [companyId],
     );
@@ -263,18 +392,36 @@ export class AdminService {
     return rows;
   }
 
-  async createSuperadmin(name: string, email: string) {
+  async createSuperadmin(name: string, email: string, actor: AuditActor) {
     const tempPassword = randomBytes(12).toString('base64url');
+    const client = await getPool().connect();
     let rows;
     try {
-      ({ rows } = await getPool().query(
+      await client.query('BEGIN');
+      ({ rows } = await client.query(
         `insert into users (name, email, password_hash, system_role, is_superadmin, company_id, must_reset_password)
          values ($1, $2, crypt($3, gen_salt('bf', 10)), 'admin', true, null, true)
          returning id, name, email, is_active, created_at`,
         [name, email, tempPassword],
       ));
+      const created = rows[0];
+      await this.audit.record({
+        companyId: null,
+        scope: 'system',
+        type: 'superadmin.created',
+        message: `Added ${created.name} as a platform superadmin`,
+        entityType: 'superadmin',
+        entityId: created.id,
+        entityLabel: created.name,
+        actor,
+        metadata: { email: created.email },
+      }, client);
+      await client.query('COMMIT');
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       rethrowKnownUniqueViolation(err);
+    } finally {
+      client.release();
     }
     const user = rows[0];
 
@@ -291,26 +438,70 @@ export class AdminService {
     return { ...user, accountCreated: true, emailSent };
   }
 
-  async setSuperadminActive(id: string, isActive: boolean) {
-    const { rows } = await getPool().query(
+  async setSuperadminActive(id: string, isActive: boolean, actor: AuditActor) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update users set is_active = $1, updated_at = now()
        where id = $2 and is_superadmin = true
        returning id, name, email, is_active`,
       [isActive, id],
     );
-    if (!rows[0]) throw new NotFoundException('Superadmin not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('Superadmin not found');
+      const user = rows[0];
+      await this.audit.record({
+        companyId: null,
+        scope: 'system',
+        type: 'superadmin.status.changed',
+        message: `${user.name}'s superadmin access was ${user.is_active ? 'activated' : 'deactivated'}`,
+        entityType: 'superadmin',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { active: user.is_active },
+      }, client);
+      await client.query('COMMIT');
+      return user;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async deleteSuperadmin(id: string, requesterId: string) {
+  async deleteSuperadmin(id: string, requesterId: string, actor: AuditActor) {
     if (id === requesterId) {
       throw new ForbiddenException('You cannot delete your own account');
     }
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `delete from users where id = $1 and is_superadmin = true returning id, name, email`,
       [id],
     );
-    if (!rows[0]) throw new NotFoundException('Superadmin not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('Superadmin not found');
+      const user = rows[0];
+      await this.audit.record({
+        companyId: null,
+        scope: 'system',
+        type: 'superadmin.deleted',
+        message: `Removed ${user.name}'s platform superadmin account`,
+        entityType: 'superadmin',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { email: user.email },
+      }, client);
+      await client.query('COMMIT');
+      return user;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }

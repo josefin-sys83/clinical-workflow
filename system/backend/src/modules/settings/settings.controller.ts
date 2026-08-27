@@ -2,17 +2,13 @@ import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Req, Use
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth';
 import { SettingsService } from './settings.service';
-import { AuditService } from '../audit/audit.service';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @ApiTags('settings')
 @Controller('/api/settings')
 export class SettingsController {
-  constructor(
-    private readonly svc: SettingsService,
-    private readonly audit: AuditService,
-  ) {}
+  constructor(private readonly svc: SettingsService) {}
 
   @Get('me')
   getMe(@Req() req: any) {
@@ -21,18 +17,12 @@ export class SettingsController {
 
   @Patch('me')
   async updateMe(@Req() req: any, @Body() body: { name: string; timezone?: string }) {
-    const profile = await this.svc.updateProfile(req.user.userId, body.name, body.timezone ?? 'Europe/Stockholm');
-    await this.audit.record({
-      companyId: req.user.companyId ?? null,
-      type: 'profile.updated',
-      message: `${profile.name} updated their profile`,
-      entityType: 'user',
-      entityId: req.user.userId,
-      entityLabel: profile.name,
-      actor: req.user,
-      metadata: { timezone: profile.timezone },
-    });
-    return profile;
+    return this.svc.updateProfile(
+      req.user.userId,
+      body.name,
+      body.timezone ?? 'Europe/Stockholm',
+      req.user,
+    );
   }
 
   @Patch('password')
@@ -40,18 +30,12 @@ export class SettingsController {
     @Req() req: any,
     @Body() body: { current_password: string; new_password: string },
   ) {
-    const result = await this.svc.changePassword(req.user.userId, body.current_password, body.new_password);
-    await this.audit.record({
-      companyId: req.user.companyId ?? null,
-      type: 'password.changed',
-      message: `${req.user.name} changed their password`,
-      entityType: 'user',
-      entityId: req.user.userId,
-      entityLabel: req.user.name,
-      actor: req.user,
-      metadata: {},
-    });
-    return result;
+    return this.svc.changePassword(
+      req.user.userId,
+      body.current_password,
+      body.new_password,
+      req.user,
+    );
   }
 
   @Get('company')
@@ -78,23 +62,13 @@ export class SettingsController {
   ) {
     if (!req.user.roles?.includes('admin')) throw new ForbiddenException();
     if (!req.user.companyId) throw new ForbiddenException('No company associated');
-    const user = await this.svc.inviteUser(
+    return this.svc.inviteUser(
       req.user.companyId,
       body.name,
       body.email,
       body.system_role ?? 'author',
+      req.user,
     );
-    await this.audit.record({
-      companyId: req.user.companyId,
-      type: 'user.invited',
-      message: `Invited ${user.name} to the company`,
-      entityType: 'user',
-      entityId: user.id,
-      entityLabel: user.name,
-      actor: req.user,
-      metadata: { email: user.email, role: user.system_role, emailSent: user.emailSent },
-    });
-    return user;
   }
 
   @Patch('company/users/:id/role')
@@ -105,18 +79,7 @@ export class SettingsController {
   ) {
     if (!req.user.roles?.includes('admin')) throw new ForbiddenException();
     if (!req.user.companyId) throw new ForbiddenException();
-    const user = await this.svc.setUserRole(req.user.companyId, id, body.system_role);
-    await this.audit.record({
-      companyId: req.user.companyId,
-      type: 'user.role.changed',
-      message: `Changed ${user.name}'s role to ${user.system_role}`,
-      entityType: 'user',
-      entityId: user.id,
-      entityLabel: user.name,
-      actor: req.user,
-      metadata: { role: user.system_role },
-    });
-    return user;
+    return this.svc.setUserRole(req.user.companyId, id, body.system_role, req.user);
   }
 
   @Patch('company/users/:id/active')
@@ -127,18 +90,13 @@ export class SettingsController {
   ) {
     if (!req.user.roles?.includes('admin')) throw new ForbiddenException();
     if (!req.user.companyId) throw new ForbiddenException();
-    const user = await this.svc.setUserActive(req.user.companyId, id, body.is_active, req.user.userId);
-    await this.audit.record({
-      companyId: req.user.companyId,
-      type: 'user.status.changed',
-      message: `${user.name}'s account was ${user.is_active ? 'activated' : 'deactivated'}`,
-      entityType: 'user',
-      entityId: user.id,
-      entityLabel: user.name,
-      actor: req.user,
-      metadata: { active: user.is_active },
-    });
-    return user;
+    return this.svc.setUserActive(
+      req.user.companyId,
+      id,
+      body.is_active,
+      req.user.userId,
+      req.user,
+    );
   }
 
   @Post('support')
@@ -146,23 +104,13 @@ export class SettingsController {
     @Req() req: any,
     @Body() body: { category: string; subject: string; message: string },
   ) {
-    const ticket = await this.svc.createSupportTicket(
+    return this.svc.createSupportTicket(
       req.user.userId,
       req.user.companyId ?? null,
       body.category,
       body.subject,
       body.message,
+      req.user,
     );
-    await this.audit.record({
-      companyId: req.user.companyId ?? null,
-      type: 'support.ticket.created',
-      message: `Created support ticket: ${ticket.subject}`,
-      entityType: 'support_ticket',
-      entityId: ticket.id,
-      entityLabel: ticket.subject,
-      actor: req.user,
-      metadata: { category: ticket.category, status: ticket.status },
-    });
-    return ticket;
   }
 }

@@ -20,7 +20,6 @@ import { Clock } from 'lucide-react';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
-import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { getToken } from '@/shared/auth/token';
 
 function userFromRole(rawRoles: any[], roleTitle: string): User {
@@ -28,18 +27,6 @@ function userFromRole(rawRoles: any[], roleTitle: string): User {
   const person = role?.assignedTo?.[0];
   if (!person) return { id: roleTitle, name: 'Unassigned', email: '', role: roleTitle };
   return { id: person.email || person.name, name: person.name, email: person.email || '', role: roleTitle };
-}
-
-// Logs a real, persisted audit event for this project (visible in the site-wide
-// Audit Trail) instead of the old local-only, never-rendered mock-seeded log.
-function logReportAuditEvent(
-  projectId: string | undefined,
-  type: 'lifecycle_transition' | 'note',
-  summary: string,
-  details?: string
-) {
-  if (!projectId) return;
-  createProjectAuditEvent({ projectId, domain: 'report', stepId: 'report-make', type, summary, details }).catch(() => {});
 }
 
 export function ReportWorkspace() {
@@ -459,13 +446,6 @@ export function ReportWorkspace() {
         : s
     ));
     
-    const hadAiDraft = section?.aiDraft;
-    logReportAuditEvent(
-      projectId,
-      'note',
-      hadAiDraft ? 'Content added with AI assistance' : 'Content edited',
-      hadAiDraft ? `Content added by ${currentUser.name} with AI assistance` : 'Updated section content'
-    );
     saveReportSectionState(sectionId, { content, userEdited: true });
   };
 
@@ -495,7 +475,6 @@ export function ReportWorkspace() {
           : s
       ));
       saveReportSectionState(sectionId, { content: acceptedContent, userEdited: true });
-      logReportAuditEvent(projectId, 'note', 'AI draft accepted', `Content accepted by ${currentUser.name} with AI assistance`);
     }
   };
 
@@ -507,7 +486,6 @@ export function ReportWorkspace() {
     // (generate-report-section writes it immediately) — clear it so a dismissed
     // draft doesn't silently reappear as real content on the next page load.
     saveReportSectionState(sectionId, { content: '' });
-    logReportAuditEvent(projectId, 'note', 'AI draft dismissed', `AI draft dismissed by ${currentUser.name}`);
   };
 
   const handleAssetToggle = (assetId: string) => {
@@ -517,7 +495,6 @@ export function ReportWorkspace() {
     
     const asset = dataAssets.find(a => a.id === assetId);
     if (asset) {
-      logReportAuditEvent(projectId, 'note', asset.selected ? 'Asset removed' : 'Asset added', `${asset.selected ? 'Removed' : 'Added'} ${asset.name}`);
     }
   };
 
@@ -537,7 +514,6 @@ export function ReportWorkspace() {
       s.id === sectionId ? { ...s, comments: [...s.comments, newComment] } : s
     ));
     
-    logReportAuditEvent(projectId, 'note', 'Comment added', text);
   };
 
   const handleInsertAsset = (sectionId: string, assetId: string) => {
@@ -568,7 +544,6 @@ export function ReportWorkspace() {
         : s
     ));
 
-    logReportAuditEvent(projectId, 'note', 'Data asset inserted', `Inserted ${asset.name} into ${section.title}`);
 
     // Run validation after insertion
     const updatedSection = { 
@@ -604,7 +579,6 @@ export function ReportWorkspace() {
         : s
     ));
 
-    logReportAuditEvent(projectId, 'note', 'Data asset removed', `Removed ${asset.name} from ${section.title}`);
 
     // Run validation after removal
     const updatedSection = {
@@ -640,7 +614,6 @@ export function ReportWorkspace() {
         : s
     ));
 
-    logReportAuditEvent(projectId, 'note', 'AI narrative accepted', 'Accepted AI-generated narrative for inserted asset');
   };
 
   const handleEditNarrative = (sectionId: string, insertedAssetId: string, text: string) => {
@@ -657,7 +630,6 @@ export function ReportWorkspace() {
         : s
     ));
 
-    logReportAuditEvent(projectId, 'note', 'Asset narrative edited', 'Edited narrative text for inserted asset');
   };
 
   const getSectionStatus = (section: ReportSection): 'complete' | 'in-progress' | 'empty' => {
@@ -725,7 +697,6 @@ export function ReportWorkspace() {
     // Persist so approval survives page reload
     saveReportSectionState(sectionId, { state: 'approved' });
 
-    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section approved', comment || 'Section approved');
   };
 
   const handleReviewDeviation = (deviationId: string, status: 'approved' | 'requires-amendment', comment: string) => {
@@ -735,7 +706,6 @@ export function ReportWorkspace() {
         : d
     ));
 
-    logReportAuditEvent(projectId, 'lifecycle_transition', status === 'approved' ? 'Deviation approved' : 'Deviation amendment requested', comment);
   };
 
   const handleMarkSectionReady = (sectionId: string) => {
@@ -752,7 +722,6 @@ export function ReportWorkspace() {
     // Persist so ready-state survives page reload
     saveReportSectionState(sectionId, { state: 'under-review' });
 
-    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section marked ready', `Section "${section.title}" marked as ready for review`);
   };
 
   const handleMoveSectionToDraft = (sectionId: string) => {
@@ -769,7 +738,6 @@ export function ReportWorkspace() {
     // Persist so draft-state survives page reload
     saveReportSectionState(sectionId, { state: 'draft' });
 
-    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section moved to draft', `Section "${section.title}" moved back to draft for edits`);
   };
 
   const handleEditSection = (sectionId: string) => {
@@ -791,7 +759,6 @@ export function ReportWorkspace() {
     // Persist so unlocked-state survives page reload
     saveReportSectionState(sectionId, { state: 'draft' });
 
-    logReportAuditEvent(projectId, 'lifecycle_transition', 'Section unlocked for editing', `Section "${section.title}" unlocked and moved to draft state for editing`);
   };
 
   const handleCreateAmendment = (amendment: Omit<ProtocolAmendment, 'id' | 'createdAt' | 'createdBy'>) => {
@@ -804,7 +771,6 @@ export function ReportWorkspace() {
 
     setAmendments([...amendments, newAmendment]);
 
-    logReportAuditEvent(projectId, 'note', 'Protocol amendment created', `Created ${amendment.amendmentNumber}: ${amendment.protocolSection}`);
   };
 
   const handleVerifyCompletenessElement = (elementId: string) => {
@@ -824,7 +790,6 @@ export function ReportWorkspace() {
 
     const element = completenessStatus.elements.find(el => el.id === elementId);
     if (element) {
-      logReportAuditEvent(projectId, 'note', 'Completeness element verified', `Verified ISO 14155:2020 requirement: ${element.title}`);
     }
   };
 
@@ -963,7 +928,6 @@ export function ReportWorkspace() {
                   : s
               ));
               
-              logReportAuditEvent(projectId, 'note', 'Comment resolved', 'Comment marked as resolved');
             }}
             onApproveSection={handleApproveSection}
             onMarkSectionReady={handleMarkSectionReady}

@@ -8,6 +8,9 @@ import {
 } from 'crypto';
 import { getPool } from '../../db/pg';
 import PDFDocument from 'pdfkit';
+import type { PoolClient } from 'pg';
+import { AuditService, type AuditActor } from '../audit/audit.service';
+import { WorkflowService } from '../workflow/workflow.service';
 
 type DocType = 'protocol' | 'report';
 
@@ -56,10 +59,10 @@ async function buildPdfBytes(args: { projectId: string; docType: DocType; note?:
   // Include last audit events (best effort).
   try {
     const { rows } = await getPool().query(
-      `select occurred_at, step_id, type, message
+      `select created_at, step_id, type, message
        from audit_event
        where project_id = $1
-       order by occurred_at desc
+       order by created_at desc
        limit 25`,
       [args.projectId],
     );
@@ -68,7 +71,7 @@ async function buildPdfBytes(args: { projectId: string; docType: DocType; note?:
       doc.moveDown(0.25);
       doc.fontSize(10);
       for (const r of rows) {
-        const when = new Date(r.occurred_at).toISOString();
+        const when = new Date(r.created_at).toISOString();
         doc.text(`[${when}] ${String(r.step_id)} · ${String(r.type)} · ${String(r.message)}`);
       }
       doc.moveDown(1);
@@ -108,15 +111,30 @@ function resolveSigningKeys(): { privateKeyPem: string; publicKeyPem: string; ke
 export class DocumentsService {
   private readonly signingKeys = resolveSigningKeys();
 
-  async finalize(args: { projectId: string; docType: DocType; userId?: string; userRoles?: string[]; note?: string }) {
+  constructor(
+    private readonly audit: AuditService,
+    private readonly workflow: WorkflowService,
+  ) {}
+
+  async finalize(args: {
+    projectId: string;
+    docType: DocType;
+    userId?: string;
+    userRoles?: string[];
+    note?: string;
+    actor: AuditActor;
+  }) {
     const id = randomUUID();
     const fileName = `${args.docType}-${args.projectId}-${Date.now()}.pdf`;
     const contentType = 'application/pdf';
     const bytes = await buildPdfBytes({ projectId: args.projectId, docType: args.docType, note: args.note });
     const sha256 = createHash('sha256').update(bytes).digest('hex');
 
-    await getPool().query(
-      `insert into document_artifact (
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `insert into document_artifact (
          id, project_id, doc_type, file_name, content_type, sha256, bytes,
          created_by_user_id, created_by_roles, created_at
        )
@@ -132,44 +150,82 @@ export class DocumentsService {
         args.userId ?? null,
         args.userRoles?.join(',') ?? null,
       ],
-    );
+      );
 
-    return { id, fileName, contentType, sha256 };
+      const stepId = args.docType === 'protocol' ? 'protocol-pdf' : 'report-pdf';
+      await this.workflow.transition(
+        args.projectId,
+        stepId,
+        {
+          action: 'finalize',
+          reason: args.note ?? `Finalized ${args.docType} export (${sha256.slice(0, 12)}…)`,
+        },
+        args.actor,
+        client,
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId,
+        type: 'document.finalized',
+        message: `Finalized ${args.docType} export`,
+        entityType: 'document',
+        entityId: id,
+        entityLabel: fileName,
+        actor: args.actor,
+        metadata: { artifactId: id, sha256, fileName },
+      }, client);
+      await client.query('COMMIT');
+      return { id, fileName, contentType, sha256 };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  // Compensation for finalize(): the artifact insert and the workflow transition that's
-  // supposed to accompany it live in two separate services/connections, so they can't
-  // share one DB transaction without a larger refactor. If the transition fails after
-  // the artifact was already committed, the controller calls this to remove the
-  // now-orphaned row rather than leaving a permanent artifact behind a failed finalize.
-  async deleteArtifact(args: { projectId: string; docType: DocType; artifactId: string }): Promise<void> {
-    await getPool().query(
-      `delete from document_artifact where project_id = $1 and doc_type = $2 and id = $3`,
-      [args.projectId, args.docType, args.artifactId],
-    );
-  }
-
-  async verify(args: { projectId: string; artifactId: string; verifierUserId?: string }) {
+  async verify(args: {
+    projectId: string;
+    artifactId: string;
+    verifierUserId?: string;
+    actor: AuditActor;
+  }) {
     const a = await this.get({ projectId: args.projectId, artifactId: args.artifactId });
     const computed = createHash('sha256').update(a.bytes).digest('hex');
     const ok = computed === a.sha256;
 
-    // best-effort: persist verification timestamp
-    try {
-      await getPool().query(
-        `update document_artifact set verified_at=now(), verified_by_user_id=$3 where project_id=$1 and id=$2`,
-        [args.projectId, args.artifactId, args.verifierUserId ?? null],
-      );
-    } catch {
-      // ignore
-    }
-
-    return {
+    const result = {
       artifactId: a.id,
       sha256Stored: a.sha256,
       sha256Computed: computed,
       match: ok,
     };
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `update document_artifact set verified_at=now(), verified_by_user_id=$3 where project_id=$1 and id=$2`,
+        [args.projectId, args.artifactId, args.verifierUserId ?? null],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: 'documents',
+        type: 'document.verified',
+        message: `Verified artifact ${args.artifactId}`,
+        entityType: 'document',
+        entityId: args.artifactId,
+        entityLabel: a.fileName,
+        actor: args.actor,
+        metadata: result,
+      }, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async signArtifact(args: {
@@ -177,10 +233,14 @@ export class DocumentsService {
     artifactId: string;
     signerUserId: string;
     signerRoles?: string[];
-  }) {
+    actor: AuditActor;
+  }, transactionClient?: PoolClient) {
     if (!args.signerUserId) throw new BadRequestException('Missing signer user');
 
-    const a = await this.get({ projectId: args.projectId, artifactId: args.artifactId });
+    const a = await this.get(
+      { projectId: args.projectId, artifactId: args.artifactId },
+      transactionClient,
+    );
 
     // Sign the stored SHA-256 hex string (stable across transports).
     const signer = createSign('RSA-SHA256');
@@ -190,7 +250,11 @@ export class DocumentsService {
     const signature = signer.sign(this.signingKeys.privateKeyPem);
     const id = randomUUID();
 
-    await getPool().query(
+    const client = transactionClient ?? await getPool().connect();
+    const ownsTransaction = !transactionClient;
+    try {
+      if (ownsTransaction) await client.query('BEGIN');
+      await client.query(
       `insert into document_artifact_signature (
          id, artifact_id, signed_at, signed_by_user_id, signed_by_roles,
          algorithm, key_id, public_key_pem, signature
@@ -206,16 +270,35 @@ export class DocumentsService {
         this.signingKeys.publicKeyPem,
         signature,
       ],
-    );
+      );
 
-    return {
+      const result = {
       signatureId: id,
       artifactId: a.id,
       algorithm: 'RSA-SHA256',
       keyId: this.signingKeys.keyId,
       signedAt: new Date().toISOString(),
       signedBy: { userId: args.signerUserId, roles: args.signerRoles ?? [] },
-    };
+      };
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: 'documents',
+        type: 'document.signed',
+        message: `Signed artifact ${args.artifactId}`,
+        entityType: 'document_signature',
+        entityId: id,
+        entityLabel: a.fileName,
+        actor: args.actor,
+        metadata: result,
+      }, client);
+      if (ownsTransaction) await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      if (ownsTransaction) await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      if (ownsTransaction) client.release();
+    }
   }
 
   async listSignatures(args: { projectId: string; artifactId: string }) {
@@ -240,7 +323,12 @@ export class DocumentsService {
     }));
   }
 
-  async verifyChain(args: { projectId: string; artifactId: string; verifierUserId?: string }) {
+  async verifyChain(args: {
+    projectId: string;
+    artifactId: string;
+    verifierUserId?: string;
+    actor: AuditActor;
+  }) {
     const artifact = await this.get({ projectId: args.projectId, artifactId: args.artifactId });
     const computed = createHash('sha256').update(artifact.bytes).digest('hex');
     const artifactMatch = computed === artifact.sha256;
@@ -268,17 +356,7 @@ export class DocumentsService {
       };
     });
 
-    // best-effort: persist verification timestamp on artifact too
-    try {
-      await getPool().query(
-        `update document_artifact set verified_at=now(), verified_by_user_id=$3 where project_id=$1 and id=$2`,
-        [args.projectId, args.artifactId, args.verifierUserId ?? null],
-      );
-    } catch {
-      // ignore
-    }
-
-    return {
+    const result = {
       artifact: {
         artifactId: artifact.id,
         sha256Stored: artifact.sha256,
@@ -287,10 +365,44 @@ export class DocumentsService {
       },
       signatures,
     };
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `update document_artifact set verified_at=now(), verified_by_user_id=$3 where project_id=$1 and id=$2`,
+        [args.projectId, args.artifactId, args.verifierUserId ?? null],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: 'documents',
+        type: 'document.chain_verified',
+        message: `Verified signature chain for artifact ${args.artifactId}`,
+        entityType: 'document',
+        entityId: args.artifactId,
+        entityLabel: artifact.fileName,
+        actor: args.actor,
+        metadata: {
+          artifactMatch: result.artifact.match,
+          signatures: signatures.map((signature: any) => ({
+            signatureId: signature.signatureId,
+            match: signature.match,
+            keyId: signature.keyId,
+          })),
+        },
+      }, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async get(args: { projectId: string; artifactId: string }) {
-    const { rows } = await getPool().query(
+  async get(args: { projectId: string; artifactId: string }, client?: PoolClient) {
+    const db = client ?? getPool();
+    const { rows } = await db.query(
       `select id, project_id, doc_type, file_name, content_type, sha256, bytes, created_at
        from document_artifact
        where project_id = $1 and id = $2`,
@@ -354,8 +466,12 @@ export class DocumentsService {
     }));
   }
 
-  async getAddendum(args: { projectId: string; docType: DocType; addendumId: string }) {
-    const { rows } = await getPool().query(
+  async getAddendum(
+    args: { projectId: string; docType: DocType; addendumId: string },
+    client?: PoolClient,
+  ) {
+    const db = client ?? getPool();
+    const { rows } = await db.query(
       `select id, project_id, doc_type, release_artifact_id, letter, title, description, change_reason,
               status, signed_artifact_id, created_by_user_id, created_at, updated_at, locked_at
        from document_addendum
@@ -364,8 +480,8 @@ export class DocumentsService {
     );
     const r = rows[0];
     if (!r) throw new NotFoundException('Addendum not found');
-    const approvals = await this.listAddendumApprovals({ addendumId: String(r.id) });
-    const files = await this.listAddendumFiles({ addendumId: String(r.id) });
+    const approvals = await this.listAddendumApprovals({ addendumId: String(r.id) }, client);
+    const files = await this.listAddendumFiles({ addendumId: String(r.id) }, client);
     return {
       id: String(r.id),
       projectId: String(r.project_id),
@@ -393,66 +509,74 @@ export class DocumentsService {
     title: string;
     description?: string;
     changeReason: string;
-    actorUserId?: string | null;
+    actor: AuditActor;
   }) {
-    // Ensure release artifact exists for this project/docType.
-    const { rows: arows } = await getPool().query(
-      `select id from document_artifact where project_id = $1 and doc_type = $2 and id = $3`,
-      [args.projectId, args.docType, args.releaseArtifactId],
-    );
-    if (!arows[0]) throw new BadRequestException('Release artifact not found for this project/docType');
-
-    // Like generateProjectId()/create() in ProjectsService: counting existing rows
-    // without locking means two concurrent creates can compute the same letter. The
-    // ux_addendum_letter_per_release unique index is the real race guard — on a
-    // collision (23505) recompute against the now-updated count and retry instead of
-    // surfacing a raw 500.
     const id = randomUUID();
     const now = new Date();
-    const maxAttempts = 5;
-    let letter = '';
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const { rows: cntRows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: arows } = await client.query(
+        `select id from document_artifact where project_id = $1 and doc_type = $2 and id = $3`,
+        [args.projectId, args.docType, args.releaseArtifactId],
+      );
+      if (!arows[0]) throw new BadRequestException('Release artifact not found for this project/docType');
+
+      await client.query(`select pg_advisory_xact_lock(hashtext($1))`, [
+        `addendum-letter-${args.releaseArtifactId}`,
+      ]);
+      const { rows: cntRows } = await client.query(
         `select count(*)::int as n from document_addendum where release_artifact_id = $1`,
         [args.releaseArtifactId],
       );
       const n = Number(cntRows[0]?.n ?? 0);
-      letter = this.indexToLetter(n);
-
-      try {
-        await getPool().query(
-          `insert into document_addendum (
+      const letter = this.indexToLetter(n);
+      await client.query(
+        `insert into document_addendum (
             id, project_id, doc_type, release_artifact_id, letter, title, description, change_reason,
             status, created_by_user_id, created_at, updated_at
           ) values ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$10)`,
-          [
-            id,
-            args.projectId,
-            args.docType,
-            args.releaseArtifactId,
-            letter,
-            args.title,
-            args.description ?? null,
-            args.changeReason,
-            args.actorUserId ?? null,
-            now,
-          ],
-        );
-        break;
-      } catch (err: any) {
-        if (err?.code === '23505' && attempt < maxAttempts) continue;
-        throw err;
-      }
+        [
+          id,
+          args.projectId,
+          args.docType,
+          args.releaseArtifactId,
+          letter,
+          args.title,
+          args.description ?? null,
+          args.changeReason,
+          args.actor.userId ?? null,
+          now,
+        ],
+      );
+      await client.query(
+        `insert into document_addendum_approval (id, addendum_id, role, status)
+         values ($1,$2,'reviewer','pending')`,
+        [randomUUID(), id],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: args.docType === 'protocol' ? 'protocol-pdf' : 'report-pdf',
+        type: 'addendum.created',
+        message: `Created addendum ${letter}`,
+        entityType: 'addendum',
+        entityId: id,
+        entityLabel: `${letter}: ${args.title}`,
+        actor: args.actor,
+        metadata: { addendumId: id, letter, releaseArtifactId: args.releaseArtifactId },
+      }, client);
+      const result = await this.getAddendum(
+        { projectId: args.projectId, docType: args.docType, addendumId: id },
+        client,
+      );
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-
-    // Create reviewer approval slot (same role requirements as the system currently supports).
-    await getPool().query(
-      `insert into document_addendum_approval (id, addendum_id, role, status) values ($1,$2,'reviewer','pending')
-       on conflict (addendum_id, role) do nothing`,
-      [randomUUID(), id],
-    );
-
-    return await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: id });
   }
 
   async updateAddendum(args: {
@@ -462,65 +586,144 @@ export class DocumentsService {
     title?: string;
     description?: string;
     changeReason?: string;
+    actor: AuditActor;
   }) {
-    const current = await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
-    if (current.status !== 'draft') throw new BadRequestException('Only draft addendums can be edited');
-
     const now = new Date();
-    await getPool().query(
-      `update document_addendum
-       set title = coalesce($4, title),
-           description = coalesce($5, description),
-           change_reason = coalesce($6, change_reason),
-           updated_at = $7
-       where project_id=$1 and doc_type=$2 and id=$3`,
-      [args.projectId, args.docType, args.addendumId, args.title ?? null, args.description ?? null, args.changeReason ?? null, now],
-    );
-    return await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select status, letter, title from document_addendum
+         where project_id=$1 and doc_type=$2 and id=$3 for update`,
+        [args.projectId, args.docType, args.addendumId],
+      );
+      if (!rows[0]) throw new NotFoundException('Addendum not found');
+      if (rows[0].status !== 'draft') throw new BadRequestException('Only draft addendums can be edited');
+      await client.query(
+        `update document_addendum
+         set title = coalesce($4, title),
+             description = coalesce($5, description),
+             change_reason = coalesce($6, change_reason),
+             updated_at = $7
+         where project_id=$1 and doc_type=$2 and id=$3`,
+        [args.projectId, args.docType, args.addendumId, args.title ?? null, args.description ?? null, args.changeReason ?? null, now],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: args.docType === 'protocol' ? 'protocol-pdf' : 'report-pdf',
+        type: 'addendum.updated',
+        message: `Updated addendum ${rows[0].letter}`,
+        entityType: 'addendum',
+        entityId: args.addendumId,
+        entityLabel: `${rows[0].letter}: ${args.title ?? rows[0].title}`,
+        actor: args.actor,
+        metadata: { addendumId: args.addendumId, changedFields: ['title', 'description', 'changeReason'].filter((key) => (args as any)[key] !== undefined) },
+      }, client);
+      const result = await this.getAddendum(args, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async startAddendumReview(args: { projectId: string; docType: DocType; addendumId: string }) {
-    const current = await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
-    if (current.status !== 'draft') throw new BadRequestException('Addendum is not in draft state');
-
+  async startAddendumReview(args: { projectId: string; docType: DocType; addendumId: string; actor: AuditActor }) {
     const now = new Date();
-    await getPool().query(
-      `update document_addendum set status='in_review', updated_at=$4 where project_id=$1 and doc_type=$2 and id=$3`,
-      [args.projectId, args.docType, args.addendumId, now],
-    );
-    return await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select status, letter, title from document_addendum
+         where project_id=$1 and doc_type=$2 and id=$3 for update`,
+        [args.projectId, args.docType, args.addendumId],
+      );
+      if (!rows[0]) throw new NotFoundException('Addendum not found');
+      if (rows[0].status !== 'draft') throw new BadRequestException('Addendum is not in draft state');
+      await client.query(
+        `update document_addendum set status='in_review', updated_at=$4 where project_id=$1 and doc_type=$2 and id=$3`,
+        [args.projectId, args.docType, args.addendumId, now],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: args.docType === 'protocol' ? 'protocol-review' : 'report-review',
+        type: 'addendum.review_started',
+        message: `Started review for addendum ${rows[0].letter}`,
+        entityType: 'addendum',
+        entityId: args.addendumId,
+        entityLabel: `${rows[0].letter}: ${rows[0].title}`,
+        actor: args.actor,
+        metadata: { addendumId: args.addendumId, letter: rows[0].letter },
+      }, client);
+      const result = await this.getAddendum(args, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async approveAddendumAsReviewer(args: { projectId: string; docType: DocType; addendumId: string; actorUserId?: string | null; approve: boolean; comment?: string }) {
-    const current = await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
-    if (current.status !== 'in_review') throw new BadRequestException('Addendum is not in review');
-
+  async approveAddendumAsReviewer(args: { projectId: string; docType: DocType; addendumId: string; actor: AuditActor; approve: boolean; comment?: string }) {
     const now = new Date();
-    await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select status, letter, title from document_addendum
+         where project_id=$1 and doc_type=$2 and id=$3 for update`,
+        [args.projectId, args.docType, args.addendumId],
+      );
+      if (!rows[0]) throw new NotFoundException('Addendum not found');
+      if (rows[0].status !== 'in_review') throw new BadRequestException('Addendum is not in review');
+      await client.query(
       `update document_addendum_approval
        set status = $2, actor_user_id=$3, acted_at=$4, comment=$5
        where addendum_id=$1 and role='reviewer'`,
-      [args.addendumId, args.approve ? 'approved' : 'rejected', args.actorUserId ?? null, now, args.comment ?? null],
-    );
+        [args.addendumId, args.approve ? 'approved' : 'rejected', args.actor.userId ?? null, now, args.comment ?? null],
+      );
 
     if (args.approve) {
       // If reviewer approved, mark addendum approved (ready for signing).
-      await getPool().query(
+      await client.query(
         `update document_addendum set status='approved', updated_at=$4 where project_id=$1 and doc_type=$2 and id=$3`,
         [args.projectId, args.docType, args.addendumId, now],
       );
     } else {
       // If rejected, send back to draft.
-      await getPool().query(
+      await client.query(
         `update document_addendum set status='draft', updated_at=$4 where project_id=$1 and doc_type=$2 and id=$3`,
         [args.projectId, args.docType, args.addendumId, now],
       );
     }
 
-    return await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: args.docType === 'protocol' ? 'protocol-review' : 'report-review',
+        type: args.approve ? 'addendum.approved' : 'addendum.rejected',
+        message: `${args.approve ? 'Approved' : 'Rejected'} addendum ${rows[0].letter}`,
+        entityType: 'addendum',
+        entityId: args.addendumId,
+        entityLabel: `${rows[0].letter}: ${rows[0].title}`,
+        actor: args.actor,
+        metadata: { addendumId: args.addendumId, letter: rows[0].letter, comment: args.comment ?? null },
+      }, client);
+      const result = await this.getAddendum(args, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async signAddendum(args: { projectId: string; docType: DocType; addendumId: string; signerUserId?: string | null; signerRoles?: string[] }) {
+  async signAddendum(args: { projectId: string; docType: DocType; addendumId: string; signerUserId?: string | null; signerRoles?: string[]; actor: AuditActor }) {
     const current = await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
     if (current.status !== 'approved') throw new BadRequestException('Addendum must be approved before signing');
 
@@ -540,42 +743,97 @@ export class DocumentsService {
     const fileName = `${args.docType}-addendum-${current.letter}.pdf`;
     const now = new Date();
 
-    await getPool().query(
-      `insert into document_artifact (id, project_id, doc_type, file_name, content_type, sha256, bytes, created_by_user_id, created_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [id, args.projectId, args.docType, fileName, 'application/pdf', sha256, bytes, args.signerUserId ?? null, now],
-    );
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select status from document_addendum
+         where project_id=$1 and doc_type=$2 and id=$3 for update`,
+        [args.projectId, args.docType, args.addendumId],
+      );
+      if (!rows[0]) throw new NotFoundException('Addendum not found');
+      if (rows[0].status !== 'approved') throw new BadRequestException('Addendum must be approved before signing');
+      await client.query(
+        `insert into document_artifact (id, project_id, doc_type, file_name, content_type, sha256, bytes, created_by_user_id, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [id, args.projectId, args.docType, fileName, 'application/pdf', sha256, bytes, args.signerUserId ?? null, now],
+      );
 
-    const roles = Array.isArray(args.signerRoles) ? args.signerRoles : [];
-    await this.signArtifact({
-      projectId: args.projectId,
-      artifactId: id,
-  signerUserId: args.signerUserId ?? '',
-      signerRoles: roles,
-    });
+      const roles = Array.isArray(args.signerRoles) ? args.signerRoles : [];
+      await this.signArtifact({
+        projectId: args.projectId,
+        artifactId: id,
+        signerUserId: args.signerUserId ?? '',
+        signerRoles: roles,
+        actor: args.actor,
+      }, client);
 
-    await getPool().query(
-      `update document_addendum set status='signed', signed_artifact_id=$4, updated_at=$5 where project_id=$1 and doc_type=$2 and id=$3`,
-      [args.projectId, args.docType, args.addendumId, id, now],
-    );
-
-    return await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
+      await client.query(
+        `update document_addendum set status='signed', signed_artifact_id=$4, updated_at=$5 where project_id=$1 and doc_type=$2 and id=$3`,
+        [args.projectId, args.docType, args.addendumId, id, now],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: 'documents',
+        type: 'addendum.signed',
+        message: `Signed addendum ${current.letter}`,
+        entityType: 'addendum',
+        entityId: args.addendumId,
+        entityLabel: `${current.letter}: ${current.title}`,
+        actor: args.actor,
+        metadata: { addendumId: args.addendumId, letter: current.letter, signedArtifactId: id },
+      }, client);
+      const result = await this.getAddendum(args, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async lockAddendum(args: { projectId: string; docType: DocType; addendumId: string }) {
-    const current = await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
-    if (current.status !== 'signed') throw new BadRequestException('Addendum must be signed before locking');
-
+  async lockAddendum(args: { projectId: string; docType: DocType; addendumId: string; actor: AuditActor }) {
     const now = new Date();
-    await getPool().query(
-      `update document_addendum set status='locked', locked_at=$4, updated_at=$4 where project_id=$1 and doc_type=$2 and id=$3`,
-      [args.projectId, args.docType, args.addendumId, now],
-    );
-    return await this.getAddendum({ projectId: args.projectId, docType: args.docType, addendumId: args.addendumId });
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select status, letter, title from document_addendum
+         where project_id=$1 and doc_type=$2 and id=$3 for update`,
+        [args.projectId, args.docType, args.addendumId],
+      );
+      if (!rows[0]) throw new NotFoundException('Addendum not found');
+      if (rows[0].status !== 'signed') throw new BadRequestException('Addendum must be signed before locking');
+      await client.query(
+        `update document_addendum set status='locked', locked_at=$4, updated_at=$4 where project_id=$1 and doc_type=$2 and id=$3`,
+        [args.projectId, args.docType, args.addendumId, now],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: 'documents',
+        type: 'addendum.locked',
+        message: `Locked addendum ${rows[0].letter}`,
+        entityType: 'addendum',
+        entityId: args.addendumId,
+        entityLabel: `${rows[0].letter}: ${rows[0].title}`,
+        actor: args.actor,
+        metadata: { addendumId: args.addendumId, letter: rows[0].letter },
+      }, client);
+      const result = await this.getAddendum(args, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async listAddendumApprovals(args: { addendumId: string }) {
-    const { rows } = await getPool().query(
+  async listAddendumApprovals(args: { addendumId: string }, client?: PoolClient) {
+    const { rows } = await (client ?? getPool()).query(
       `select role, status, actor_user_id, acted_at, comment
        from document_addendum_approval
        where addendum_id=$1
@@ -591,8 +849,8 @@ export class DocumentsService {
     }));
   }
 
-  async listAddendumFiles(args: { addendumId: string }) {
-    const { rows } = await getPool().query(
+  async listAddendumFiles(args: { addendumId: string }, client?: PoolClient) {
+    const { rows } = await (client ?? getPool()).query(
       `select id, filename, mime_type, uploaded_by_user_id, uploaded_at
        from document_addendum_file
        where addendum_id=$1
@@ -608,15 +866,52 @@ export class DocumentsService {
     }));
   }
 
-  async uploadAddendumFile(args: { addendumId: string; filename: string; mimeType: string; bytes: Buffer; uploaderUserId?: string | null }) {
+  async uploadAddendumFile(args: {
+    projectId: string;
+    docType: DocType;
+    addendumId: string;
+    filename: string;
+    mimeType: string;
+    bytes: Buffer;
+    uploaderUserId?: string | null;
+    actor: AuditActor;
+  }) {
     const id = randomUUID();
     const now = new Date();
-    await getPool().query(
-      `insert into document_addendum_file (id, addendum_id, filename, mime_type, bytes, uploaded_by_user_id, uploaded_at)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [id, args.addendumId, args.filename, args.mimeType, args.bytes, args.uploaderUserId ?? null, now],
-    );
-    return { id, uploadedAt: now.toISOString() };
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select status, letter, title from document_addendum
+         where project_id=$1 and doc_type=$2 and id=$3 for update`,
+        [args.projectId, args.docType, args.addendumId],
+      );
+      if (!rows[0]) throw new NotFoundException('Addendum not found');
+      if (rows[0].status !== 'draft') throw new BadRequestException('Files can only be uploaded while addendum is in draft');
+      await client.query(
+        `insert into document_addendum_file (id, addendum_id, filename, mime_type, bytes, uploaded_by_user_id, uploaded_at)
+         values ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, args.addendumId, args.filename, args.mimeType, args.bytes, args.uploaderUserId ?? null, now],
+      );
+      await this.audit.record({
+        projectId: args.projectId,
+        stepId: 'documents',
+        type: 'addendum.file_uploaded',
+        message: `Uploaded file to addendum ${rows[0].letter}`,
+        entityType: 'addendum_file',
+        entityId: id,
+        entityLabel: args.filename,
+        actor: args.actor,
+        metadata: { addendumId: args.addendumId, filename: args.filename },
+      }, client);
+      await client.query('COMMIT');
+      return { id, uploadedAt: now.toISOString() };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   private async buildAddendumPdfBytes(args: {

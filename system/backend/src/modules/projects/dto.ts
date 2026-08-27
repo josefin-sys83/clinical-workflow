@@ -171,16 +171,6 @@ export class UpdateSectionContentDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  userId?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  userName?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
   @MaxLength(MAX_SECTION_CONTENT_LENGTH)
   @NoNullBytes()
   previousContent?: string;

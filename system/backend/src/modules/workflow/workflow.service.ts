@@ -4,6 +4,7 @@ import { TransitionDto, WorkflowSnapshot } from './dto';
 import { StepLifecycleState, TransitionAction } from '../common/types';
 import { AuditService } from '../audit/audit.service';
 import type { AuditActor } from '../audit/audit.service';
+import type { PoolClient } from 'pg';
 
 // Map a target state name (sent by the frontend) to the action verb the service uses.
 // Exported so the role-gating guard can resolve the same action from a `to`-style body
@@ -105,15 +106,17 @@ export class WorkflowService {
     return { projectId, steps } as any;
   }
 
-  async transition(projectId: string, stepId: string, dto: TransitionDto, actor?: AuditActor) {
+  async transition(
+    projectId: string,
+    stepId: string,
+    dto: TransitionDto,
+    actor?: AuditActor,
+    transactionClient?: PoolClient,
+  ) {
     // Resolve action: accept either the 'action' verb or 'to' state-name form.
     const action: TransitionAction = dto.action ?? (dto.to ? stateNameToAction(dto.to) : (() => { throw new BadRequestException('action or to is required'); })());
     // Accept 'note' as an alias for 'reason' (frontend sends note)
     const reason = dto.reason ?? dto.note;
-
-    // validate step exists
-    const { rows: stepRows } = await getPool().query(`select 1 from workflow_steps where step_id=$1`, [stepId]);
-    if (stepRows.length === 0) throw new BadRequestException('Unknown stepId');
 
     // Reading `current` and writing `next` were previously two separate, unlocked
     // queries: two concurrent transitions on the same step could both read the same
@@ -123,18 +126,24 @@ export class WorkflowService {
     // a row lock for the transaction, so a second concurrent call blocks until the first
     // commits and then reads its already-updated state, serializing transitions on the
     // same (project_id, step_id) without changing the transition logic above.
-    const client = await getPool().connect();
+    const client = transactionClient ?? await getPool().connect();
+    const ownsTransaction = !transactionClient;
     let current: StepLifecycleState;
     let next: StepLifecycleState;
     const now = new Date().toISOString();
     try {
-      await client.query('BEGIN');
+      if (ownsTransaction) await client.query('BEGIN');
+
+      const { rows: stepRows } = await client.query(
+        `select 1 from workflow_steps where step_id=$1`,
+        [stepId],
+      );
+      if (stepRows.length === 0) throw new BadRequestException('Unknown stepId');
       const { rows } = await client.query(
         `select state from workflow_step_state where project_id=$1 and step_id=$2 for update`,
         [projectId, stepId],
       );
       if (rows.length === 0) {
-        await client.query('ROLLBACK');
         throw new NotFoundException('Workflow state not initialized for project');
       }
       current = rows[0].state;
@@ -147,7 +156,6 @@ export class WorkflowService {
           [projectId, docType],
         );
         if (art.length > 0 && action !== 'finalize' && action !== 'request_changes') {
-          await client.query('ROLLBACK');
           throw new BadRequestException(`${docType} workflow is locked because a finalized artifact exists`);
         }
       }
@@ -168,21 +176,84 @@ export class WorkflowService {
         stepId,
         type: 'workflow.transition',
         message: `Changed ${stepId} from ${current} to ${next}`,
-        actor: actor ?? null,
-        actorUserId: actor?.userId ?? dto.actorUserId ?? null,
+        actor: actor ?? { name: 'System' },
         entityType: 'workflow_step',
         entityId: stepId,
         entityLabel: stepId,
         metadata: { action, from: current, to: next, reason: reason ?? null },
       }, client);
 
+      if (ownsTransaction) await client.query('COMMIT');
+    } catch (err) {
+      if (ownsTransaction) await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      if (ownsTransaction) client.release();
+    }
+    return { projectId, stepId, from: current, to: next, ts: now };
+  }
+
+  async forceSynopsis(projectId: string, actor: AuditActor) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `select state from workflow_step_state
+         where project_id = $1 and step_id = 'synopsis'
+         for update`,
+        [projectId],
+      );
+
+      if (rows.length === 0) {
+        await client.query(
+          `insert into workflow_step_state (project_id, step_id, state, updated_at)
+           values ($1, 'synopsis', 'approved', now())`,
+          [projectId],
+        );
+        await this.audit.record({
+          projectId,
+          stepId: 'synopsis',
+          type: 'workflow.bypass',
+          message: 'Created and approved the Synopsis step using the admin bypass',
+          actor,
+          entityType: 'workflow_step',
+          entityId: 'synopsis',
+          entityLabel: 'Synopsis',
+          metadata: { previousState: null, nextState: 'approved' },
+        }, client);
+        await client.query('COMMIT');
+        return { ok: true, message: 'Synopsis step inserted and set to approved' };
+      }
+
+      const currentState = rows[0].state;
+      if (['approved', 'signed', 'final'].includes(currentState)) {
+        await client.query('ROLLBACK');
+        return { ok: true, message: 'Synopsis already advanced' };
+      }
+
+      await client.query(
+        `update workflow_step_state set state = 'approved', updated_at = now()
+         where project_id = $1 and step_id = 'synopsis'`,
+        [projectId],
+      );
+      await this.audit.record({
+        projectId,
+        stepId: 'synopsis',
+        type: 'workflow.bypass',
+        message: 'Synopsis step forced to approved via admin bypass',
+        actor,
+        entityType: 'workflow_step',
+        entityId: 'synopsis',
+        entityLabel: 'Synopsis',
+        metadata: { previousState: currentState, nextState: 'approved' },
+      }, client);
       await client.query('COMMIT');
+      return { ok: true, message: 'Synopsis step forced to approved' };
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
       client.release();
     }
-    return { projectId, stepId, from: current, to: next, ts: now };
   }
 }

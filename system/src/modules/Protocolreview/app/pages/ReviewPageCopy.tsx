@@ -188,7 +188,6 @@ export default function ReviewPageCopy() {
       status: 'open' as const,
     };
     const sectionId = activeSection;
-    const sectionTitle = sections.find((s) => s.id === sectionId)?.title || sectionId;
 
     // Optimistic update: append comment to the matching protocol section so
     // reviewerComments (derived from protocol) reflects it immediately.
@@ -207,32 +206,6 @@ export default function ReviewPageCopy() {
       return updated;
     });
 
-    // Audit trail entry
-    try {
-      const commentTypeLabel =
-        type === 'general' ? 'General Comment'
-        : type === 'issue' ? 'Issue'
-        : 'Approval Request';
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'comment.added',
-          message: `${commentTypeLabel} added to section: ${sectionTitle}`,
-          stepId: 'protocol-review',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({
-            sectionId,
-            sectionTitle,
-            commentType: commentTypeLabel,
-            commentText: content,
-            author: currentUser,
-          }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   // ── Add Reply ─────────────────────────────────────────────────────────────
@@ -247,13 +220,6 @@ export default function ReviewPageCopy() {
       content: replyText,
       status: 'open' as const,
     };
-
-    // Find the original comment content for the audit message
-    let originalCommentContent = '';
-    protocol?.sections?.forEach((s: any) => {
-      const c = (s.comments || []).find((c: any) => c.id === commentId);
-      if (c) originalCommentContent = c.content || '';
-    });
 
     // Optimistic update: append reply into the matching comment's replies array
     setProtocol((prev: any) => {
@@ -276,24 +242,6 @@ export default function ReviewPageCopy() {
       return updated;
     });
 
-    // Audit trail entry
-    fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'comment.reply.added',
-        message: `Reply added to comment in Protocol Review: ${replyText}`,
-        stepId: 'protocol-review',
-        actorUserId: currentUser,
-        metadataJson: JSON.stringify({
-          commentId,
-          replyText,
-          originalComment: originalCommentContent,
-          author: currentUser,
-          timestamp: now,
-        }),
-      }),
-    }).catch(() => {});
   };
 
   // ── Event handlers ────────────────────────────────────────────────────────
@@ -316,48 +264,18 @@ export default function ReviewPageCopy() {
       prev.map((finding) => {
         if (finding.id !== findingId) return finding;
 
-        const updatedFinding = {
+        return {
           ...finding,
           acceptedRisk: true,
           acceptedBy: currentUser,
           acceptedAt: new Date(),
         };
-
-        // Audit log
-        if (projectId) {
-          fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: 'risk.accepted',
-              message: `${finding.severity === 'blocker' ? 'Blocker' : 'Warning'} risk accepted by ${currentUser}: ${finding.description}`,
-              stepId: 'protocol-review',
-              actorUserId: currentUser,
-              metadataJson: JSON.stringify({ findingId: finding.id, severity: finding.severity, description: finding.description, sectionId: finding.sectionId }),
-            }),
-          }).catch(() => {});
-        }
-
-        return updatedFinding;
       }),
     );
   };
 
   const handleApproveReport = async (reason: string) => {
     if (!projectId) return;
-
-    // Audit log (fire-and-forget)
-    fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'protocol.approved',
-        message: `Protocol approved: ${reason}`,
-        stepId: 'protocol-review',
-        actorUserId: currentUser,
-        metadataJson: JSON.stringify({ reason, approvedBy: currentUser, approvedAt: new Date().toISOString() }),
-      }),
-    }).catch(() => {});
 
     // Only navigate once the transition actually succeeded — silently proceeding on
     // failure previously masked every role-mismatch/state error as a false success.
@@ -383,19 +301,6 @@ export default function ReviewPageCopy() {
 
   const handleRequestChanges = async (reason: string) => {
     if (!projectId) return;
-
-    // Audit log (fire-and-forget)
-    fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'changes.requested',
-        message: `Changes requested: ${reason}`,
-        stepId: 'protocol-review',
-        actorUserId: currentUser,
-        metadataJson: JSON.stringify({ reason, requestedBy: currentUser, requestedAt: new Date().toISOString() }),
-      }),
-    }).catch(() => {});
 
     // Only navigate once the transition actually succeeded (see handleApproveReport).
     try {

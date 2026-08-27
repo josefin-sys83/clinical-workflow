@@ -314,28 +314,6 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
       return updated;
     });
-    try {
-      const section = protocol?.sections?.find((s: any) => s.id === sectionId);
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'note',
-          message: `Comment added to section: ${section?.title || sectionId}`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({
-            sectionId,
-            sectionTitle: section?.title || sectionId,
-            commentType: type === 'general' ? 'General' : type === 'issue' ? 'Issue' : 'Approval',
-            commentText: content,
-            author: currentUser,
-          }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   const handleResolveComment = async (sectionId: string, commentId: string) => {
@@ -362,27 +340,10 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
       return updated;
     });
-    try {
-      const section = protocol?.sections?.find((s: any) => s.id === sectionId);
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'note',
-          message: `Comment resolved in section: ${section?.title || sectionId}`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title || sectionId, commentId }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   const handleApproveSection = async (sectionId: string, comment: string) => {
     const now = new Date().toISOString();
-    const section = protocol?.sections?.find((s: any) => s.id === sectionId);
     setProtocol((prev: any) => {
       if (!prev) return prev;
       const updatedSections = prev.sections.map((s: any) =>
@@ -398,25 +359,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
       return updated;
     });
-    try {
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'section.approved',
-          message: `Section "${section?.title || sectionId}" approved by ${currentUser}`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, approvedAt: now, comment: comment || '' }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   const handleUnlockSection = async (sectionId: string, reason: string) => {
-    const section = protocol?.sections?.find((s: any) => s.id === sectionId);
     setProtocol((prev: any) => {
       if (!prev) return prev;
       const updatedSections = prev.sections.map((s: any) =>
@@ -432,21 +377,6 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
       return updated;
     });
-    try {
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'section.unlocked',
-          message: `Section "${section?.title || sectionId}" unlocked by ${currentUser}`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({ sectionId, sectionTitle: section?.title, reason }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   const handleWontFix = async (sectionId: string, issueId: string, comment: string) => {
@@ -474,22 +404,6 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
       return updated;
     });
-    // Create audit trail entry
-    try {
-      await fetch(`${apiBase}/api/projects/${projectId}/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'note',
-          message: `Issue marked as Won't Fix: ${issue.subsection}`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({ issueId, comment, sectionId, sectionTitle: currentSection?.title || sectionId, issueDescription })
-        })
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   const handleCreateAmendment = async (data: { title: string; reason: string; description: string; affectedProtocolSections: string[] }) => {
@@ -678,40 +592,10 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       note: `Protocol review cycle ${nextCycle} started by ${currentUser}`,
     });
 
-    try {
-      await fetch(apiBase + '/api/projects/' + projectId + '/audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'lifecycle_transition',
-          message: `Protocol review cycle ${nextCycle} started`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({ reviewCycle: nextCycle, startedBy: currentUser }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   const handleExitReview = async () => {
     setIsReviewMode(false);
-    try {
-      await fetch(apiBase + '/api/projects/' + projectId + '/audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'lifecycle_transition',
-          message: `Protocol review cycle ${reviewCycle} exited`,
-          stepId: 'protocol-make',
-          actorUserId: currentUser,
-          metadataJson: JSON.stringify({ reviewCycle, exitedBy: currentUser }),
-        }),
-      });
-    } catch (e) {
-      console.error('Audit trail entry failed', e);
-    }
   };
 
   // Calculate review readiness metrics
@@ -1229,7 +1113,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       message: protocolSections.every((s: any) => s.approvalStatus === 'approved')
                         ? 'All sections approved'
                         : `${protocolSections.filter((s: any) => s.approvalStatus === 'approved').length} of ${protocolSections.length} sections approved`,
-                      details: protocolSections.every(s => s.approvalStatus === 'approved')
+                      details: protocolSections.every((s:any) => s.approvalStatus === 'approved')
                         ? undefined
                         : protocolSections.filter((s: any) => s.approvalStatus !== 'approved').map((s: any) => s.title).join(', '),
                     },

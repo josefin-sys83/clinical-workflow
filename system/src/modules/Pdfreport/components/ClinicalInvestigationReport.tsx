@@ -3,7 +3,6 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
-import { createProjectAuditEvent } from '@/shared/services/auditService';
 import { Info, X, FileDown, Lock, CheckCircle2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -239,16 +238,14 @@ export function ClinicalInvestigationReport() {
     if (!requestChangesComment.trim()) return;
     setRequestChangesSubmitting(true);
     try {
-      await createProjectAuditEvent({
-        projectId: projectId!,
-        domain: 'report',
-        stepId: 'report-pdf',
-        type: 'changes_requested',
-        summary: `Request Changes: ${requestChangesComment.trim()}`,
-      });
       // 'draft' isn't a valid transition target (stateNameToAction() has no mapping for
       // it) — 'blocked' is the correct "sent back for changes" state.
-      await advanceWorkflowStep({ projectId: projectId!, stepId: 'report-pdf', to: 'blocked' });
+      await advanceWorkflowStep({
+        projectId: projectId!,
+        stepId: 'report-pdf',
+        to: 'blocked',
+        note: requestChangesComment.trim(),
+      });
       window.location.href = window.location.pathname.split('/workflow/')[0] + '/workflow/report/review';
     } catch (e) {
       if (e instanceof WorkflowStepBlockedError) {

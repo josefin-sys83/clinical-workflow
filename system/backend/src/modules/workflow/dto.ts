@@ -31,10 +31,6 @@ export class TransitionDto {
   @MaxLength(2000)
   note?: string;
 
-  @ApiProperty({ required: false, description: 'Optional actor user id (for audit)' })
-  @IsOptional()
-  @IsString()
-  actorUserId?: string;
 }
 
 // Shape returned to the frontend: { projectId, steps: { [stepId]: { state, updatedAt } } }

@@ -3,7 +3,6 @@ import { useState, useEffect } from 'react';
 import { Lock, Info, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
-import { createProjectAuditEvent } from '@/shared/services/auditService';
 
 // ─── Inline document styles (A4 paper layout preserved for print/PDF) ─────────
 
@@ -290,14 +289,12 @@ export function ProtocolDocument() {
     if (!requestChangesComment.trim()) return;
     setRequestChangesSubmitting(true);
     try {
-      await createProjectAuditEvent({
+      await advanceWorkflowStep({
         projectId: projectId!,
-        domain: 'protocol',
         stepId: 'protocol-pdf',
-        type: 'changes_requested',
-        summary: `Request Changes: ${requestChangesComment.trim()}`,
+        to: 'blocked',
+        note: requestChangesComment.trim(),
       });
-      await advanceWorkflowStep({ projectId: projectId!, stepId: 'protocol-pdf', to: 'blocked' });
       navigate(`/projects/${projectId}/workflow/protocol/make`);
     } catch (e) {
       if (e instanceof WorkflowStepBlockedError) {

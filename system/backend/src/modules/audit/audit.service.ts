@@ -2,12 +2,12 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
-import { CreateAuditEventDto } from './dto';
 
 export type AuditScope = 'system' | 'company' | 'project';
 
 export type AuditActor = {
   userId?: string | null;
+  companyId?: string | null;
   name?: string | null;
   email?: string | null;
   role?: string | null;
@@ -48,8 +48,6 @@ export type RecordAuditEvent = {
   entityId?: string | null;
   entityLabel?: string | null;
   actor?: AuditActor | null;
-  /** Legacy input used by existing project/document call sites. */
-  actorUserId?: string | null;
   metadata?: any;
 };
 
@@ -188,25 +186,13 @@ export class AuditService {
     return rows;
   }
 
-  async create(projectId: string, dto: CreateAuditEventDto, actor?: AuditActor | null) {
-    const metadata = dto.metadataJson ? safeJsonParse(dto.metadataJson) : null;
-    return this.record({
-      projectId,
-      stepId: dto.stepId ?? null,
-      type: dto.type,
-      message: dto.message,
-      actor: actor ?? null,
-      actorUserId: actor?.userId ?? dto.actorUserId ?? null,
-      metadata,
-    });
-  }
-
   /**
-   * Insert one immutable audit event. Pass the business operation's PoolClient when
-   * possible so the state change and its audit evidence commit or roll back together.
+   * Insert one immutable audit event using the business operation's transaction.
+   * Requiring the PoolClient prevents a state change from committing without its audit
+   * evidence (or an audit event from surviving a rolled-back state change).
    */
-  async record(args: RecordAuditEvent, client?: PoolClient): Promise<AuditEvent> {
-    const db: any = client ?? getPool();
+  async record(args: RecordAuditEvent, client: PoolClient): Promise<AuditEvent> {
+    const db = client;
     const id = randomUUID();
     const now = new Date().toISOString();
 
@@ -238,7 +224,7 @@ export class AuditService {
       companyName = rows[0]?.name ?? null;
     }
 
-    const suppliedActorId = args.actor?.userId ?? args.actorUserId ?? null;
+    const suppliedActorId = args.actor?.userId ?? null;
     let actorName = args.actor?.name ?? null;
     let actorEmail = args.actor?.email ?? null;
     let actorRole = args.actor?.role
@@ -257,10 +243,6 @@ export class AuditService {
         actorName = user.name;
         actorEmail = user.email;
         actorRole = user.role;
-      } else if (!actorName && suppliedActorId !== 'unknown') {
-        const parsed = parseLegacyActor(suppliedActorId);
-        actorName = parsed.name;
-        actorRole = actorRole ?? parsed.role ?? null;
       }
     }
     if (suppliedActorId === 'system') actorName = actorName ?? 'System';
@@ -319,13 +301,6 @@ export class AuditService {
   }
 }
 
-function parseLegacyActor(value: string): { name: string; role?: string } {
-  const match = value.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-  return match
-    ? { name: match[1].trim(), role: match[2].trim() }
-    : { name: value };
-}
-
 function inferEntityType(type: string, hasProject: boolean, hasCompany: boolean): string {
   const root = type.split('.')[0];
   const aliases: Record<string, string> = {
@@ -348,13 +323,4 @@ function inferEntityType(type: string, hasProject: boolean, hasCompany: boolean)
     project: 'project',
   };
   return aliases[root] ?? (hasProject ? 'project' : hasCompany ? 'company' : 'system');
-}
-
-function safeJsonParse(s: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(s);
-    return parsed && typeof parsed === 'object' ? parsed : { value: parsed };
-  } catch {
-    return { raw: s };
-  }
 }

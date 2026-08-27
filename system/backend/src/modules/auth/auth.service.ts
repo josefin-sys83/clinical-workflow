@@ -24,7 +24,10 @@ export class AuthService {
   ) {}
 
   async login(email: string, password: string) {
-    const { rows } = await getPool().query<{
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query<{
       id: string;
       name: string;
       email: string;
@@ -44,32 +47,32 @@ export class AuthService {
       [email],
     );
 
-    const user = rows[0];
+      const user = rows[0];
 
     // Always run exactly one bcrypt comparison — against the real hash for an existing,
     // active account, or against DUMMY_PASSWORD_HASH otherwise — before branching on
     // whether the account exists or the password matched. See DUMMY_PASSWORD_HASH comment
     // above for why this can't be skipped for nonexistent/inactive accounts.
     const hashToCompare = user?.is_active ? user.password_hash : DUMMY_PASSWORD_HASH;
-    const { rows: matchRows } = await getPool().query<{ matches: boolean }>(
+      const { rows: matchRows } = await client.query<{ matches: boolean }>(
       `select ($1 = crypt($2, $1)) as matches`,
       [hashToCompare, password],
     );
     const passwordMatches = matchRows[0]?.matches ?? false;
 
-    if (!user || !user.is_active || !passwordMatches) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
+      if (!user || !user.is_active || !passwordMatches) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
 
     // A suspended company's users are locked out entirely (superadmins bypass this,
     // since their company_id is incidental, not the account they're acting on behalf of).
-    if (!user.is_superadmin && user.company_status === 'suspended') {
-      throw new UnauthorizedException('Your organisation account is suspended. Contact your administrator.');
-    }
+      if (!user.is_superadmin && user.company_status === 'suspended') {
+        throw new UnauthorizedException('Your organisation account is suspended. Contact your administrator.');
+      }
 
     // Touch last_active_at for the company on every login
     if (user.company_id) {
-      await getPool().query(
+      await client.query(
         `update companies set last_active_at = now() where id = $1`,
         [user.company_id],
       );
@@ -86,7 +89,7 @@ export class AuthService {
       { subject: user.id },
     );
 
-    await this.audit.record({
+      await this.audit.record({
       companyId: user.company_id,
       scope: user.company_id ? 'company' : 'system',
       type: 'auth.login.succeeded',
@@ -102,9 +105,11 @@ export class AuthService {
         isSuperadmin: user.is_superadmin,
       },
       metadata: {},
-    });
+      }, client);
 
-    return {
+      await client.query('COMMIT');
+
+      return {
       access_token,
       token_type: 'Bearer',
       user: {
@@ -115,7 +120,13 @@ export class AuthService {
         is_superadmin: user.is_superadmin,
         must_reset_password: user.must_reset_password,
       },
-    };
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   me(user: { userId: string; name: string; roles: Role[]; companyId?: string; mustResetPassword?: boolean }) {
@@ -133,18 +144,28 @@ export class AuthService {
     exp: number,
     actor: { userId: string; name: string; companyId?: string | null; roles?: string[]; isSuperadmin?: boolean },
   ) {
-    await revokeToken(jti, exp);
-    await this.audit.record({
-      companyId: actor.companyId ?? null,
-      scope: actor.companyId ? 'company' : 'system',
-      type: 'auth.logout',
-      message: `${actor.name} signed out`,
-      entityType: 'user',
-      entityId: actor.userId,
-      entityLabel: actor.name,
-      actor,
-      metadata: {},
-    });
-    return { ok: true };
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await revokeToken(jti, exp, client);
+      await this.audit.record({
+        companyId: actor.companyId ?? null,
+        scope: actor.companyId ? 'company' : 'system',
+        type: 'auth.logout',
+        message: `${actor.name} signed out`,
+        entityType: 'user',
+        entityId: actor.userId,
+        entityLabel: actor.name,
+        actor,
+        metadata: {},
+      }, client);
+      await client.query('COMMIT');
+      return { ok: true };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }

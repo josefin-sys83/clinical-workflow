@@ -2,7 +2,6 @@ import PdfProtocolApp from '@/modules/Pdfprotokoll/App';
 import { useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
-import { createProjectAuditEvent } from '@/shared/services/auditService';
 
 export default function PdfProtocol() {
   const { projectId } = useParams();
@@ -13,7 +12,6 @@ export default function PdfProtocol() {
       // Drives protocol-pdf's own lifecycle through every stage the backend now
       // requires before 'final' — each intermediate call is a no-op if already past it.
       await advanceWorkflowStep({ projectId, stepId: 'protocol-pdf', to: 'final', note: 'Viewed Protocol PDF' });
-      await createProjectAuditEvent({ projectId, domain: 'protocol', stepId: 'protocol-pdf', type: 'viewed', summary: 'Viewed Protocol PDF' });
     })();
   }, [projectId]);
 

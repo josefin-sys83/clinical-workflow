@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException,
 import { randomBytes } from 'crypto';
 import { getPool } from '../../db/pg';
 import { EmailService } from '../email/email.service';
+import { AuditService, type AuditActor } from '../audit/audit.service';
 
 const STEP_ORDER = [
   'project-setup', 'synopsis', 'scope',
@@ -21,7 +22,10 @@ function deriveCurrentStep(data: any): string {
 
 @Injectable()
 export class SettingsService {
-  constructor(private readonly email: EmailService) {}
+  constructor(
+    private readonly email: EmailService,
+    private readonly audit: AuditService,
+  ) {}
 
   async getProfile(userId: string) {
     const { rows } = await getPool().query(
@@ -36,32 +40,73 @@ export class SettingsService {
     return rows[0];
   }
 
-  async updateProfile(userId: string, name: string, timezone: string) {
+  async updateProfile(userId: string, name: string, timezone: string, actor: AuditActor) {
     if (!name?.trim()) throw new BadRequestException('Name is required');
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update users set name = $1, timezone = $2, updated_at = now()
        where id = $3 returning id, name, timezone`,
       [name.trim(), timezone, userId],
     );
-    if (!rows[0]) throw new NotFoundException('User not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('User not found');
+      const profile = rows[0];
+      await this.audit.record({
+        companyId: actor.companyId ?? null,
+        type: 'profile.updated',
+        message: `${profile.name} updated their profile`,
+        entityType: 'user',
+        entityId: userId,
+        entityLabel: profile.name,
+        actor,
+        metadata: { timezone: profile.timezone },
+      }, client);
+      await client.query('COMMIT');
+      return profile;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+  async changePassword(userId: string, currentPassword: string, newPassword: string, actor: AuditActor) {
     if (!newPassword || newPassword.length < 6) {
       throw new BadRequestException('New password must be at least 6 characters');
     }
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `select id from users where id = $1 and password_hash = crypt($2, password_hash)`,
       [userId, currentPassword],
     );
-    if (!rows[0]) throw new UnauthorizedException('Current password is incorrect');
-    await getPool().query(
+      if (!rows[0]) throw new UnauthorizedException('Current password is incorrect');
+      await client.query(
       `update users set password_hash = crypt($1, gen_salt('bf', 10)), must_reset_password = false, updated_at = now()
        where id = $2`,
       [newPassword, userId],
     );
-    return { ok: true };
+      await this.audit.record({
+        companyId: actor.companyId ?? null,
+        type: 'password.changed',
+        message: `${actor.name ?? 'User'} changed their password`,
+        entityType: 'user',
+        entityId: userId,
+        entityLabel: actor.name ?? 'User',
+        actor,
+        metadata: {},
+      }, client);
+      await client.query('COMMIT');
+      return { ok: true };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async getCompanyUserDirectory(companyId: string) {
@@ -119,17 +164,38 @@ export class SettingsService {
     return { users: ur.rows, projects };
   }
 
-  async inviteUser(companyId: string, name: string, email: string, systemRole: string) {
+  async inviteUser(companyId: string, name: string, email: string, systemRole: string, actor: AuditActor) {
     if (systemRole !== 'admin' && systemRole !== 'member') throw new BadRequestException('Invalid role');
     const dbRole = systemRole === 'admin' ? 'admin' : 'author';
     const tempPassword = randomBytes(12).toString('base64url');
-    const { rows } = await getPool().query(
-      `insert into users (company_id, name, email, password_hash, system_role, must_reset_password)
-       values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5, true)
-       returning id, name, email, system_role, is_active, created_at`,
-      [companyId, name, email, tempPassword, dbRole],
-    );
-    const user = rows[0];
+    const client = await getPool().connect();
+    let user: any;
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `insert into users (company_id, name, email, password_hash, system_role, must_reset_password)
+         values ($1, $2, $3, crypt($4, gen_salt('bf', 10)), $5, true)
+         returning id, name, email, system_role, is_active, created_at`,
+        [companyId, name, email, tempPassword, dbRole],
+      );
+      user = rows[0];
+      await this.audit.record({
+        companyId,
+        type: 'user.invited',
+        message: `Invited ${user.name} to the company`,
+        entityType: 'user',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { email: user.email, role: user.system_role },
+      }, client);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
 
     const emailSent = await this.email.send(
       email,
@@ -144,31 +210,73 @@ export class SettingsService {
     return { ...user, accountCreated: true, emailSent };
   }
 
-  async setUserRole(companyId: string, userId: string, systemRole: string) {
+  async setUserRole(companyId: string, userId: string, systemRole: string, actor: AuditActor) {
     if (systemRole !== 'admin' && systemRole !== 'member') throw new BadRequestException('Invalid role');
     const dbRole = systemRole === 'admin' ? 'admin' : 'author';
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update users set system_role = $1, updated_at = now()
        where id = $2 and company_id = $3
        returning id, name, email, system_role, is_active`,
       [dbRole, userId, companyId],
     );
-    if (!rows[0]) throw new NotFoundException('User not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('User not found');
+      const user = rows[0];
+      await this.audit.record({
+        companyId,
+        type: 'user.role.changed',
+        message: `Changed ${user.name}'s role to ${user.system_role}`,
+        entityType: 'user',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { role: user.system_role },
+      }, client);
+      await client.query('COMMIT');
+      return user;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  async setUserActive(companyId: string, userId: string, isActive: boolean, requesterId: string) {
+  async setUserActive(companyId: string, userId: string, isActive: boolean, requesterId: string, actor: AuditActor) {
     if (!isActive && userId === requesterId) {
       throw new ForbiddenException('You cannot deactivate your own account');
     }
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `update users set is_active = $1, updated_at = now()
        where id = $2 and company_id = $3
        returning id, name, email, system_role, is_active`,
       [isActive, userId, companyId],
     );
-    if (!rows[0]) throw new NotFoundException('User not found');
-    return rows[0];
+      if (!rows[0]) throw new NotFoundException('User not found');
+      const user = rows[0];
+      await this.audit.record({
+        companyId,
+        type: 'user.status.changed',
+        message: `${user.name}'s account was ${user.is_active ? 'activated' : 'deactivated'}`,
+        entityType: 'user',
+        entityId: user.id,
+        entityLabel: user.name,
+        actor,
+        metadata: { active: user.is_active },
+      }, client);
+      await client.query('COMMIT');
+      return user;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async createSupportTicket(
@@ -177,17 +285,39 @@ export class SettingsService {
     category: string,
     subject: string,
     message: string,
+    actor: AuditActor,
   ) {
     const valid = ['Subscription', 'Technical issue', 'General question'];
     if (!valid.includes(category)) throw new BadRequestException('Invalid category');
     if (!subject?.trim()) throw new BadRequestException('Subject is required');
     if (!message?.trim()) throw new BadRequestException('Message is required');
-    const { rows } = await getPool().query(
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
       `insert into support_tickets (user_id, company_id, category, subject, message)
        values ($1, $2, $3, $4, $5)
        returning id, category, subject, status, created_at`,
       [userId, companyId ?? null, category, subject.trim(), message.trim()],
     );
-    return rows[0];
+      const ticket = rows[0];
+      await this.audit.record({
+        companyId,
+        type: 'support.ticket.created',
+        message: `Created support ticket: ${ticket.subject}`,
+        entityType: 'support_ticket',
+        entityId: ticket.id,
+        entityLabel: ticket.subject,
+        actor,
+        metadata: { category: ticket.category, status: ticket.status },
+      }, client);
+      await client.query('COMMIT');
+      return ticket;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }
