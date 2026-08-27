@@ -4,6 +4,7 @@ import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
+import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -295,6 +296,8 @@ export function Gate1() {
 
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
+  // to Prevent the autosave effect from writing the initial empty state before the
+  const [scopeLoaded, setScopeLoaded] = useState(false);
 
   // Derive consequences when scope changes
   const consequences = useMemo(() => {
@@ -381,13 +384,17 @@ export function Gate1() {
     setGeneratingRequirements(true);
     try {
       const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
-      const targetMarkets = project.data?.projectData?.targetMarkets?.join(', ') || '';
+      const targetMarkets = Array.isArray(project.targetMarkets)
+        ? project.targetMarkets.join(', ')
+        : '';
       const synopsisText = project.data?.synopsis?.extractedText
         ? project.data.synopsis.extractedText.slice(0, 3000)
         : project.data?.synopsis?.uploadedFileName
           ? 'Synopsis uploaded: ' + project.data.synopsis.uploadedFileName
           : '';
-      const effectiveIntendedUse = intendedUse === 'other-custom' ? customIntendedUse : intendedUse;
+      const effectiveIntendedUse = intendedUse === 'other-custom'
+        ? customIntendedUse
+        : intendedUseLabel(intendedUse);
 
       const deviceTypeContext = ['samd', 'simd', 'ai-ml'].includes(deviceCategory)
         ? 'This is a Software as a Medical Device (SaMD) or AI/ML device. Apply IMDRF N41 SaMD framework. For EU: EU MDR Rule 11 classification. For US: FDA De Novo or PMA pathway (NOT 510k unless predicate exists). Required: algorithm validation, GMLP compliance, cybersecurity, IEC 62304 software lifecycle, real-world performance monitoring.'
@@ -467,15 +474,46 @@ Return ONLY a JSON array, no markdown:
 
   // Ladda scope-data från backend
   useEffect(() => {
+    if (!projectId) return;
+    setScopeLoaded(false);
     fetch(`${apiBase}/api/projects/${projectId}`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Failed to load project (${r.status})`);
+        return r.json();
+      })
       .then(async project => {
         const s = project.data?.scope ?? {};
 
-        const normalizedCategory = s.deviceCategory === 'SaMD' ? 'samd' : s.deviceCategory === 'AIMD' ? 'aimd' : s.deviceCategory === 'IVD' ? 'ivd' : s.deviceCategory;
-        if (normalizedCategory) setDeviceCategory(normalizedCategory);
-        if (s.intendedUse) setIntendedUse(s.intendedUse);
-        if (s.customIntendedUse) setCustomIntendedUse(s.customIntendedUse);
+        const normalizeDeviceCategory = (value: unknown): string => {
+          if (typeof value !== 'string' || !value.trim()) return '';
+          const category = value.trim();
+          if (category === 'SaMD' || category === 'Software') return 'samd';
+          if (category === 'AIMD') return 'aimd';
+          if (category === 'IVD') return 'ivd';
+          return category.toLowerCase();
+        };
+
+        // Project Setup is authoritative. Legacy Scope values remain a fallback for
+        // projects saved before these fields were synchronized.
+        const savedCategory = normalizeDeviceCategory(s.deviceCategory);
+        const setupCategory = normalizeDeviceCategory(project.deviceCategory);
+        const effectiveCategory = setupCategory || savedCategory;
+        if (effectiveCategory) setDeviceCategory(effectiveCategory);
+        const savedIntendedUse = normalizeStoredIntendedUse(
+          s.intendedUse,
+          s.customIntendedUse,
+        );
+        const setupIntendedUse = normalizeStoredIntendedUse(
+          project.data?.projectData?.intendedUse,
+          project.data?.projectData?.customIntendedUse,
+        );
+        const effectiveIntendedUse = setupIntendedUse.intendedUse
+          ? setupIntendedUse
+          : savedIntendedUse;
+        if (effectiveIntendedUse.intendedUse) {
+          setIntendedUse(effectiveIntendedUse.intendedUse);
+          setCustomIntendedUse(effectiveIntendedUse.customIntendedUse);
+        }
         if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
         const savedRequirements: Requirement[] = Array.isArray(s.requirements) ? s.requirements : [];
         if (savedRequirements.length > 0 || s.scopeConfirmed) {
@@ -488,23 +526,15 @@ Return ONLY a JSON array, no markdown:
             setRequirements(savedRequirements);
           }
         }
-        // Pre-populate from projectData if scope not yet saved
-        if (!s.deviceCategory && project.data?.projectData?.deviceCategory) {
-          setDeviceCategory(project.data.projectData.deviceCategory);
-        }
-        if (!s.intendedUse && project.data?.projectData?.intendedUse) {
-          setIntendedUse('other-custom');
-          setCustomIntendedUse(project.data.projectData.intendedUse);
-        }
         // Seed originals once so consequence diff is against the DB state
-        setOriginalDeviceCategory(s.deviceCategory ?? null);
+        setOriginalDeviceCategory(effectiveCategory || null);
         setOriginalRequirements(s.requirements ?? []);
 
         // Auto-derive device category + intended use from synopsis when either is still missing.
         // Note: a free-text intended use entered during project setup gets mapped to 'other-custom'
         // above, which would otherwise permanently block this from ever running for those projects.
-        const hasCategory = normalizedCategory || project.data?.projectData?.deviceCategory;
-        const hasIntendedUse = s.intendedUse || project.data?.projectData?.intendedUse;
+        const hasCategory = Boolean(effectiveCategory);
+        const hasIntendedUse = Boolean(effectiveIntendedUse.intendedUse);
         const hasSynopsis = !!project.data?.synopsis?.extractedText;
         if ((!hasCategory || !hasIntendedUse) && hasSynopsis && !s.scopeConfirmed) {
           setGeneratingRequirements(true);
@@ -513,31 +543,40 @@ Return ONLY a JSON array, no markdown:
             const derived = await res.json();
             console.log('[derive-scope] response:', derived);
             if (!hasCategory && derived.deviceCategory) setDeviceCategory(derived.deviceCategory);
-            if (!hasIntendedUse && derived.intendedUse) setIntendedUse(derived.intendedUse);
+            if (!hasIntendedUse && derived.intendedUse) {
+              const normalizedDerivedUse = normalizeStoredIntendedUse(derived.intendedUse);
+              setIntendedUse(normalizedDerivedUse.intendedUse);
+              setCustomIntendedUse(normalizedDerivedUse.customIntendedUse);
+            }
           } catch { /* non-fatal */ } finally {
             setGeneratingRequirements(false);
           }
         }
+        setScopeLoaded(true);
       })
-      .catch(() => {});
+      .catch(error => {
+        console.error('Failed to load project scope data', error);
+      });
   }, [projectId]);
 
   // Spara scope-data till backend automatiskt
   useEffect(() => {
-    if (isScopeLocked) return;
+    if (isScopeLocked || !scopeLoaded) return;
     const timer = setTimeout(() => {
       fetch(`${apiBase}/api/projects/${projectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          deviceCategory,
           data: {
+            projectData: { intendedUse, customIntendedUse },
             scope: { deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements }
           }
         })
       }).catch(() => {});
     }, 1000);
     return () => clearTimeout(timer);
-  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, isScopeLocked]);
+  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, isScopeLocked, scopeLoaded]);
 
   // Section 2: Requirements (default values loaded from backend or set below)
   // requirements useState moved above
@@ -889,57 +928,11 @@ Return ONLY a JSON array, no markdown:
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cardiovascular-support">
-                        Cardiovascular support
-                      </SelectItem>
-                      <SelectItem value="cardiac-rhythm">
-                        Cardiac rhythm management
-                      </SelectItem>
-                      <SelectItem value="orthopedic-reconstruction">
-                        Orthopedic reconstruction & joint replacement
-                      </SelectItem>
-                      <SelectItem value="trauma-fixation">
-                        Trauma & fixation
-                      </SelectItem>
-                      <SelectItem value="neurostimulation">
-                        Neurostimulation & neuromodulation
-                      </SelectItem>
-                      <SelectItem value="neurological-monitoring">
-                        Neurological monitoring & diagnostics
-                      </SelectItem>
-                      <SelectItem value="minimally-invasive">
-                        Minimally invasive / interventional procedures
-                      </SelectItem>
-                      <SelectItem value="surgical-instruments">
-                        Surgical instruments & systems
-                      </SelectItem>
-                      <SelectItem value="drug-delivery">
-                        Drug delivery systems
-                      </SelectItem>
-                      <SelectItem value="ivd">
-                        In vitro diagnostics (IVD)
-                      </SelectItem>
-                      <SelectItem value="physiological-monitoring">
-                        Physiological monitoring & diagnostics
-                      </SelectItem>
-                      <SelectItem value="samd">
-                        Software as a Medical Device (SaMD)
-                      </SelectItem>
-                      <SelectItem value="ai-enabled">
-                        AI-enabled medical device
-                      </SelectItem>
-                      <SelectItem value="ophthalmic">
-                        Ophthalmic devices
-                      </SelectItem>
-                      <SelectItem value="dental">
-                        Dental devices
-                      </SelectItem>
-                      <SelectItem value="respiratory">
-                        Respiratory & pulmonary support
-                      </SelectItem>
-                      <SelectItem value="other-custom">
-                        Other / Custom intended use
-                      </SelectItem>
+                      {INTENDED_USE_OPTIONS.map(option => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1.5">

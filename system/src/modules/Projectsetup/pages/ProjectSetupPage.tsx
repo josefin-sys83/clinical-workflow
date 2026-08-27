@@ -11,6 +11,7 @@ import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { getMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
+import { INTENDED_USE_OPTIONS, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { theme } from '@/app/theme';
 
 interface Role {
@@ -31,6 +32,7 @@ interface ProjectData {
   indication: string;
   deviceCategory: string;
   intendedUse: string;
+  customIntendedUse: string;
   targetMarkets: string[];
   risk: RiskClass | '';
   ethicsSubmissionTarget: string;
@@ -91,6 +93,7 @@ export function ProjectSetupPage() {
     indication: '',
     deviceCategory: '',
     intendedUse: '',
+    customIntendedUse: '',
     targetMarkets: [],
     risk: '',
     ethicsSubmissionTarget: '',
@@ -145,7 +148,6 @@ export function ProjectSetupPage() {
       .catch(() => setMarkets([]));
   }, []);
 
-  // Fetch dynamic requirements whenever risk, deviceCategory, or targetMarkets change
   useEffect(() => {
     const fetchRequirements = async () => {
       if (projectData.targetMarkets.length === 0 || !projectData.risk) {
@@ -198,7 +200,11 @@ export function ProjectSetupPage() {
   }, [roles]);
 
   useEffect(() => {
-    const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.risk !== '' && projectData.targetMarkets.length > 0;
+    const intendedUseComplete = projectData.intendedUse !== '' && (
+      projectData.intendedUse !== 'other-custom' ||
+      projectData.customIntendedUse.trim() !== ''
+    );
+    const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.deviceCategory !== '' && intendedUseComplete && projectData.risk !== '' && projectData.targetMarkets.length > 0;
     const rolesComplete = roles.every(role => role.status === 'assigned');
     setIsSetupComplete(identityComplete && rolesComplete);
   }, [projectData, roles]);
@@ -227,8 +233,12 @@ export function ProjectSetupPage() {
         let loadedRoles = roles;
         setProjectNumber(project.project_number || '');
         const pd = project.data?.projectData || {};
+        const storedIntendedUse = normalizeStoredIntendedUse(
+          pd.intendedUse,
+          pd.customIntendedUse,
+        );
 
-        // Relational fields come from their authoritative SQL columns/join tables.
+        // relational fields come from their authoritative SQL columns/join tables.
         // Only the non-relational setup details are read from JSONB.
         loadedProjectData = {
           projectName: project.name || '',
@@ -237,7 +247,8 @@ export function ProjectSetupPage() {
           risk: project.risk || '',
           indication: pd.indication || '',
           deviceCategory: project.deviceCategory || '',
-          intendedUse: pd.intendedUse || '',
+          intendedUse: storedIntendedUse.intendedUse,
+          customIntendedUse: storedIntendedUse.customIntendedUse,
           targetMarkets: project.targetMarkets || [],
           ethicsSubmissionTarget: pd.ethicsSubmissionTarget || pd.plannedStudyStart || '',
           firstPatientInTarget: pd.firstPatientInTarget || '',
@@ -537,8 +548,9 @@ export function ProjectSetupPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-6 col-span-2 mt-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Device Category</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Device Category <span className="text-rose-700">*</span></label>
                     <select
+                      required
                       value={projectData.deviceCategory}
                       onChange={(e) => handleInputChange('deviceCategory', e.target.value)}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
@@ -557,14 +569,39 @@ export function ProjectSetupPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Intended Use</label>
-                    <input
-                      type="text"
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Intended Use <span className="text-rose-700">*</span></label>
+                    <select
+                      required
                       value={projectData.intendedUse}
-                      onChange={(e) => handleInputChange('intendedUse', e.target.value)}
-                      placeholder="e.g. AI-assisted detection of diabetic retinopathy..."
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                    />
+                      onChange={(e) => {
+                        const selectedValue = e.target.value;
+                        setProjectData(prev => ({
+                          ...prev,
+                          intendedUse: selectedValue,
+                          customIntendedUse: selectedValue === 'other-custom'
+                            ? prev.customIntendedUse
+                            : '',
+                        }));
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+                    >
+                      <option value="">Select intended use...</option>
+                      {INTENDED_USE_OPTIONS.map(option => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    {projectData.intendedUse === 'other-custom' && (
+                      <input
+                        type="text"
+                        required
+                        value={projectData.customIntendedUse}
+                        onChange={(e) => handleInputChange('customIntendedUse', e.target.value)}
+                        placeholder="Describe the intended use and clinical context"
+                        className="w-full mt-2 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                      />
+                    )}
                   </div>
                 </div>
                 <div className="col-span-2">

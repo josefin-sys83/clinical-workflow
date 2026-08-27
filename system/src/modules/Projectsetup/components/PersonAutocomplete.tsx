@@ -61,7 +61,7 @@ export function PersonAutocomplete({
 
   const handleInputChange = (newValue: string) => {
     setInputValue(newValue);
-    setShowDropdown(newValue.length >= 2);
+    setShowDropdown(newValue.length >= 1);
     setFocusedIndex(-1);
 
     // Update the person object
@@ -126,7 +126,7 @@ export function PersonAutocomplete({
         value={inputValue}
         onChange={(e) => handleInputChange(e.target.value)}
         onFocus={() => {
-          if (inputValue.length >= 2) {
+          if (inputValue.length >= 1) {
             setShowDropdown(true);
           }
         }}
