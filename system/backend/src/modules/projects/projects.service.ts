@@ -8,6 +8,8 @@ import { getPool } from "../../db/pg";
 import { CreateProjectDto } from "./dto";
 import { AdminService } from "../admin/admin.service";
 import { sanitizeIncomingProjectData } from "../../common/sanitize-section-html";
+import { AuditService } from "../audit/audit.service";
+import type { AuditActor } from "../audit/audit.service";
 
 export type RiskClass = "I" | "IIa" | "IIb" | "III";
 
@@ -31,7 +33,10 @@ export type Project = {
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly audit: AuditService,
+  ) {}
 
   // Resolves the authenticated user's real name/email from the DB, so callers
   // that need a trustworthy identity (e.g. electronic signatures) never have
@@ -251,7 +256,11 @@ export class ProjectsService {
     }
   }
 
-  async create(dto: CreateProjectDto, companyId?: string): Promise<Project> {
+  async create(
+    dto: CreateProjectDto,
+    companyId?: string,
+    actor?: AuditActor,
+  ): Promise<Project> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
 
@@ -338,6 +347,27 @@ export class ProjectsService {
         [id, now],
       );
 
+      // This insert uses the same transaction client as project creation. A project
+      // therefore cannot commit without its creation event, and an audit failure rolls
+      // the complete create operation back.
+      await this.audit.record({
+        companyId: companyId ?? null,
+        projectId: id,
+        scope: "project",
+        stepId: "project-setup",
+        type: "project.created",
+        message: `Created project ${projectNumber}: ${dto.name}`,
+        entityType: "project",
+        entityId: id,
+        entityLabel: `${projectNumber}: ${dto.name}`,
+        actor: actor ?? null,
+        metadata: {
+          projectNumber,
+          projectName: dto.name,
+          deviceName: dto.deviceName ?? null,
+        },
+      }, client);
+
       await client.query("COMMIT");
 
       return this.get(id);
@@ -362,6 +392,7 @@ export class ProjectsService {
       }>;
       data?: any;
     },
+    actor?: AuditActor,
   ): Promise<Project> {
     const now = new Date().toISOString();
     const sanitizedData = patch.data
@@ -374,16 +405,35 @@ export class ProjectsService {
       patch.roles !== undefined;
 
     if (!sanitizedData && !hasRelationalSetupPatch) {
-      const result = await getPool().query(
-        `UPDATE projects SET
-         name = COALESCE($2, name),
-         description = COALESCE($3, description),
-         updated_at = $4
-       WHERE id = $1
-       RETURNING id`,
-        [id, patch.name ?? null, patch.description ?? null, now],
-      );
-      if (!result.rows[0]) throw new NotFoundException("Project not found");
+      const client = await getPool().connect();
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(
+          `UPDATE projects SET
+           name = COALESCE($2, name),
+           description = COALESCE($3, description),
+           updated_at = $4
+         WHERE id = $1
+         RETURNING id`,
+          [id, patch.name ?? null, patch.description ?? null, now],
+        );
+        if (!result.rows[0]) throw new NotFoundException("Project not found");
+        await this.audit.record({
+          projectId: id,
+          type: "project.updated",
+          message: "Updated project details",
+          entityType: "project",
+          entityId: id,
+          actor: actor ?? { userId: "system", name: "System" },
+          metadata: { changedFields: Object.keys(patch) },
+        }, client);
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
       return this.get(id);
     }
 
@@ -477,6 +527,16 @@ export class ProjectsService {
       if (patch.roles !== undefined) {
         await this.syncProjectMembers(id, patch.roles, client);
       }
+
+      await this.audit.record({
+        projectId: id,
+        type: "project.updated",
+        message: "Updated project data",
+        entityType: "project",
+        entityId: id,
+        actor: actor ?? { userId: "system", name: "System" },
+        metadata: { changedFields: Object.keys(patch) },
+      }, client);
 
       await client.query("COMMIT");
       return this.get(id);
@@ -651,6 +711,7 @@ export class ProjectsService {
   async updateProtocolAtomic(
     id: string,
     mutate: (protocol: any, data: any) => any,
+    actor?: AuditActor,
   ): Promise<Project> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
@@ -672,6 +733,16 @@ export class ProjectsService {
         `update projects set data=$2, updated_at=$3 where id=$1`,
         [id, JSON.stringify(mergedData), now],
       );
+      await this.audit.record({
+        projectId: id,
+        type: "protocol.updated",
+        message: "Updated protocol data",
+        entityType: "protocol",
+        entityId: id,
+        entityLabel: "Protocol",
+        actor: actor ?? { userId: "system", name: "System" },
+        metadata: {},
+      }, client);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -694,6 +765,7 @@ export class ProjectsService {
   async updateSignaturesAtomic(
     id: string,
     mutate: (signatures: any[], data: any) => any[],
+    actor?: AuditActor,
   ): Promise<{ signatures: any[] }> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
@@ -717,6 +789,16 @@ export class ProjectsService {
         `update projects set data=$2, updated_at=$3 where id=$1`,
         [id, JSON.stringify(mergedData), now],
       );
+      await this.audit.record({
+        projectId: id,
+        type: "project.signatures.updated",
+        message: "Updated electronic signatures",
+        entityType: "signature",
+        entityId: id,
+        entityLabel: "Electronic signatures",
+        actor: actor ?? { userId: "system", name: "System" },
+        metadata: { signatureCount: newSignatures.length },
+      }, client);
       await client.query("COMMIT");
       return { signatures: newSignatures };
     } catch (err) {
@@ -739,6 +821,7 @@ export class ProjectsService {
     fileName: string,
     bytes: Buffer,
     mimeType: string,
+    actor?: AuditActor,
   ): Promise<void> {
     const now = new Date().toISOString();
     const client = await getPool().connect();
@@ -766,6 +849,17 @@ export class ProjectsService {
         `update projects set data=$2, updated_at=$3 where id=$1`,
         [projectId, JSON.stringify(mergedData), now],
       );
+      await this.audit.record({
+        projectId,
+        stepId: "synopsis",
+        type: "synopsis.file.uploaded",
+        message: `Uploaded synopsis document ${fileName}`,
+        entityType: "synopsis",
+        entityId: projectId,
+        entityLabel: fileName,
+        actor: actor ?? { userId: "system", name: "System" },
+        metadata: { fileName, mimeType, fileSize: bytes.length },
+      }, client);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { getPool } from '../../db/pg';
 import { Role } from './roles.decorator';
 import { revokeToken } from './revoked-tokens';
+import { AuditService } from '../audit/audit.service';
 
 // A fixed bcrypt hash (cost 10 — the same cost every real password_hash is created with,
 // see gen_salt('bf', 10) in admin.service.ts/settings.service.ts/seed.ts) of a string that
@@ -17,12 +18,16 @@ const DUMMY_PASSWORD_HASH = '$2a$10$xNY1ZR8l6Ymc6a5cOuhL1uAxejRMfeonMNHkTzOa3u5v
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly jwt: JwtService) {}
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly audit: AuditService,
+  ) {}
 
   async login(email: string, password: string) {
     const { rows } = await getPool().query<{
       id: string;
       name: string;
+      email: string;
       system_role: Role;
       company_id: string | null;
       is_superadmin: boolean;
@@ -31,7 +36,7 @@ export class AuthService {
       password_hash: string;
       company_status: string | null;
     }>(
-      `select u.id, u.name, u.system_role, u.company_id, u.is_superadmin, u.must_reset_password,
+      `select u.id, u.name, u.email, u.system_role, u.company_id, u.is_superadmin, u.must_reset_password,
               u.is_active, u.password_hash, c.status as company_status
        from users u
        left join companies c on c.id = u.company_id
@@ -81,6 +86,24 @@ export class AuthService {
       { subject: user.id },
     );
 
+    await this.audit.record({
+      companyId: user.company_id,
+      scope: user.company_id ? 'company' : 'system',
+      type: 'auth.login.succeeded',
+      message: `${user.name} signed in`,
+      entityType: 'user',
+      entityId: user.id,
+      entityLabel: user.name,
+      actor: {
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.is_superadmin ? 'superadmin' : user.system_role,
+        isSuperadmin: user.is_superadmin,
+      },
+      metadata: {},
+    });
+
     return {
       access_token,
       token_type: 'Bearer',
@@ -105,8 +128,23 @@ export class AuthService {
     };
   }
 
-  async logout(jti: string, exp: number) {
+  async logout(
+    jti: string,
+    exp: number,
+    actor: { userId: string; name: string; companyId?: string | null; roles?: string[]; isSuperadmin?: boolean },
+  ) {
     await revokeToken(jti, exp);
+    await this.audit.record({
+      companyId: actor.companyId ?? null,
+      scope: actor.companyId ? 'company' : 'system',
+      type: 'auth.logout',
+      message: `${actor.name} signed out`,
+      entityType: 'user',
+      entityId: actor.userId,
+      entityLabel: actor.name,
+      actor,
+      metadata: {},
+    });
     return { ok: true };
   }
 }

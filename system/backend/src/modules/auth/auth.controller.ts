@@ -27,6 +27,6 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('/logout')
   logout(@Req() req: any) {
-    return this.auth.logout(req.user.jti, req.user.exp);
+    return this.auth.logout(req.user.jti, req.user.exp, req.user);
   }
 }

@@ -154,7 +154,12 @@ async getMarkets() {
     // itself now, under the same locked transaction as the insert — see
     // AdminService.enforceProjectLimit() for why that's required to close the race.
     const companyId: string | undefined = req.user?.companyId;
-    return this.projects.create(dto, companyId);
+    return this.projects.create(dto, companyId, {
+      userId: req.user?.userId,
+      name: req.user?.name,
+      roles: req.user?.roles,
+      isSuperadmin: req.user?.isSuperadmin,
+    });
   }
 
   @Patch('/:projectId')
@@ -181,7 +186,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   }
 
   // 3. Update the project row (including markets/standards sync inside the transaction)
-  const result = await this.projects.update(projectId, body);
+  const result = await this.projects.update(projectId, body, {
+    userId: req.user?.userId,
+    name: req.user?.name,
+    roles: req.user?.roles,
+    isSuperadmin: req.user?.isSuperadmin,
+  });
 
   // 4. Project members were synchronized atomically by projects.update().
   // Audit role changes using relational assignments returned by projects.get().
@@ -201,7 +211,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         type: 'project.roles.updated',
         message: 'Project roles updated',
         stepId: 'project-setup',
-        actorUserId: 'unknown',
+        actorUserId: req.user?.userId ?? 'unknown',
         metadataJson: JSON.stringify({ roles: changes.join(' | ') }),
       });
     }
@@ -213,7 +223,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       type: 'project.setup.completed',
       message: 'Project setup completed: ' + body.name,
       stepId: 'project-setup',
-      actorUserId: 'unknown',
+      actorUserId: req.user?.userId ?? 'unknown',
       metadataJson: JSON.stringify({ projectName: body.name, description: body.description })
     });
   }
@@ -247,7 +257,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       type: 'project.setup.relational.updated',
       message: `Project setup fields updated: ${Object.keys(relationalChanges).join(', ')}`,
       stepId: 'project-setup',
-      actorUserId: 'unknown',
+      actorUserId: req.user?.userId ?? 'unknown',
       metadataJson: JSON.stringify({ changes: relationalChanges }),
     });
   }
@@ -271,7 +281,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         type: 'project.data.updated',
         message: `Project data updated: ${summaries.join('; ')}`,
         stepId: 'project-setup',
-        actorUserId: 'unknown',
+        actorUserId: req.user?.userId ?? 'unknown',
         metadataJson: JSON.stringify({ changedKeys, changes }),
       });
     }
@@ -361,7 +371,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const { signatures: allSignatures } = await this.projects.updateSignaturesAtomic(projectId, (existing) => {
       const filtered = existing.filter((s: any) => s.role !== body.role);
       return [...filtered, sigRecord];
-    });
+    }, req.user);
 
     // Once every required slot for this document is signed, finalize it — this is the
     // only place that ever does, see the SIGNATURE_STEP_ROLES comment above. Only fires
@@ -462,9 +472,15 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
   @Post('/:projectId/synopsis-file')
   @UseInterceptors(FileInterceptor('file', SYNOPSIS_UPLOAD_OPTIONS))
-  async uploadSynopsisFile(@Param('projectId') projectId: string, @UploadedFile() file: any) {
+  async uploadSynopsisFile(@Param('projectId') projectId: string, @UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('No file uploaded');
-    await this.projects.saveSynopsisFile(projectId, file.originalname, file.buffer, file.mimetype ?? 'application/octet-stream');
+    await this.projects.saveSynopsisFile(
+      projectId,
+      file.originalname,
+      file.buffer,
+      file.mimetype ?? 'application/octet-stream',
+      req.user,
+    );
     return { fileName: file.originalname };
   }
 
@@ -709,7 +725,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       description: string;
       affectedProtocolSections: string[];
       createdBy: string;
-    }
+    },
+    @Req() req: any,
   ) {
     let newAmendment: any;
     await this.projects.updateProtocolAtomic(projectId, (protocol) => {
@@ -754,13 +771,13 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
       amendments.push(newAmendment);
       return { ...protocol, amendments };
-    });
+    }, req.user);
 
     await this.audit.create(projectId, {
       type: 'amendment.created',
       message: `Amendment ${newAmendment.number}: ${body.title}`,
       stepId: 'protocol-make',
-      actorUserId: body.createdBy,
+      actorUserId: req.user?.userId ?? body.createdBy,
       metadataJson: JSON.stringify({ amendmentId: newAmendment.id, reason: body.reason, affectedProtocolSections: body.affectedProtocolSections })
     });
 
@@ -1349,6 +1366,17 @@ async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
          VALUES ($1, 'synopsis', 'approved', NOW())`,
         [projectId]
       );
+      await this.audit.record({
+        projectId,
+        stepId: 'synopsis',
+        type: 'workflow.bypass',
+        message: 'Created and approved the Synopsis step using the admin bypass',
+        actor: req.user,
+        entityType: 'workflow_step',
+        entityId: 'synopsis',
+        entityLabel: 'Synopsis',
+        metadata: { previousState: null, nextState: 'approved' },
+      }, client);
       await client.query('COMMIT');
       return { ok: true, message: 'Synopsis step inserted and set to approved' };
     }
@@ -1366,14 +1394,17 @@ async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
       [projectId]
     );
 
-    // Optionally log an audit event
-    await this.audit.create(projectId, {
+    await this.audit.record({
+      projectId,
+      stepId: 'synopsis',
       type: 'workflow.bypass',
       message: 'Synopsis step forced to approved via admin bypass',
-      stepId: 'synopsis',
-      actorUserId: req.user?.userId || 'system',
-      metadataJson: JSON.stringify({ bypassedAt: new Date().toISOString() }),
-    }).catch(() => {}); // ignore audit errors
+      actor: req.user,
+      entityType: 'workflow_step',
+      entityId: 'synopsis',
+      entityLabel: 'Synopsis',
+      metadata: { previousState: currentState, nextState: 'approved' },
+    }, client);
 
     await client.query('COMMIT');
     return { ok: true, message: 'Synopsis step forced to approved' };

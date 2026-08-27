@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Building2, ShieldCheck, LogOut, Users, LayoutDashboard } from 'lucide-react';
+import { Activity, Building2, ShieldCheck, Users, LayoutDashboard } from 'lucide-react';
 import{useLogout} from '@/shared/hooks/LogOut'
 import { LogoutButton } from '@/app/components/LogoutButton';
 
@@ -7,6 +7,7 @@ const NAV = [
   { label: 'Overview',  href: '/admin/overview',  icon: LayoutDashboard },
   { label: 'Companies', href: '/admin/companies', icon: Building2 },
   { label: 'Team',      href: '/admin/team',      icon: Users },
+  { label: 'Audit trail', href: '/admin/audit',   icon: Activity },
 ];
 
 export function AdminLayout() {

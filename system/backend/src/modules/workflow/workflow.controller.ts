@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
@@ -24,7 +24,13 @@ export class WorkflowController {
     @Param('projectId') projectId: string,
     @Param('stepId') stepId: string,
     @Body() dto: TransitionDto,
+    @Req() req: any,
   ) {
-    return this.workflow.transition(projectId, stepId, dto);
+    return this.workflow.transition(projectId, stepId, dto, {
+      userId: req.user?.userId,
+      name: req.user?.name,
+      roles: req.user?.roles,
+      isSuperadmin: req.user?.isSuperadmin,
+    });
   }
 }

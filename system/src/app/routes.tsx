@@ -23,6 +23,7 @@ import PdfReport from './pages/PdfReport';
 import AddendumPage from './pages/Addendum';
 import { AmendmentFormPage } from '@/modules/Amendmentform/pages/AmendmentFormPage';
 import { WorkflowStepGuard } from '@/shared/auth/WorkflowStepGuard';
+import { AuditTrailPage } from './pages/AuditTrailPage';
 
 function NotFound() {
   return (
@@ -58,6 +59,7 @@ export const router = createBrowserRouter([
           { path: 'companies', element: <AdminCompanies /> },
           { path: 'companies/:id', element: <AdminCompanyDetail /> },
           { path: 'team', element: <AdminTeam /> },
+          { path: 'audit', element: <AuditTrailPage /> },
         ],
       },
     ],
@@ -73,6 +75,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', Component: Dashboard },
       { path: 'settings', element: <Settings /> },
+      { path: 'audit', element: <AuditTrailPage /> },
       { path: 'projects/:projectId', Component: ProjectView },
       { path: 'projects/:projectId/workflow/project-setup', element: <ProjectSetup /> },
       // Gated: these are the transitions where landing on the page with none of its

@@ -22,7 +22,9 @@ export async function postAudit(
       }),
     });
   } catch {
-    // Audit failures must never break the UI
+    // These are supplementary UI events (for example, opening a view). Authoritative
+    // state changes are audited by the backend in the same operation/transaction; a
+    // failed informational event must not make an otherwise read-only UI unusable.
   }
 }
 
@@ -49,7 +51,11 @@ function parseActorId(actorUserId: string): { name: string; role?: string } {
 export async function listAuditEvents(projectId: string): Promise<AuditEvent[]> {
   const raw = await apiFetch<any[]>(`/projects/${encodeURIComponent(projectId)}/audit`);
   return raw.map((e) => {
-    const actorParsed = e.actorUserId ? parseActorId(e.actorUserId) : undefined;
+    const actorParsed = e.actorName
+      ? { name: e.actorName, role: e.actorRole ?? undefined }
+      : e.actorUserId
+        ? parseActorId(e.actorUserId)
+        : undefined;
     return {
       id: e.id,
       projectId: e.projectId,
@@ -66,7 +72,12 @@ export async function listAuditEvents(projectId: string): Promise<AuditEvent[]> 
             : undefined,
       at: e.createdAt,
       actor: actorParsed
-        ? { id: e.actorUserId, name: actorParsed.name, email: actorParsed.name, role: actorParsed.role }
+        ? {
+            id: e.actorUserId,
+            name: actorParsed.name,
+            email: e.actorEmail ?? '',
+            role: actorParsed.role,
+          }
         : undefined,
       reason: e.metadata?.reason ?? undefined,
       sectionTitle: e.metadata?.sectionTitle ?? undefined,

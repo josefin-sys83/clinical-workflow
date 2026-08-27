@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Settings,
   LogOut,
+  Activity,
 } from 'lucide-react';
 import { WORKFLOW_STEPS, buildWorkflowPath, getStepByPathname } from '@/shared/workflow/steps';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
@@ -82,6 +83,7 @@ export function Shell() {
   const params = useParams();
   const projectId = params.projectId;
   const current = getStepByPathname(location.pathname);
+  const isStandalonePage = location.pathname === '/settings' || location.pathname === '/audit';
   const { snapshot, refresh } = useWorkflowSnapshot({ projectId });
   const handleLogout=useLogout()
   useEffect(() => {
@@ -170,7 +172,7 @@ export function Shell() {
         </div>
 
         {/* Dashboard link — only shown on settings when sidebar is expanded */}
-        {sidebarOpen && location.pathname === '/settings' && (
+        {sidebarOpen && isStandalonePage && (
           <div className="py-3 px-2">
             <Link
               to="/dashboard"
@@ -183,7 +185,7 @@ export function Shell() {
         )}
 
         {/* Navigation — only visible when expanded and not on settings */}
-        {sidebarOpen && location.pathname !== '/settings' && (
+        {sidebarOpen && !isStandalonePage && (
           <div className="flex-1 overflow-y-auto py-3">
             <div className="px-3 mb-2">
               <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
@@ -306,6 +308,13 @@ export function Shell() {
                 </button>
                 {showUserMenu && (
                   <div className="absolute  flex flex-col right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                    <button
+                      onClick={() => { setShowUserMenu(false); navigate('/audit'); }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <Activity className="h-4 w-4 text-gray-500" />
+                      <span>Company audit trail</span>
+                    </button>
                     <button
                       onClick={() => { setShowUserMenu(false); navigate('/settings'); }}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"

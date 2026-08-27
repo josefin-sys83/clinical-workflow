@@ -3,6 +3,7 @@ import { getPool } from '../../db/pg';
 import { TransitionDto, WorkflowSnapshot } from './dto';
 import { StepLifecycleState, TransitionAction } from '../common/types';
 import { AuditService } from '../audit/audit.service';
+import type { AuditActor } from '../audit/audit.service';
 
 // Map a target state name (sent by the frontend) to the action verb the service uses.
 // Exported so the role-gating guard can resolve the same action from a `to`-style body
@@ -104,7 +105,7 @@ export class WorkflowService {
     return { projectId, steps } as any;
   }
 
-  async transition(projectId: string, stepId: string, dto: TransitionDto) {
+  async transition(projectId: string, stepId: string, dto: TransitionDto, actor?: AuditActor) {
     // Resolve action: accept either the 'action' verb or 'to' state-name form.
     const action: TransitionAction = dto.action ?? (dto.to ? stateNameToAction(dto.to) : (() => { throw new BadRequestException('action or to is required'); })());
     // Accept 'note' as an alias for 'reason' (frontend sends note)
@@ -158,6 +159,23 @@ export class WorkflowService {
         `update workflow_step_state set state=$3, updated_at=$4 where project_id=$1 and step_id=$2`,
         [projectId, stepId, next, now],
       );
+
+      // Record the transition before COMMIT on the same connection. This closes the
+      // previous reliability gap where the workflow state committed first and its audit
+      // insert could fail afterward, leaving an untracked transition.
+      await this.audit.record({
+        projectId,
+        stepId,
+        type: 'workflow.transition',
+        message: `Changed ${stepId} from ${current} to ${next}`,
+        actor: actor ?? null,
+        actorUserId: actor?.userId ?? dto.actorUserId ?? null,
+        entityType: 'workflow_step',
+        entityId: stepId,
+        entityLabel: stepId,
+        metadata: { action, from: current, to: next, reason: reason ?? null },
+      }, client);
+
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -165,16 +183,6 @@ export class WorkflowService {
     } finally {
       client.release();
     }
-
-    await this.audit.record({
-      projectId,
-      stepId,
-      type: 'workflow.transition',
-      message: `Transition ${current} -> ${next} via ${action}`,
-      actorUserId: dto.actorUserId ?? null,
-      metadata: { action, from: current, to: next, reason: reason ?? null },
-    });
-
     return { projectId, stepId, from: current, to: next, ts: now };
   }
 }

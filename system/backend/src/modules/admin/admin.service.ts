@@ -187,7 +187,7 @@ export class AdminService {
     const { rows } = await getPool().query(
       `update users set is_active = $1, updated_at = now()
        where id = $2
-       returning id, name, email, system_role, is_active`,
+       returning id, company_id, name, email, system_role, is_active`,
       [isActive, userId],
     );
     if (!rows[0]) throw new NotFoundException('User not found');
@@ -198,7 +198,7 @@ export class AdminService {
     const { rows } = await getPool().query(
       `update users set system_role = $1, updated_at = now()
        where id = $2
-       returning id, name, email, system_role, is_active`,
+       returning id, company_id, name, email, system_role, is_active`,
       [systemRole, userId],
     );
     if (!rows[0]) throw new NotFoundException('User not found');
@@ -307,9 +307,10 @@ export class AdminService {
       throw new ForbiddenException('You cannot delete your own account');
     }
     const { rows } = await getPool().query(
-      `delete from users where id = $1 and is_superadmin = true returning id`,
+      `delete from users where id = $1 and is_superadmin = true returning id, name, email`,
       [id],
     );
     if (!rows[0]) throw new NotFoundException('Superadmin not found');
+    return rows[0];
   }
 }
