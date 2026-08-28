@@ -5,6 +5,7 @@ import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState } from '@/shared/workflow/types';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { ProtocolSection } from './components/protocol-section';
+import { ProtocolAttachmentsSection } from './components/protocol-attachments-section';
 import { ExportReadinessIndicator } from './components/export-readiness-indicator';
 import { ReviewModeEntry } from './components/review-mode-entry';
 import { ReviewModeIndicator } from './components/review-mode-indicator';
@@ -16,6 +17,13 @@ import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { getToken } from '@/shared/auth/token';
+import {
+  listProtocolAttachments,
+  uploadProtocolAttachment,
+  removeProtocolAttachment,
+  type ProtocolAttachment,
+} from '@/shared/api/documents';
+import { apiErrorMessage } from '@/shared/api/http';
 
 
 
@@ -57,7 +65,20 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   const [amendmentSuccessMessage, setAmendmentSuccessMessage] = React.useState<string | null>(null);
   const [synopsisConsistencyIssues, setSynopsisConsistencyIssues] = React.useState<any[]>([]);
   const [protocolMakeDeadline, setProtocolMakeDeadline] = React.useState<{ date: string; status: string } | null>(null);
+  const [protocolAttachments, setProtocolAttachments] = React.useState<ProtocolAttachment[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = React.useState(false);
+  const [attachmentError, setAttachmentError] = React.useState<string | null>(null);
   const apiBase = '';
+
+  const loadProtocolAttachments = React.useCallback(async () => {
+    if (!projectId) return;
+    try {
+      setProtocolAttachments(await listProtocolAttachments(projectId));
+      setAttachmentError(null);
+    } catch (error) {
+      setAttachmentError(apiErrorMessage(error, 'Could not load protocol attachments.'));
+    }
+  }, [projectId]);
 
   const runSynopsisConsistencyCheck = async () => {
     if (!projectId) return;
@@ -98,8 +119,14 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     fetch(apiBase + '/api/projects/' + projectId)
       .then(r => r.json())
       .then(p => {
-        if (p.data && p.data.projectData) setProjectData(p.data.projectData);
-        if (p.data && p.data.roles) setRoles(p.data.roles);
+        if (p.data && p.data.projectData) {
+          setProjectData({
+            ...p.data.projectData,
+            targetMarkets: p.targetMarkets || [],
+            deviceCategory: p.deviceCategory || '',
+          });
+        }
+        setRoles(p.roles || p.data?.roles || []);
         if (p.data?.protocol?.sections?.length) {
           setProtocol(p.data.protocol);
           p.data.protocol.sections?.forEach((s: any) => {
@@ -121,11 +148,6 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
             })
             .then(result => {
               setProtocol(result);
-              fetch(apiBase + '/api/projects/' + projectId, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: { protocol: result } })
-              });
               result.sections?.forEach((s: any) => {
                 if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
               });
@@ -186,6 +208,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   React.useEffect(() => {
     if (!projectId) return;
     loadOrGenerateProtocol();
+    loadProtocolAttachments();
     fetchAmendments();
     fetch(apiBase + '/api/projects/' + projectId + '/milestones')
       .then(r => r.json())
@@ -215,7 +238,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: true }));
         return 0;
       }
-      setSectionAnalysisFailed(prev => (prev[sectionId] ? { ...prev, [sectionId]: false } : prev));
+      setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: Boolean(result.aiUnavailable) }));
 
       let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
       const elements = result.requiredElements || [];
@@ -492,6 +515,58 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     () => sessionUser?.name || currentUser.replace(/\s*\([^)]*\)$/, ''),
     [sessionUser, currentUser]
   );
+
+  const canManageProtocolAttachments = React.useMemo(() => {
+    if (!sessionUser) return false;
+    const allowedRoles = new Set(['Protocol Lead', 'Regulatory Affairs']);
+    const sessionEmail = sessionUser.email?.trim().toLowerCase();
+    return roles.some((role: any) =>
+      allowedRoles.has(role.title) &&
+      (role.assignedTo || []).some((person: any) => {
+        const personEmail = person.email?.trim().toLowerCase();
+        return sessionEmail && personEmail
+          ? sessionEmail === personEmail
+          : person.name === sessionUser.name;
+      }),
+    );
+  }, [roles, sessionUser]);
+
+  const handleProtocolAttachmentUpload = async (file: File, description: string): Promise<boolean> => {
+    if (!projectId) return false;
+    if (file.size > 10 * 1024 * 1024) {
+      setAttachmentError('File is too large. Protocol attachments must be 10 MB or smaller.');
+      return false;
+    }
+    setAttachmentBusy(true);
+    setAttachmentError(null);
+    try {
+      const attachments = await uploadProtocolAttachment({ projectId, file, description });
+      setProtocolAttachments(attachments);
+      return true;
+    } catch (error) {
+      setAttachmentError(apiErrorMessage(error, 'Could not upload this protocol attachment.'));
+      return false;
+    } finally {
+      setAttachmentBusy(false);
+    }
+  };
+
+  const handleProtocolAttachmentRemove = async (attachment: ProtocolAttachment) => {
+    if (!projectId) return;
+    if (!window.confirm(`Remove Appendix ${attachment.appendixNumber}: ${attachment.filename}?`)) return;
+    setAttachmentBusy(true);
+    setAttachmentError(null);
+    try {
+      setProtocolAttachments(await removeProtocolAttachment({
+        projectId,
+        attachmentId: attachment.id,
+      }));
+    } catch (error) {
+      setAttachmentError(apiErrorMessage(error, 'Could not remove this protocol attachment.'));
+    } finally {
+      setAttachmentBusy(false);
+    }
+  };
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections(prev => 
@@ -809,6 +884,15 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                   </div>
                 </div>
 
+                <ProtocolAttachmentsSection
+                  attachments={protocolAttachments}
+                  canManage={canManageProtocolAttachments}
+                  busy={attachmentBusy}
+                  error={attachmentError}
+                  onUpload={handleProtocolAttachmentUpload}
+                  onRemove={handleProtocolAttachmentRemove}
+                />
+
                 {generatingProtocol ? (
                   <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-500">
                     <div className="w-8 h-8 border-2 border-purple-300 border-t-purple-600 rounded-full animate-spin" />
@@ -873,6 +957,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                           analyzeSectionWithAI(section.title, section.content, section.id)
                             .finally(() => setSectionAnalyzing(prev => ({ ...prev, [section.id]: false })));
                         }}
+                        attachments={protocolAttachments}
                       />
                     ))}
                   </div>
@@ -1113,7 +1198,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       message: protocolSections.every((s: any) => s.approvalStatus === 'approved')
                         ? 'All sections approved'
                         : `${protocolSections.filter((s: any) => s.approvalStatus === 'approved').length} of ${protocolSections.length} sections approved`,
-                      details: protocolSections.every((s:any) => s.approvalStatus === 'approved')
+                      details: protocolSections.every(s => s.approvalStatus === 'approved')
                         ? undefined
                         : protocolSections.filter((s: any) => s.approvalStatus !== 'approved').map((s: any) => s.title).join(', '),
                     },

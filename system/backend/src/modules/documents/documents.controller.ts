@@ -4,6 +4,7 @@ import {
   Param,
   Post,
   Patch,
+  Delete,
   Req,
   Res,
   Body,
@@ -11,14 +12,29 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  PayloadTooLargeException,
+  UseFilters,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentsService } from './documents.service';
 import { JwtAuthGuard, ProjectAccessGuard, Roles, RolesGuard } from '../auth';
-import { FinalizeDocumentDto, CreateAddendumDto, UpdateAddendumDto } from './dto';
-import { ADDENDUM_UPLOAD_OPTIONS } from '../../common/upload-security';
+import { FinalizeDocumentDto, CreateAddendumDto, UpdateAddendumDto, UploadProtocolAttachmentDto } from './dto';
+import { ADDENDUM_UPLOAD_OPTIONS, PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
+
+@Catch(PayloadTooLargeException)
+class ProtocolUploadSizeExceptionFilter implements ExceptionFilter {
+  catch(_exception: PayloadTooLargeException, host: ArgumentsHost) {
+    host.switchToHttp().getResponse<Response>().status(413).json({
+      statusCode: 413,
+      message: 'File is too large. Protocol attachments must be 10 MB or smaller.',
+    });
+  }
+}
 
 @ApiTags('documents')
 @ApiBearerAuth()
@@ -26,6 +42,48 @@ import { ADDENDUM_UPLOAD_OPTIONS } from '../../common/upload-security';
 @Controller('api/projects/:projectId/documents')
 export class DocumentsController {
   constructor(private readonly docs: DocumentsService) {}
+
+  // Protocol attachments belong to the protocol as a whole. All project members
+  // may list them; the service performs the authoritative project-role check for
+  // upload/remove using project_members and the real JWT user id.
+  @Get('protocol/attachments')
+  @Roles('admin', 'author', 'reviewer', 'approver')
+  listProtocolAttachments(@Param('projectId') projectId: string) {
+    return this.docs.listProtocolAttachments({ projectId });
+  }
+
+  @Post('protocol/attachments')
+  @Roles('admin', 'author', 'reviewer', 'approver')
+  @UseFilters(ProtocolUploadSizeExceptionFilter)
+  @UseInterceptors(FileInterceptor('file', PROTOCOL_UPLOAD_OPTIONS))
+  uploadProtocolAttachment(
+    @Param('projectId') projectId: string,
+    @UploadedFile() file: any,
+    @Body() body: UploadProtocolAttachmentDto,
+    @Req() req: Request,
+  ) {
+    if (!file) throw new BadRequestException('Choose a file to upload');
+    const user: any = (req as any).user;
+    return this.docs.uploadProtocolAttachment({
+      projectId,
+      filename: file.originalname,
+      mimeType: file.mimetype ?? 'application/octet-stream',
+      bytes: file.buffer,
+      description: body.description,
+      actor: user,
+    });
+  }
+
+  @Delete('protocol/attachments/:attachmentId')
+  @Roles('admin', 'author', 'reviewer', 'approver')
+  removeProtocolAttachment(
+    @Param('projectId') projectId: string,
+    @Param('attachmentId') attachmentId: string,
+    @Req() req: Request,
+  ) {
+    const user: any = (req as any).user;
+    return this.docs.removeProtocolAttachment({ projectId, attachmentId, actor: user });
+  }
 
   @Post(':docType/finalize')
   @Roles('admin', 'approver')

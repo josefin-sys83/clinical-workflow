@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import contentDisposition from 'content-disposition';
 
 export const MAX_UPLOAD_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+export const PROTOCOL_UPLOAD_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 function extensionOf(filename: string): string {
   const match = /\.[^./\\]+$/.exec(filename || '');
@@ -42,6 +43,20 @@ export const ADDENDUM_UPLOAD_ALLOWED_MIME_TYPES = [
   'text/plain',
 ];
 
+// Kept separate from the addendum constants intentionally. The two features
+// currently accept the same formats, but can evolve without changing each other.
+export const PROTOCOL_UPLOAD_ALLOWED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.txt'];
+export const PROTOCOL_UPLOAD_ALLOWED_MIME_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'image/png',
+  'image/jpeg',
+  'text/plain',
+];
+
 export const SYNOPSIS_UPLOAD_OPTIONS = {
   fileFilter: createDocumentFileFilter(SYNOPSIS_UPLOAD_ALLOWED_EXTENSIONS, SYNOPSIS_UPLOAD_ALLOWED_MIME_TYPES),
   limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
@@ -50,6 +65,11 @@ export const SYNOPSIS_UPLOAD_OPTIONS = {
 export const ADDENDUM_UPLOAD_OPTIONS = {
   fileFilter: createDocumentFileFilter(ADDENDUM_UPLOAD_ALLOWED_EXTENSIONS, ADDENDUM_UPLOAD_ALLOWED_MIME_TYPES),
   limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
+};
+
+export const PROTOCOL_UPLOAD_OPTIONS = {
+  fileFilter: createDocumentFileFilter(PROTOCOL_UPLOAD_ALLOWED_EXTENSIONS, PROTOCOL_UPLOAD_ALLOWED_MIME_TYPES),
+  limits: { fileSize: PROTOCOL_UPLOAD_MAX_FILE_SIZE_BYTES },
 };
 
 // Used when serving a previously-uploaded file back to the browser. Never trusts the

@@ -49,9 +49,9 @@ export function sanitizeSectionHtml(input: string | null | undefined): string {
   });
 }
 
-// project.data.protocol.sections[].content and project.data.report.sections[].content
-// are rendered via dangerouslySetInnerHTML client-side. updateSection() and
-// generateReportSection() sanitize their own single-section writes, but
+// Report sections in projects.data are rendered via dangerouslySetInnerHTML.
+// Protocol sections are normalized and sanitized by ProtocolsService. Report
+// endpoints still accept a generic `data` patch, so
 // ProjectsService.update() is also reachable directly with an arbitrary `data` blob
 // (the generic PATCH /:projectId "save the whole project" pattern, and generateReport()'s
 // bulk write) — sanitizing here too means no write path into section content can bypass
@@ -59,16 +59,6 @@ export function sanitizeSectionHtml(input: string | null | undefined): string {
 export function sanitizeIncomingProjectData(data: any): any {
   if (!data || typeof data !== 'object') return data;
   const result = { ...data };
-  if (result.protocol?.sections && Array.isArray(result.protocol.sections)) {
-    result.protocol = {
-      ...result.protocol,
-      sections: result.protocol.sections.map((s: any) =>
-        s && typeof s === 'object' && typeof s.content === 'string'
-          ? { ...s, content: sanitizeSectionHtml(s.content) }
-          : s
-      ),
-    };
-  }
   if (result.report?.sections) {
     const sections = result.report.sections;
     if (Array.isArray(sections)) {

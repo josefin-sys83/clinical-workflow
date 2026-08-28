@@ -15,6 +15,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { SYNOPSIS_UPLOAD_OPTIONS, getSafeDownloadHeaders } from '../../common/upload-security';
+import { getMissingProtocolAttachmentIssues } from './protocol-attachment-reference';
 
 // The PDF steps (protocol-pdf/report-pdf) only ever reach the workflow's 'signed' state
 // through advanceWorkflowStep() — nothing in the UI ever calls the document-artifact
@@ -265,15 +266,18 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         changedKeys.push(key);
         summaries.push(summarizeFieldChange(key, before, after));
-        changes[key] = { before, after };
+        changes[key] = key === 'protocol'
+          ? { before: protocolAuditSnapshot(before), after: protocolAuditSnapshot(after) }
+          : { before, after };
       }
     }
     if (changedKeys.length > 0) {
+      const protocolOnly = changedKeys.length === 1 && changedKeys[0] === 'protocol';
       auditEvents.push({
-        type: 'project.data.updated',
-        message: `Project data updated: ${summaries.join('; ')}`,
-        stepId: 'project-setup',
-        entityType: 'project',
+        type: protocolOnly ? 'protocol.updated' : 'project.data.updated',
+        message: `${protocolOnly ? 'Protocol' : 'Project data'} updated: ${summaries.join('; ')}`,
+        stepId: protocolOnly ? 'protocol-make' : 'project-setup',
+        entityType: protocolOnly ? 'protocol' : 'project',
         entityId: projectId,
         metadata: { changedKeys, changes },
       });
@@ -355,6 +359,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       id,
       projectId,
       role: body.role,
+      roleTitle: body.roleTitle,
       signerName: identity.name,
       signerEmail: identity.email,
       signerUserId: identity.id,
@@ -430,61 +435,19 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     @Body() body: UpdateSectionContentDto,
     @Req() req: any,
   ) {
-    const project = await this.projects.get(projectId);
-    const protocol = project?.data?.protocol;
-    if (!protocol) return null;
-    const now = new Date().toISOString();
-    const section = protocol.sections.find((s: any) => s.id === sectionId);
-    // Section content is rendered client-side via dangerouslySetInnerHTML, so it must
-    // never be stored as raw, attacker-controlled HTML — sanitize on the way in rather
-    // than trusting the frontend to sanitize on the way out.
-    const sanitizedContent = sanitizeSectionHtml(body.content);
-    // Spread DB section first (preserves all fields), then apply content update.
-    // If the caller explicitly sends approval fields, apply those too so that saving
-    // content can never silently clear an already-approved status.
-    const approvalOverrides: Record<string, any> = {};
-    if (body.approvalStatus !== undefined) approvalOverrides.approvalStatus = body.approvalStatus;
-    if (body.approvedBy !== undefined) approvalOverrides.approvedBy = body.approvedBy;
-    if (body.approvedAt !== undefined) approvalOverrides.approvedAt = body.approvedAt;
-    const sections = protocol.sections.map((s: any) =>
-      s.id === sectionId ? { ...s, ...approvalOverrides, content: sanitizedContent, updatedAt: now } : s
-    );
-    // Detect structural additions/removals for summary annotation
-    const prevContent = body.previousContent || '';
-    const newContent = sanitizedContent;
-    const hasTable = (s: string) => /^\|.+\|/m.test(s);
-    const hasImage = (s: string) => /!\[.*?\]\(.*?\)/.test(s);
-    const structuralNotes: string[] = [];
-    if (!hasTable(prevContent) && hasTable(newContent)) structuralNotes.push('Table added');
-    if (hasTable(prevContent) && !hasTable(newContent)) structuralNotes.push('Table removed');
-    if (!hasImage(prevContent) && hasImage(newContent)) structuralNotes.push('Image added');
-    if (hasImage(prevContent) && !hasImage(newContent)) structuralNotes.push('Image removed');
-    const messageSuffix = structuralNotes.length > 0 ? ` (${structuralNotes.join(', ')})` : '';
-
-    await this.projects.update(
+    return this.projects.updateProtocolSection(
       projectId,
-      { data: { ...project.data, protocol: { ...protocol, sections } } },
+      sectionId,
+      {
+        content: body.content,
+        previousContent: body.previousContent,
+        reason: body.reason,
+        approvalStatus: body.approvalStatus,
+        approvedBy: body.approvedBy,
+        approvedAt: body.approvedAt,
+      },
       req.user,
-      [{
-        type: 'section.content.updated',
-        message: `Section "${section?.title || sectionId}" content updated${messageSuffix}`,
-        stepId: 'protocol-make',
-        entityType: 'protocol_section',
-        entityId: sectionId,
-        entityLabel: section?.title || sectionId,
-        metadata: {
-          sectionId,
-          sectionTitle: section?.title,
-          updatedAt: now,
-          editedBy: req.user?.name ?? 'Unknown user',
-          reason: body.reason || '',
-          previousContent: prevContent,
-          newContent,
-        },
-      }],
     );
-
-    return { ok: true, updatedAt: now };
   }
 
   @Post('/:projectId/synopsis-file')
@@ -581,7 +544,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
   @Post('/:projectId/generate-protocol')
   @UseGuards(AiThrottlerGuard)
-  async generateProtocol(@Param('projectId') projectId: string) {
+  async generateProtocol(@Param('projectId') projectId: string, @Req() req: any) {
     await this.assertDocumentNotSigned(projectId, 'protocol-pdf');
     await this.assertProtocolPrerequisites(projectId);
     const project = await this.projects.get(projectId);
@@ -624,12 +587,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     }
     if (!protocol) return null;
 
-    // AI-generated section content is returned directly to the caller here and is
-    // later persisted verbatim via updateSection()/PATCH — sanitize at the source so
-    // a prompt-injected or hallucinated HTML response can't reach dangerouslySetInnerHTML.
+    // Sanitize AI-generated section content before the relational save so a
+    // prompt-injected or hallucinated HTML response cannot reach rendered content.
     protocol.sections = (protocol.sections || []).map((s: any) =>
       s && typeof s.content === 'string' ? { ...s, content: sanitizeSectionHtml(s.content) } : s
     );
+    if (!Array.isArray(protocol.amendments)) protocol.amendments = [];
 
     // Batched (not all-at-once) to avoid tripping Azure OpenAI rate limits.
     const REQUIRED_ELEMENTS_BATCH_SIZE = 3;
@@ -648,18 +611,24 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       );
     }
 
-    // Log audit event
-    await this.projects.recordProjectEvent(projectId, {
-      type: 'protocol.generated',
-      message: 'Protocol generated by AI',
-      stepId: 'protocol-make',
-      entityType: 'protocol',
-      entityId: projectId,
-      entityLabel: 'Protocol',
-      metadata: { sections: protocol.sections.length, generatedAt: new Date().toISOString() },
-    });
+    // Store generation and its audit event atomically. The response is now a view of
+    // committed relational rows rather than an unsaved browser-only protocol.
+    const savedProject = await this.projects.update(
+      projectId,
+      { data: { protocol } },
+      req.user,
+      [{
+        type: 'protocol.generated',
+        message: 'Protocol generated by AI',
+        stepId: 'protocol-make',
+        entityType: 'protocol',
+        entityId: projectId,
+        entityLabel: 'Protocol',
+        metadata: { sections: protocol.sections.length, generatedAt: new Date().toISOString() },
+      }],
+    );
 
-    return protocol;
+    return savedProject.data?.protocol ?? protocol;
   }
 
   @Post('/:projectId/analyze-section')
@@ -718,21 +687,39 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
     const synopsisExcerpt = project?.data?.synopsis?.extractedText || '';
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt);
+    const protocolAttachments = await this.projects.listProtocolAttachmentsForAnalysis(project.id);
+    const attachmentLabels = protocolAttachments.map((attachment) =>
+      `Appendix ${attachment.appendixNumber}: ${attachment.filename}${attachment.description ? ` — ${attachment.description}` : ''}`,
+    );
+    const attachmentIssues = getMissingProtocolAttachmentIssues(
+      { id: sectionId || section?.id || sectionTitle, title: sectionTitle, content: sectionContent },
+      protocolAttachments.map((attachment) => attachment.appendixNumber),
+    );
 
-    // A failed AI call/parse is a distinct, explicit error state — return it
-    // untouched so the caller can tell "analysis failed" apart from "analysis
-    // succeeded and found nothing." Never merge partial/rule-based data into it.
-    if (result?.error) return result;
-
-    // Deterministic rule-based checks always run alongside the AI analysis, so
-    // regulatory-reference and specificity gaps are caught even if the AI misses them.
     const ruleIssues = getRuleBasedIssues(
       { id: sectionId || section?.id || sectionTitle, title: sectionTitle, content: sectionContent },
       targetMarkets,
       project?.data?.projectData || {},
     );
-    result.issues = mergeIssues(result.issues || [], ruleIssues);
+
+    // This integrity check does not need AI. Return known-broken references
+    // immediately, which also keeps this acceptance path usable before the AI
+    // integration is configured. Once fixed, the normal AI review runs below.
+    if (attachmentIssues.length > 0) {
+      return {
+        issues: mergeIssues(ruleIssues, attachmentIssues),
+        requiredElements: requiredElements || [],
+        analysisSource: 'deterministic',
+      };
+    }
+
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt, attachmentLabels);
+
+    if (result?.error) return result;
+
+    // Deterministic rule-based checks always run alongside the AI analysis, so
+    // regulatory-reference and specificity gaps are caught even if the AI misses them.
+    result.issues = mergeIssues(mergeIssues(result.issues || [], ruleIssues), attachmentIssues);
     return result;
   }
 
@@ -745,7 +732,6 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       reason: string;
       description: string;
       affectedProtocolSections: string[];
-      createdBy: string;
     },
     @Req() req: any,
   ) {
@@ -779,7 +765,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         affectedProtocolSections: body.affectedProtocolSections,
         affectedReportSections: this.getAffectedReportSections(body.affectedProtocolSections),
         status: 'draft',
-        createdBy: body.createdBy,
+        // Attribution is always taken from the authenticated session, never the body.
+        createdBy: req.user?.name ?? 'Unknown user',
         createdAt: new Date().toISOString(),
         protocolVersion: protocol.version || '1.0',
         protocolSnapshot,
@@ -1361,10 +1348,9 @@ async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
 }
 }
 
-// Produces a short, human-readable note for one changed top-level `data` key. Nested
-// array fields (e.g. data.protocol.amendments) are the common shape for the kind of
-// silent, hard-to-notice change this audit entry exists to catch, so a length change one
-// level down is called out specifically instead of just "protocol changed".
+// Produces a short, human-readable note for one changed compatibility-response key.
+// Protocol writes are intercepted by ProjectsService and stored relationally even
+// while older frontend callers continue to send them under data.protocol.
 function normalizeRoleAssignments(roles: any[] | undefined): string[] {
   if (!roles) return [];
   return roles
@@ -1402,6 +1388,35 @@ function summarizeFieldChange(key: string, oldVal: any, newVal: any): string {
     if (oldLen !== newLen) return `${key}: ${oldLen} -> ${newLen} item(s)`;
   }
   return `${key} changed`;
+}
+
+function protocolAuditSnapshot(value: any): Record<string, any> | null {
+  if (!value || typeof value !== 'object') return null;
+  const sections = Array.isArray(value.sections) ? value.sections : [];
+  const amendments = Array.isArray(value.amendments) ? value.amendments : [];
+  return {
+    protocolId: value.protocolId ?? null,
+    version: value.version ?? null,
+    status: value.status ?? null,
+    sectionCount: sections.length,
+    amendmentCount: amendments.length,
+    sections: sections.map((section: any) => ({
+      id: section.id ?? null,
+      title: section.title ?? null,
+      status: section.status ?? null,
+      approvalStatus: section.approvalStatus ?? null,
+      reviewStatus: section.reviewStatus ?? null,
+      contentLength: typeof section.content === 'string' ? section.content.length : 0,
+      commentCount: Array.isArray(section.comments) ? section.comments.length : 0,
+      issueCount: Array.isArray(section.issues) ? section.issues.length : 0,
+    })),
+    amendments: amendments.map((amendment: any) => ({
+      id: amendment.id ?? null,
+      number: amendment.number ?? null,
+      title: amendment.title ?? null,
+      status: amendment.status ?? null,
+    })),
+  };
 }
 
 // ── Deterministic rule-based section checks ──────────────────────────────
@@ -1443,10 +1458,17 @@ const RULE_TOPIC_KEYWORDS: Record<string, string[]> = {
   fda: ['fda', '21 cfr'],
   iso: ['iso 14155'],
   stats: ['significance', 'confidence interval', '0.05'],
+  appendix: ['appendix', 'attachment'],
 };
 
 function isDuplicateOfAiIssue(ruleIssue: any, aiIssues: any[]): boolean {
   const topic = ruleIssue.id.match(/^rule-([a-z]+)-/)?.[1] || '';
+  if (topic === 'appendix') {
+    const appendixNumber = ruleIssue.id.match(/^rule-appendix-(\d+)-/)?.[1];
+    return appendixNumber
+      ? aiIssues.some((ai: any) => `${ai.description || ''} ${ai.reference || ''}`.toLowerCase().includes(`appendix ${appendixNumber}`))
+      : false;
+  }
   const keywords = RULE_TOPIC_KEYWORDS[topic] || [];
   return aiIssues.some((ai: any) => {
     const text = `${ai.description || ''} ${ai.reference || ''}`.toLowerCase();

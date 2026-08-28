@@ -8,6 +8,47 @@ export type FinalizeResponse = {
   downloadUrl: string;
 };
 
+export type ProtocolAttachment = {
+  id: string;
+  appendixNumber: number;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  description: string | null;
+  uploadedByUserId: string | null;
+  uploaderName: string;
+  uploaderEmail: string | null;
+  uploadedAt: string;
+};
+
+export async function listProtocolAttachments(projectId: string): Promise<ProtocolAttachment[]> {
+  return apiFetch<ProtocolAttachment[]>(`/projects/${projectId}/documents/protocol/attachments`);
+}
+
+export async function uploadProtocolAttachment(args: {
+  projectId: string;
+  file: File;
+  description?: string;
+}): Promise<ProtocolAttachment[]> {
+  const form = new FormData();
+  form.append('file', args.file);
+  if (args.description?.trim()) form.append('description', args.description.trim());
+  return apiFetch<ProtocolAttachment[]>(`/projects/${args.projectId}/documents/protocol/attachments`, {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export async function removeProtocolAttachment(args: {
+  projectId: string;
+  attachmentId: string;
+}): Promise<ProtocolAttachment[]> {
+  return apiFetch<ProtocolAttachment[]>(
+    `/projects/${args.projectId}/documents/protocol/attachments/${args.attachmentId}`,
+    { method: 'DELETE' },
+  );
+}
+
 export async function finalizeDocument(args: {
   projectId: string;
   docType: 'protocol' | 'report';

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Paperclip } from 'lucide-react';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image } from 'lucide-react';
+import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from './audit-trail-modal';
 import { InlineIssueMarker } from './inline-issue-marker';
 import { CommentsModal } from './comments-modal';
@@ -108,6 +109,7 @@ interface ProtocolSectionProps {
   analysisFailed?: boolean;
   analysisRetrying?: boolean;
   onRetryAnalysis?: () => void;
+  attachments?: ProtocolAttachment[];
 }
 
 /** Apply only inline markdown (bold, italic, underline, images) — safe inside table cells. */
@@ -217,7 +219,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisFailed = false, analysisRetrying = false, onRetryAnalysis }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisFailed = false, analysisRetrying = false, onRetryAnalysis, attachments = [] }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -236,9 +238,9 @@ function ProtocolSectionComponent(
   const [wontFixModal, setWontFixModal] = useState<string | null>(null); // issueId or null
   const [wontFixComment, setWontFixComment] = useState('');
   const [hoveredRoleTerm, setHoveredRoleTerm] = useState<'reviewer' | 'approver' | null>(null);
-  const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string }>>([]);
   const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set(['normal']));
   const editorRef = useRef<HTMLDivElement>(null);
+  const editorSelectionRef = useRef<Range | null>(null);
 
   // Approval / unlock modal state
   const [showApproveModal, setShowApproveModal] = useState(false);
@@ -274,6 +276,16 @@ function ProtocolSectionComponent(
 
   // ─── WYSIWYG contentEditable toolbar helpers ────────────────────────────────
 
+  const rememberEditorSelection = () => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (editor.contains(range.commonAncestorContainer)) {
+      editorSelectionRef.current = range.cloneRange();
+    }
+  };
+
   /** Read current selection state and highlight the matching toolbar buttons. */
   const updateActiveFormats = () => {
     const active = new Set<string>();
@@ -287,6 +299,28 @@ function ProtocolSectionComponent(
       else                     active.add('normal');
     } catch { active.add('normal'); }
     setActiveFormats(active);
+    rememberEditorSelection();
+  };
+
+  const insertAttachmentReference = (appendixNumber: number) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    const savedRange = editorSelectionRef.current;
+    if (savedRange && editor.contains(savedRange.commonAncestorContainer)) {
+      selection.addRange(savedRange);
+    } else {
+      const endRange = document.createRange();
+      endRange.selectNodeContents(editor);
+      endRange.collapse(false);
+      selection.addRange(endRange);
+    }
+    document.execCommand('insertText', false, `(see Appendix ${appendixNumber})`);
+    rememberEditorSelection();
   };
 
   /** Focus the editor, run an execCommand, then resync toolbar state. */
@@ -376,18 +410,6 @@ function ProtocolSectionComponent(
       };
 
       img.src = objectUrl;
-    };
-    input.click();
-  };
-
-  const handleFileAttach = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.pdf,.doc,.docx';
-    input.onchange = (e: any) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      setAttachedFiles(prev => [...prev, { name: file.name }]);
     };
     input.click();
   };
@@ -921,7 +943,26 @@ function ProtocolSectionComponent(
                         {/* Insert group */}
                         <button title="Insert table" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleInsertTable}><Table2 size={13} /></button>
                         <button title="Insert image" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleImageInsert}><Image size={13} /></button>
-                        <button title="Attach file (.pdf, .doc, .docx)" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleFileAttach}><Paperclip size={13} /></button>
+                        {attachments.length > 0 && (
+                          <select
+                            aria-label="Insert protocol attachment reference"
+                            defaultValue=""
+                            onMouseDown={rememberEditorSelection}
+                            onChange={(event) => {
+                              const appendixNumber = Number(event.target.value);
+                              if (appendixNumber) insertAttachmentReference(appendixNumber);
+                              event.target.value = '';
+                            }}
+                            style={{ height: 28, maxWidth: 240, border: '1px solid #cbd5e1', borderRadius: 4, backgroundColor: 'white', color: '#475569', fontSize: 12, padding: '0 6px' }}
+                          >
+                            <option value="">Insert attachment reference…</option>
+                            {attachments.map((attachment) => (
+                              <option key={attachment.id} value={attachment.appendixNumber}>
+                                Appendix {attachment.appendixNumber}: {attachment.filename}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </div>
                       {/* ── WYSIWYG contentEditable editor ── */}
                       <div
@@ -931,24 +972,13 @@ function ProtocolSectionComponent(
                         onKeyUp={updateActiveFormats}
                         onMouseUp={updateActiveFormats}
                         onSelect={updateActiveFormats}
+                        onBlur={rememberEditorSelection}
                         style={{ width: '100%', minHeight: '200px', fontSize: '0.9rem', lineHeight: '1.7', padding: '0.75rem', border: '2px solid #3b82f6', borderTop: 'none', borderRadius: '0 0 0.375rem 0.375rem', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', overflowY: 'auto' }}
                       />
-                      {/* ── Attached files list ── */}
-                      {attachedFiles.length > 0 && (
-                        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
-                          {attachedFiles.map((f, i) => (
-                            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '0.25rem', fontSize: '0.75rem', color: '#475569' }}>
-                              <Paperclip size={11} />
-                              {f.name}
-                              <button onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0, lineHeight: 1 }}>×</button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
                       {/* ── Save / Cancel ── */}
                       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                         <button onClick={() => { setChangeReason(''); setShowReasonModal(true); }} style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Save</button>
-                        <button onClick={() => { setIsEditing(false); setAttachedFiles([]); }} style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
+                        <button onClick={() => setIsEditing(false)} style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
                       </div>
                     </div>
                   );
@@ -964,16 +994,6 @@ function ProtocolSectionComponent(
                   <div>
                     {editButton}
                     <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
-                    {attachedFiles.length > 0 && (
-                      <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
-                        {attachedFiles.map((f, i) => (
-                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '0.25rem', fontSize: '0.75rem', color: '#475569' }}>
-                            <Paperclip size={11} />
-                            {f.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 );
                 // Quotes path: render markdown in plain text segments, highlight quoted spans
