@@ -296,7 +296,7 @@ export class ProtocolsService {
         ? suppliedId
         : randomUUID();
       const signedByUserId = signature.signerUserId && actor?.userId === signature.signerUserId
-        ? actor.userId
+        ? actor?.userId
         : actor?.userId ?? null;
       await client.query(
         `insert into protocol_signature (
@@ -410,7 +410,7 @@ export class ProtocolsService {
           amendment.reason || '',
           amendment.description || '',
           amendment.status || 'draft',
-          amendment.createdBy && actor?.name === amendment.createdBy ? actor.userId ?? null : null,
+          amendment.createdBy && actor?.name === amendment.createdBy ? actor?.userId ?? null : null,
           amendment.createdBy || actor?.name || null,
           amendment.protocolVersion || '1.0',
           iso(amendment.createdAt) || new Date().toISOString(),
@@ -459,7 +459,7 @@ export class ProtocolsService {
           amendmentId,
           roleKey,
           status,
-          actorName && actor?.name === actorName ? actor.userId ?? null : null,
+          actorName && actor?.name === actorName ? actor?.userId ?? null : null,
           actorName,
           iso(approval.at || approval.confirmedAt),
           approval.uploadedDoc || null,

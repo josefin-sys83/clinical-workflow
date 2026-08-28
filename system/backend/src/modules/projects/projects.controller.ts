@@ -1346,6 +1346,15 @@ async forceSynopsis(@Param('projectId') projectId: string, @Req() req: any) {
 
   return this.workflow.forceSynopsis(projectId, req.user);
 }
+
+@Post('/:projectId/workflow/force-protocol-draft')
+async forceProtocolDraft(@Param('projectId') projectId: string, @Req() req: any) {
+  if (process.env.NODE_ENV === 'production' && !req.user?.roles?.includes('admin')) {
+    throw new ForbiddenException('This endpoint is only available in development or for admins');
+  }
+
+  return this.projects.forceProtocolDraft(projectId, PROTOCOL_SECTION_TITLES, req.user);
+}
 }
 
 // Produces a short, human-readable note for one changed compatibility-response key.

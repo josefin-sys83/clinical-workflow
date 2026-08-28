@@ -23,7 +23,7 @@ import {
   removeProtocolAttachment,
   type ProtocolAttachment,
 } from '@/shared/api/documents';
-import { apiErrorMessage } from '@/shared/api/http';
+import { apiErrorMessage, apiFetch } from '@/shared/api/http';
 
 
 
@@ -35,7 +35,7 @@ export default function App() {
   const [reviewCycle, setReviewCycle] = useState<number>(0);
   const [showReviewConfirmation, setShowReviewConfirmation] = useState<boolean>(false);
   const [issueFilter, setIssueFilter] = useState<'my-issues' | 'all-issues'>('my-issues');
-  const [sessionUser, setSessionUser] = useState<{ id: string; name: string; email: string | null } | null>(null);
+  const [sessionUser, setSessionUser] = useState<{ id: string; name: string; email: string | null; roles: string[] } | null>(null);
   const [showAuditLog, setShowAuditLog] = useState<boolean>(false);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mainContentRef = useRef<HTMLDivElement | null>(null);
@@ -130,14 +130,23 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         if (p.data?.protocol?.sections?.length) {
           setProtocol(p.data.protocol);
           p.data.protocol.sections?.forEach((s: any) => {
-            if (s.content && s.approvalStatus !== 'approved')
+            if (s.content && s.approvalStatus !== 'approved' && s.aiGenerated !== false)
               analyzeSectionWithAI(s.title, s.content, s.id);
           });
-          runSynopsisConsistencyCheck();
+          if (p.data.protocol.sections.some((s: any) => s.aiGenerated !== false)) {
+            runSynopsisConsistencyCheck();
+          }
           setCheckingProtocol(false);
           clearInFlight();
         } else {
           setCheckingProtocol(false);
+          // In development, do not immediately enter a slow/failing AI call. Show
+          // the normal Generate button and the explicit no-AI draft bypass instead.
+          if (import.meta.env.DEV) {
+            setProtocolError('No protocol sections exist yet. Generate with AI or create a development test draft.');
+            clearInFlight();
+            return;
+          }
           setGeneratingProtocol(true);
           fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol', { method: 'POST' })
             .then(async r => {
@@ -201,7 +210,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     if (!token) return;
     fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => (r.ok ? r.json() : null))
-      .then((u: { id: string; name: string; email: string | null } | null) => { if (u) setSessionUser(u); })
+      .then((u: { id: string; name: string; email: string | null; roles?: string[] } | null) => {
+        if (u) setSessionUser({ ...u, roles: u.roles || [] });
+      })
       .catch(() => {});
   }, []);
 
@@ -308,10 +319,33 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       return { ...prev, sections: updatedSections };
     });
 
+    // Development bypass sections remain fully editable without invoking the
+    // unavailable AI provider. They can be analysed manually after AI is configured.
+    if (currentSection?.aiGenerated === false) return;
+
     // 3. Re-analyse and surface any resolved issues
     const sectionTitle = currentSection?.title || '';
     const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
     // resolved issues are reflected in the issues panel automatically
+  };
+
+  const canForceProtocolDraft = import.meta.env.DEV || sessionUser?.roles.includes('admin') === true;
+
+  const handleForceProtocolDraft = async () => {
+    if (!projectId) return;
+    setCheckingProtocol(true);
+    setProtocolError(null);
+    try {
+      const draft = await apiFetch<any>(`/projects/${projectId}/workflow/force-protocol-draft`, {
+        method: 'POST',
+      });
+      setProtocol(draft);
+      setExpandedSections(draft.sections?.map((section: any) => section.id) || ['1']);
+    } catch (error) {
+      setProtocolError(apiErrorMessage(error, 'Could not create the protocol development draft.'));
+    } finally {
+      setCheckingProtocol(false);
+    }
   };
 
   const handleAddComment = async (sectionId: string, content: string, type: string) => {
@@ -609,7 +643,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     owner: roles.find((r: any) => r.title === 'Principal Investigator')?.assignedTo?.[0]?.name || '',
     updated: s.updatedAt || '',
     comments: s.comments || [],
-    aiGenerated: true,
+    aiGenerated: s.aiGenerated !== false,
     reviewStatus: null,
     locked: false,
     reviewCycle: 0,
@@ -928,6 +962,15 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       {checkingProtocol && <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
                       {checkingProtocol ? 'Checking…' : 'Generate Protocol'}
                     </button>
+                    {canForceProtocolDraft && (
+                      <button
+                        onClick={handleForceProtocolDraft}
+                        disabled={checkingProtocol || generatingProtocol}
+                        className="mt-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
+                      >
+                        Create Test Draft (No AI)
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">

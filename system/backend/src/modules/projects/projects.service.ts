@@ -748,6 +748,86 @@ export class ProjectsService {
       client.release();
     }
   }
+
+  async forceProtocolDraft(
+    projectId: string,
+    sectionTitles: readonly string[],
+    actor: AuditActor,
+  ): Promise<any> {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `select id from projects where id = $1 for update`,
+        [projectId],
+      );
+      if (!rows[0]) throw new NotFoundException("Project not found");
+
+      const existing = await this.protocols.getByProject(projectId, client);
+      if (existing?.sections?.length) {
+        await client.query("ROLLBACK");
+        return {
+          ...existing,
+          bypassed: false,
+          message: "Protocol sections already exist",
+        };
+      }
+
+      const now = new Date().toISOString();
+      const draft = {
+        ...(existing || {}),
+        protocolId: existing?.protocolId || `CIP-DEV-${new Date().getFullYear()}-${projectId.slice(0, 8).toUpperCase()}`,
+        version: existing?.version || "1.0",
+        status: "draft",
+        amendments: existing?.amendments || [],
+        sections: sectionTitles.map((title, index) => ({
+          id: String(index + 1),
+          number: String(index + 1),
+          title,
+          content: "<p>Development draft — replace this placeholder with protocol content.</p>",
+          status: "draft",
+          approvalStatus: "draft",
+          locked: false,
+          aiGenerated: false,
+          issues: [],
+          requiredElements: [],
+          comments: [],
+          createdAt: now,
+          updatedAt: now,
+        })),
+      };
+
+      await this.protocols.save(projectId, draft, actor, client);
+      const created = await this.protocols.getByProject(projectId, client);
+      await this.audit.record({
+        projectId,
+        stepId: "protocol-make",
+        type: "workflow.bypass",
+        message: "Created editable protocol draft sections without AI using the admin bypass",
+        actor,
+        entityType: "protocol",
+        entityId: projectId,
+        entityLabel: "Protocol development draft",
+        metadata: {
+          bypassedAi: true,
+          sectionCount: sectionTitles.length,
+          workflowStateChanged: false,
+        },
+      }, client);
+      await client.query("COMMIT");
+
+      return {
+        ...created,
+        bypassed: true,
+        message: "Protocol development draft created without AI",
+      };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
   async getRequirements(
     risk: string,
     deviceCategory: string,
