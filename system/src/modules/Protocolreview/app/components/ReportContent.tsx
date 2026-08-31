@@ -8,6 +8,7 @@ import {
 import type { ReportSection, RegulatoryFinding } from '../types/review';
 import { TableView } from './TableView';
 import { FigureView } from './FigureView';
+import DOMPurify from 'dompurify';
 
 interface ReportContentProps {
   sections: ReportSection[];
@@ -68,6 +69,24 @@ export function ReportContent({
   };
 
   const renderContent = (section: ReportSection) => {
+    const rawContent = Array.isArray(section.content)
+      ? section.content.join('\n\n')
+      : section.content || '';
+    if (/<[a-z][\s\S]*>/i.test(rawContent)) {
+      const sanitized = DOMPurify.sanitize(rawContent, {
+        USE_PROFILES: { html: true },
+        ALLOWED_TAGS: ['h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'span', 'blockquote', 'code', 'pre'],
+        ALLOWED_ATTR: ['style'],
+      });
+      const container = document.createElement('div');
+      container.innerHTML = sanitized;
+      const children = Array.from(container.children);
+      if (children.length > 1 && children.every((child) => child.tagName === 'SPAN')) {
+        children.slice(1).forEach((child) => child.before(document.createElement('br')));
+      }
+      return <div className="text-neutral-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: container.innerHTML }} />;
+    }
+
     const contentArray = Array.isArray(section.content)
       ? section.content
       : (section.content || '').split('\n\n');

@@ -44,8 +44,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       is_active: boolean;
       must_reset_password: boolean;
       company_status: string | null;
+      system_role: Role;
+      is_superadmin: boolean;
+      company_id: string | null;
     }>(
-      `select u.is_active, u.must_reset_password, c.status as company_status
+      `select u.is_active, u.must_reset_password, u.system_role, u.is_superadmin,
+              u.company_id, c.status as company_status
        from users u
        left join companies c on c.id = u.company_id
        where u.id = $1`,
@@ -57,15 +61,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
     // Superadmins bypass this, same as the equivalent check at login (AuthService.login) —
     // their company_id is incidental, not the account they're acting on behalf of.
-    if (!payload.is_superadmin && user.company_status === 'suspended') {
+    if (!user.is_superadmin && user.company_status === 'suspended') {
       throw new UnauthorizedException('Your organisation account is suspended');
     }
+    // Authorization changes must take effect immediately. Roles stored only in a
+    // long-lived JWT remain stale after an administrator changes system_role, which
+    // previously left newly-promoted admins receiving reviewer/author 403 responses
+    // until they signed out and back in.
+    const roles: Role[] = user.is_superadmin || user.system_role === 'admin'
+      ? ['admin', 'author', 'reviewer', 'approver']
+      : [user.system_role];
     return {
       userId: payload.sub,
       name: payload.name,
-      roles: payload.roles,
-      companyId: payload.company_id,
-      isSuperadmin: payload.is_superadmin ?? false,
+      roles,
+      companyId: user.company_id,
+      isSuperadmin: user.is_superadmin,
       jti: payload.jti,
       exp: payload.exp,
       mustResetPassword: user.must_reset_password,

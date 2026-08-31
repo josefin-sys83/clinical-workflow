@@ -9,9 +9,9 @@ export default function PdfProtocol() {
   useEffect(() => {
     (async () => {
       if (!projectId) return;
-      // Drives protocol-pdf's own lifecycle through every stage the backend now
-      // requires before 'final' — each intermediate call is a no-op if already past it.
-      await advanceWorkflowStep({ projectId, stepId: 'protocol-pdf', to: 'final', note: 'Viewed Protocol PDF' });
+      // The PDF must be reviewed and approved before the two named signatories can
+      // sign it, but it is only final after both signatures have been collected.
+      await advanceWorkflowStep({ projectId, stepId: 'protocol-pdf', to: 'signed', note: 'Protocol PDF ready for signatures' });
     })();
   }, [projectId]);
 

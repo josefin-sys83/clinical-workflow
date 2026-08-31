@@ -31,7 +31,7 @@ function nextState(current: StepLifecycleState, action: TransitionAction): StepL
     case 'mark_input_needed':
       return 'input_needed';
     case 'mark_ready':
-      return 'ready';
+      return 'ready_for_review';
     case 'start_review':
       return 'in_review';
     case 'request_changes':
@@ -59,8 +59,10 @@ function nextState(current: StepLifecycleState, action: TransitionAction): StepL
 // may be invoked from a state that skips earlier stages (e.g. finalize from 'draft').
 const ALLOWED_FROM_STATES: Record<TransitionAction, StepLifecycleState[]> = {
   mark_input_needed: ['draft'],
-  mark_ready: ['draft', 'input_needed', 'blocked'],
-  start_review: ['ready'],
+  // `ready` is retained as a compatibility state for rows written before the
+  // frontend/backend naming was aligned on `ready_for_review`.
+  mark_ready: ['draft', 'input_needed', 'blocked', 'ready'],
+  start_review: ['ready', 'ready_for_review'],
   request_changes: ['in_review'],
   approve: ['in_review'],
   sign: ['approved'],

@@ -1,4 +1,5 @@
 import { GatewayTimeoutException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import sanitizeHtml from 'sanitize-html';
 
 // Exported so callers (e.g. the progress-polling endpoint) can know the total section
 // count up front without duplicating this list or waiting for generation to start.
@@ -89,7 +90,14 @@ export class AiService {
   // whitespace/case) in the real source text before trusting a "complete" verdict.
   private quoteAppearsInSource(quote: unknown, sourceContent: string): boolean {
     if (typeof quote !== 'string') return false;
-    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    // Rich-text protocol sections are stored as sanitized HTML. The model quotes what
+    // a reviewer sees (plain text), so comparing that quote to the raw `<span>...`
+    // storage representation produces false negatives. Strip markup and decode entities
+    // before applying the existing strict, verbatim comparison.
+    const normalize = (s: string) => sanitizeHtml(s, {
+      allowedTags: [],
+      allowedAttributes: {},
+    }).toLowerCase().replace(/\s+/g, ' ').trim();
     const normalizedQuote = normalize(quote);
     // A trivially short "quote" (or empty string) could match almost anything and proves
     // nothing about whether the claimed content is actually present.

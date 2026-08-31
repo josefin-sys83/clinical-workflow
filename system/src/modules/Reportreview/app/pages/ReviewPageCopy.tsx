@@ -127,6 +127,7 @@ export default function ReviewPageCopy() {
               onRequestChanges={handleRequestChanges}
               canApprove={canApprove}
               hasBlockers={hasUnacceptedBlockers}
+              hasSections={reportSections.length > 0}
               totalFindings={findings.length}
               acceptedFindings={findings.filter(f => f.acceptedRisk).length}
             />

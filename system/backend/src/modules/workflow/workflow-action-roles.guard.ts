@@ -26,6 +26,17 @@ const ACTION_ROLES: Record<TransitionAction, Role[]> = {
 // back for changes there is a distinct, legitimate use case from the review-stage
 // action, not a broadening of who can reject during review.
 const STEP_ACTION_ROLE_OVERRIDES: Partial<Record<string, Partial<Record<TransitionAction, Role[]>>>> = {
+  // Reviewers may recover an older review step that remained in draft after its
+  // authoring predecessor was submitted. New submissions now reach in_review before
+  // navigation, but this preserves approval for existing projects.
+  'protocol-review': {
+    mark_ready: ['admin', 'author', 'reviewer'],
+    start_review: ['admin', 'author', 'reviewer'],
+  },
+  'report-review': {
+    mark_ready: ['admin', 'author', 'reviewer'],
+    start_review: ['admin', 'author', 'reviewer'],
+  },
   'protocol-pdf': { request_changes: ['admin', 'reviewer', 'approver'] },
   'report-pdf': { request_changes: ['admin', 'reviewer', 'approver'] },
 };

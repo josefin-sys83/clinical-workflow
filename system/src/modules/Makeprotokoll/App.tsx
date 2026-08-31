@@ -104,7 +104,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const protocolLoadInFlightRef = useRef<string | null>(null);
 
-  const loadOrGenerateProtocol = React.useCallback(() => {
+  const loadOrGenerateProtocol = React.useCallback((generateIfMissing = !import.meta.env.DEV) => {
     if (!projectId) return;
     // Guards against duplicate concurrent generation runs (e.g. React StrictMode's
     // double-invoked effect in dev), which doubles AI request volume and can trip
@@ -116,8 +116,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     };
     setProtocolError(null);
     setCheckingProtocol(true);
-    fetch(apiBase + '/api/projects/' + projectId)
-      .then(r => r.json())
+    apiFetch<any>(`/projects/${projectId}`, { cache: 'no-store' })
       .then(p => {
         if (p.data && p.data.projectData) {
           setProjectData({
@@ -140,23 +139,18 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
           clearInFlight();
         } else {
           setCheckingProtocol(false);
-          // In development, do not immediately enter a slow/failing AI call. Show
-          // the normal Generate button and the explicit no-AI draft bypass instead.
-          if (import.meta.env.DEV) {
-            setProtocolError('No protocol sections exist yet. Generate with AI or create a development test draft.');
+          // Page entry in development only checks whether a protocol exists. A user
+          // click passes generateIfMissing=true and must reach the real AI endpoint.
+          if (!generateIfMissing) {
             clearInFlight();
             return;
           }
           setGeneratingProtocol(true);
-          fetch(apiBase + '/api/projects/' + projectId + '/generate-protocol', { method: 'POST' })
-            .then(async r => {
-              const body = await r.json().catch(() => null);
-              if (!r.ok) throw new Error(body?.message || `Protocol generation failed (HTTP ${r.status})`);
-              if (!body?.sections?.length) throw new Error('Protocol generation returned no sections');
-              return body;
-            })
+          apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
             .then(result => {
+              if (!result?.sections?.length) throw new Error('Protocol generation returned no sections');
               setProtocol(result);
+              setExpandedSections(result.sections.map((section: any) => section.id));
               result.sections?.forEach((s: any) => {
                 if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
               });
@@ -164,7 +158,10 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
             })
             .catch((err: any) => {
               console.error('Protocol generation failed', err);
-              setProtocolError(err?.message || 'Protocol generation failed. Please try again.');
+              setProtocolError(apiErrorMessage(
+                err,
+                err instanceof Error ? err.message : 'Protocol generation failed. Please try again.',
+              ));
             })
             .finally(() => {
               setGeneratingProtocol(false);
@@ -894,7 +891,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         <span>{protocolError}</span>
                       </div>
                       <button
-                        onClick={loadOrGenerateProtocol}
+                        onClick={() => loadOrGenerateProtocol(true)}
                         disabled={generatingProtocol || checkingProtocol}
                         className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white text-xs rounded flex-shrink-0 flex items-center gap-1.5"
                       >
@@ -955,7 +952,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       {protocolError ? 'No protocol sections available.' : 'No protocol sections yet.'}
                     </p>
                     <button
-                      onClick={loadOrGenerateProtocol}
+                      onClick={() => loadOrGenerateProtocol(true)}
                       disabled={checkingProtocol}
                       className="mt-1 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white text-xs rounded transition-colors flex items-center gap-1.5"
                     >

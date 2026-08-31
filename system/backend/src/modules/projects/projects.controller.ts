@@ -28,11 +28,16 @@ import { getMissingProtocolAttachmentIssues } from './protocol-attachment-refere
 // ClinicalInvestigationReport.tsx, so treating it as "the" signed record would be wrong —
 // this maps each signature slot straight to its step and fires the workflow's own
 // 'finalize' transition once every required slot for that step is filled.
-const SIGNATURE_STEP_ROLES: Record<string, { stepId: string; requiredRoles: string[] }> = {
+const SIGNATURE_STEP_ROLES: Record<string, { stepId?: string; requiredRoles: string[]; documentKind?: 'Protocol Amendment' }> = {
   investigator: { stepId: 'protocol-pdf', requiredRoles: ['investigator', 'sponsor'] },
   sponsor: { stepId: 'protocol-pdf', requiredRoles: ['investigator', 'sponsor'] },
   'report-investigator': { stepId: 'report-pdf', requiredRoles: ['report-investigator', 'report-sponsor'] },
   'report-sponsor': { stepId: 'report-pdf', requiredRoles: ['report-investigator', 'report-sponsor'] },
+  // Amendment signatures are persisted with the protocol aggregate but do not drive a
+  // workflow step. The amendment PATCH endpoint finalizes the approved amendment after
+  // both named slots have been collected.
+  'amendment-lead': { requiredRoles: ['amendment-lead', 'amendment-vp'], documentKind: 'Protocol Amendment' },
+  'amendment-vp': { requiredRoles: ['amendment-lead', 'amendment-vp'], documentKind: 'Protocol Amendment' },
 };
 
 @ApiBearerAuth()
@@ -338,11 +343,21 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     if (!stepConfigForRole) {
       throw new BadRequestException(`Unknown signature role "${body.role}"`);
     }
-    const preSignSnapshot = await this.workflow.getSnapshot(projectId);
-    if (preSignSnapshot.steps?.[stepConfigForRole.stepId]?.state !== 'signed') {
-      throw new BadRequestException(
-        `${stepConfigForRole.stepId} must be fully reviewed and approved (workflow state 'signed') before it can be signed — current state: ${preSignSnapshot.steps?.[stepConfigForRole.stepId]?.state ?? 'unknown'}`,
+    if (stepConfigForRole.stepId) {
+      const preSignSnapshot = await this.workflow.getSnapshot(projectId);
+      const preSignState = preSignSnapshot.steps?.[stepConfigForRole.stepId]?.state;
+      if (preSignState !== 'signed' && preSignState !== 'final') {
+        throw new BadRequestException(
+          `${stepConfigForRole.stepId} must be fully reviewed and approved (workflow state 'signed') before it can be signed — current state: ${preSignState ?? 'unknown'}`,
+        );
+      }
+    } else {
+      const approvedAmendments = (project.data?.protocol?.amendments || []).filter(
+        (amendment: any) => amendment.status === 'approved',
       );
+      if (approvedAmendments.length === 0) {
+        throw new BadRequestException('An approved protocol amendment is required before amendment signatures can be recorded');
+      }
     }
 
     const id = randomUUID();
@@ -374,8 +389,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // happen inside one row-locked transaction — otherwise two signatures submitted close
     // together could each be computed against the same stale snapshot and one would
     // silently overwrite the other (pentest F8).
-    const documentKind = body.role.startsWith('report-') ? 'Report' : 'Protocol';
-    const signatureStepId = body.role.startsWith('report-') ? 'report-pdf' : 'protocol-pdf';
+    const documentKind = stepConfigForRole.documentKind ?? (body.role.startsWith('report-') ? 'Report' : 'Protocol');
+    const signatureStepId = stepConfigForRole.stepId;
     const { signatures: allSignatures } = await this.projects.updateSignaturesAtomic(
       projectId,
       (existing) => {
@@ -410,7 +425,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // even offered); if the workflow is somehow in a different state, skip rather than
     // let an unrelated inconsistency turn a successful signature into a failed request.
     const stepConfig = SIGNATURE_STEP_ROLES[body.role];
-    if (stepConfig) {
+    if (stepConfig?.stepId) {
       const hasAllRequiredSignatures = stepConfig.requiredRoles.every((r) =>
         allSignatures.some((s: any) => s.role === r),
       );
@@ -818,6 +833,15 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     },
     @Req() req: any,
   ) {
+    if (body.action === 'finalize') {
+      const signatures = await this.projects.get(projectId).then((project) => project.data?.signatures || []);
+      const hasLeadSignature = signatures.some((signature: any) => signature.role === 'amendment-lead');
+      const hasVpSignature = signatures.some((signature: any) => signature.role === 'amendment-vp');
+      if (!hasLeadSignature || !hasVpSignature) {
+        throw new BadRequestException('Both Protocol Lead and Clinical Affairs VP amendment signatures are required before finalization');
+      }
+    }
+
     let updatedAmendment: any;
     let shouldUnblock = false;
 
@@ -862,8 +886,10 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         protocol = { ...protocol, sections };
       }
 
-      shouldUnblock = (amendment.status === 'approved' || amendment.status === 'rejected') &&
-        !amendments.some((item: any) => item.id !== amendmentId && item.status === 'draft');
+      shouldUnblock = (amendment.status === 'finalized' || amendment.status === 'rejected') &&
+        !amendments.some((item: any) =>
+          item.id !== amendmentId && item.status !== 'finalized' && item.status !== 'rejected',
+        );
       updatedAmendment = amendment;
       return { ...protocol, amendments };
     }, req.user, () => ({
@@ -955,7 +981,10 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
   @Post('/:projectId/generate-report')
   @UseGuards(AiThrottlerGuard)
-  async generateReport(@Param('projectId') projectId: string) {
+  async generateReport(
+    @Param('projectId') projectId: string,
+    @Body() body: { onlyMissing?: boolean } = {},
+  ) {
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
     const projectData = project?.data?.projectData || {};
@@ -963,7 +992,10 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
     const existingReport = project?.data?.report || {};
-    const existingSections = existingReport.sections || {};
+    const rawExistingSections = existingReport.sections || {};
+    const existingSections: Record<string, any> = Array.isArray(rawExistingSections)
+      ? Object.fromEntries(rawExistingSections.map((section: any) => [section.id, section]))
+      : rawExistingSections;
 
     // Resolve targetMarkets from multiple sources
     const inferredFromRequirements: string[] = (scope?.requirements || [])
@@ -1018,25 +1050,31 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // directly via dangerouslySetInnerHTML without necessarily re-fetching first — so
     // relying on ProjectsService.update()'s storage-side sanitization alone would leave
     // the immediate response unsanitized.
-    const generatedContents: string[] = [];
-    for (const s of sectionDefs) {
+    const sectionsToGenerate = body.onlyMissing
+      ? sectionDefs.filter((section) => !String(existingSections[section.id]?.content || '').trim())
+      : sectionDefs;
+    const generatedContents = new Map<string, string>();
+    for (const s of sectionsToGenerate) {
       const content = await this.ai.generateReportSection(
         s.title, s.number, protocolSections, enrichedSynopsis, enrichedScope, projectData, roles, []
       );
-      generatedContents.push(sanitizeSectionHtml(content));
+      generatedContents.set(s.id, sanitizeSectionHtml(content).trim());
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    const newSections: Record<string, any> = {};
-    sectionDefs.forEach((s, i) => {
-      newSections[s.id] = { ...(existingSections[s.id] || {}), content: generatedContents[i].trim() };
+    const newSections: Record<string, any> = { ...existingSections };
+    sectionDefs.forEach((section) => {
+      const generatedContent = generatedContents.get(section.id);
+      newSections[section.id] = {
+        ...(existingSections[section.id] || {}),
+        ...(generatedContent !== undefined ? { content: generatedContent } : {}),
+      };
     });
 
     await this.projects.update(
       projectId,
       {
         data: {
-          ...project.data,
           report: { ...existingReport, sections: newSections, sectionDefs },
         },
       },
@@ -1050,7 +1088,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         entityLabel: 'Clinical Investigation Report',
         metadata: {
           model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
-          sectionsGenerated: sectionDefs.length,
+          sectionsGenerated: sectionsToGenerate.length,
           targetMarkets,
           deviceName,
           generatedAt: new Date().toISOString(),
@@ -1058,11 +1096,11 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       }],
     );
 
-    return sectionDefs.map((s, i) => ({
+    return sectionDefs.map((s) => ({
       id: s.id,
       title: s.title,
       number: s.number,
-      content: generatedContents[i].trim(),
+      content: String(newSections[s.id]?.content || ''),
     }));
   }
 
@@ -1145,7 +1183,6 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       projectId,
       {
         data: {
-          ...project.data,
           report: {
             ...existingReport,
             sections: {

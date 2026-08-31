@@ -106,7 +106,9 @@ export function ReportWorkspace() {
       .catch(() => {});
   }, []);
 
-  const pendingProtocolAmendments = protocolAmendments.filter((a: any) => a.status === 'draft');
+  const pendingProtocolAmendments = protocolAmendments.filter(
+    (a: any) => a.status !== 'finalized' && a.status !== 'rejected',
+  );
   const isReportBlocked = pendingProtocolAmendments.length > 0;
 
   useEffect(() => {
@@ -115,9 +117,14 @@ export function ReportWorkspace() {
       fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()),
       fetch(apiBase + '/api/projects/' + projectId + '/report-sections').then(r => r.json()).catch(() => null),
     ]).then(([p, sectionMeta]) => {
-      if (p.data?.projectData) setProjectData(p.data.projectData);
+      setProjectData({
+        ...(p.data?.projectData || {}),
+        projectName: p.name,
+        deviceCategory: p.deviceCategory,
+        targetMarkets: p.targetMarkets || [],
+      });
       if (p.data?.scope) setScope(p.data.scope);
-      const newRoles: any[] = p.data?.roles || [];
+      const newRoles: any[] = p.roles || [];
       if (newRoles.length > 0) setRawRoles(newRoles);
 
       const owner = userFromRole(newRoles, 'Medical Writer');
@@ -134,7 +141,7 @@ export function ReportWorkspace() {
       const apiDefs: Array<{ id: string; title: string; number: number }> =
         sectionMeta?.sections || p.data?.report?.sectionDefs || [];
       if (apiDefs.length > 0) setApiSectionDefs(apiDefs);
-      if (sectionMeta?.targetMarkets) setTargetMarkets(sectionMeta.targetMarkets);
+      setTargetMarkets(sectionMeta?.targetMarkets || p.targetMarkets || []);
 
       if (p.data?.protocol?.sections) {
         setProtocolSectionsForAmendment(p.data.protocol.sections.map((s: any) => ({ id: s.id, title: s.title })));
@@ -299,7 +306,6 @@ export function ReportWorkspace() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           data: {
-            ...projectRes.data,
             report: {
               ...existingReport,
               sections: {
@@ -309,9 +315,14 @@ export function ReportWorkspace() {
             },
           },
         }),
+      }).then(async (response) => {
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error(errorBody?.message || `Report section save failed (${response.status})`);
+        }
       });
-    } catch {
-      // silently fail — state already applied in memory
+    } catch (error) {
+      console.error('Report section state save failed', error);
     }
   };
 
