@@ -14,6 +14,7 @@ export type StepLifecycleState =
   | 'draft'
   | 'input_needed'
   | 'ready'
+  | 'ready_for_review'
   | 'in_review'
   | 'blocked'
   | 'approved'

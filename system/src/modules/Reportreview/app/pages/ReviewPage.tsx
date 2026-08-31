@@ -55,8 +55,18 @@ export default function ReviewPage() {
       fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()),
       fetch(apiBase + '/api/projects/' + projectId + '/report-sections').then(r => r.json()).catch(() => null),
     ]).then(([p, sectionMeta]) => {
-      setRoles(p.data?.roles || []);
-      setReportData(p.data);
+      // Project setup fields that have been normalized live at the response root;
+      // projects.data only contains document/workspace data.
+      setRoles(p.roles || []);
+      setReportData({
+        ...p.data,
+        projectData: {
+          ...(p.data?.projectData || {}),
+          projectName: p.name,
+          deviceCategory: p.deviceCategory,
+          targetMarkets: p.targetMarkets || [],
+        },
+      });
 
       // report.sections is sometimes persisted as an array (see Makereport's
       // saveReportSectionState) and sometimes as an id-keyed object — normalize
@@ -73,14 +83,23 @@ export default function ReviewPage() {
       );
       setComments(allComments);
 
-      const sectionList = Object.entries(savedSections).map(([id, data]: [string, any]) => ({
-        id,
-        title: titleMap[id] || data.title || id,
-        // ReportContent/SectionOverview only distinguish 'approved' from everything else
-        status: (data.state === 'approved' || data.state === 'locked') ? 'approved' : 'warning',
-        content: data.content || '',
-        issues: data.issues || [],
-      })).filter((s: any) => s.content);
+      const sectionList = Object.entries(savedSections).map(([id, data]: [string, any]) => {
+        const wontFixDescriptions = new Set<string>(
+          Array.isArray(data.wontFixIssues) ? data.wontFixIssues : [],
+        );
+        return {
+          id,
+          title: titleMap[id] || data.title || id,
+          // ReportContent/SectionOverview only distinguish 'approved' from everything else
+          status: (data.state === 'approved' || data.state === 'locked') ? 'approved' : 'warning',
+          content: data.content || '',
+          // Authoring persists "won't fix" decisions by issue description. Review must
+          // apply the same suppression or dismissed blockers reappear and disable approval.
+          issues: (data.issues || []).filter((issue: any) =>
+            !wontFixDescriptions.has(issue.description || issue.message || ''),
+          ),
+        };
+      }).filter((s: any) => s.content);
 
       setSections(sectionList);
       if (sectionList.length > 0) setActiveSection(sectionList[0].id);
@@ -240,7 +259,7 @@ export default function ReviewPage() {
       fetch(apiBase + '/api/projects/' + projectId, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: updated }),
+        body: JSON.stringify({ data: { report: updated.report } }),
       }).catch(() => {});
 
       return updated;
@@ -315,6 +334,7 @@ export default function ReviewPage() {
               onRequestChanges={handleRequestChanges}
               canApprove={canApprove}
               hasBlockers={blockerCount > 0}
+              hasSections={sections.length > 0}
               totalFindings={findings.length}
               acceptedFindings={findings.filter((f: any) => f.acceptedRisk).length}
             />

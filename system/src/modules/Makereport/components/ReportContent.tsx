@@ -447,7 +447,6 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           data: {
-            ...projectRes.data,
             report: {
               ...existingReport,
               sections: {
@@ -558,7 +557,11 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             const unresolvedComments = section.comments.filter(c => !c.resolved);
             
             // Count blockers and warnings from AI analysis
-            const openAiIssues = (sectionAiIssues[section.id] || []).filter((i: any) => i.status === 'open' || !i.status);
+            const suppressedDescriptions = new Set(wontFixDescRef.current[section.id] || []);
+            const openAiIssues = (sectionAiIssues[section.id] || []).filter((i: any) =>
+              (i.status === 'open' || !i.status) &&
+              !suppressedDescriptions.has(i.description || i.message || ''),
+            );
             const blockerCount = openAiIssues.filter((i: any) => i.severity === 'blocker').length;
             const issueCount = openAiIssues.filter((i: any) => i.severity === 'warning').length;
             const hasBlockers = blockerCount > 0 || issueCount > 0;
@@ -1115,7 +1118,14 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
               {/* Blocker Alert */}
               {(() => {
-                const totalBlockers = Object.values(sectionAiIssues).flat().filter((i: any) => i.severity === 'blocker').length;
+                const totalBlockers = Object.entries(sectionAiIssues).reduce((count, [sectionId, issues]) => {
+                  const suppressedDescriptions = new Set(wontFixDescRef.current[sectionId] || []);
+                  return count + issues.filter((issue: any) =>
+                    issue.severity === 'blocker' &&
+                    (issue.status === 'open' || !issue.status) &&
+                    !suppressedDescriptions.has(issue.description || issue.message || ''),
+                  ).length;
+                }, 0);
                 const hasBlockers = totalBlockers > 0;
                 return (
                   <div className={`p-3 mb-3 rounded border ${hasBlockers ? 'bg-[#FEE2E2] border-[#FCA5A5]' : 'bg-[#F0FDF4] border-[#86EFAC]'}`}>
@@ -1217,17 +1227,45 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       <EnterReviewModeModal
         isOpen={reviewModeModalOpen}
         onClose={() => setReviewModeModalOpen(false)}
-        onProceed={() => {
-          setReviewModeModalOpen(false);
-          // Transition report-make → approved so the sidebar unlocks Report Review.
-          if (projectId) {
-            advanceWorkflowStep({
-              projectId,
-              stepId: 'report-make',
-              to: 'approved',
-              note: 'Report entered review mode',
-            });
+        onProceed={async () => {
+          if (!projectId) return;
+          if (isReportBlocked) {
+            throw new Error('Finalize or reject the pending protocol amendment before entering Report Review.');
           }
+
+          // A report section scaffold is not report content. Generate and persist every
+          // missing section before the workflow can leave authoring. The previous flow
+          // navigated immediately and relied on a per-section, on-open AI draft effect,
+          // so a new project routinely arrived in Review with zero persisted sections.
+          const hasMissingSections = sections.some((section) =>
+            !section.content?.trim() && !section.aiDraft?.trim(),
+          );
+          if (hasMissingSections) {
+            const response = await fetch(`/api/projects/${projectId}/generate-report`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ onlyMissing: true }),
+            });
+            const body = await response.json().catch(() => null);
+            if (!response.ok || !Array.isArray(body) || body.some((section: any) => !String(section.content || '').trim())) {
+              throw new Error(body?.message || 'Failed to generate and persist every required report section.');
+            }
+          }
+
+          // Complete authoring and hand the populated review step to the reviewer.
+          await advanceWorkflowStep({
+            projectId,
+            stepId: 'report-make',
+            to: 'approved',
+            note: 'Report entered review mode',
+          });
+          await advanceWorkflowStep({
+            projectId,
+            stepId: 'report-review',
+            to: 'in_review',
+            note: 'Report submitted for review',
+          });
+          setReviewModeModalOpen(false);
         }}
         sections={sections}
       />

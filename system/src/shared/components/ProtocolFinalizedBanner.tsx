@@ -58,9 +58,9 @@ export function ProtocolFinalizedBanner({ projectId, latestAmendment }: Props) {
       <p className="text-sm font-medium text-amber-800">Protocol finalized</p>
       <p className="text-sm text-amber-700 mt-0.5">
         The protocol has been finalized. Your changes require a formal{' '}
-        <a href={`/projects/${projectId}/workflow/protocol/make`} className="underline font-medium hover:text-amber-900">
+        <Link to={`/projects/${projectId}/workflow/protocol/amendment`} className="underline font-medium hover:text-amber-900">
           protocol amendment
-        </a>
+        </Link>
         .
       </p>
     </div>

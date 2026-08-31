@@ -784,7 +784,7 @@ export class ProjectsService {
           id: String(index + 1),
           number: String(index + 1),
           title,
-          content: "<p>Development draft — replace this placeholder with protocol content.</p>",
+          content: "Development draft — replace this placeholder with protocol content.",
           status: "draft",
           approvalStatus: "draft",
           locked: false,

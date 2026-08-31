@@ -118,7 +118,7 @@ export function ClinicalInvestigationReport() {
     ])
       .then(([p, sectionMeta]) => {
         setProjectData(p);
-        setRoles(p.data?.roles || []);
+        setRoles(p.roles || []);
 
         // Saved sections only store { state, content } — real titles come from
         // the dynamic report-sections definition, keyed by section id.
@@ -215,9 +215,7 @@ export function ClinicalInvestigationReport() {
       setConfirmingAs(null);
       setConfirmChecked(false);
       setConfirmNameInput('');
-      if (updated.investigator && updated.sponsor) {
-        await advanceWorkflowStep({ projectId, stepId: 'report-pdf', to: 'signed' });
-      }
+      // The backend finalizes report-pdf atomically after both signature slots exist.
     } catch (e) {
       if (e instanceof WorkflowStepBlockedError) {
         window.alert(e.message);
@@ -424,10 +422,12 @@ export function ClinicalInvestigationReport() {
   );
 
   const sponsorDisplayName = projectData?.data?.projectData?.sponsor
-    || projectData?.data?.roles?.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name
+    || projectData?.roles?.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name
     || '[Sponsor]';
-  const deviceDisplayName = projectData?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim() || '[Device Name]';
-  const targetMarketsDisplay = (projectData?.data?.projectData?.targetMarkets || []).join(', ') || 'EU';
+  const deviceDisplayName = projectData?.data?.projectData?.deviceName
+    || projectData?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim()
+    || '[Device Name]';
+  const targetMarketsDisplay = (projectData?.targetMarkets || []).join(', ') || '—';
   const protocolIdDisplay = projectData?.data?.protocol?.protocolId || '[Protocol ID]';
   const studyTitleDisplay = projectData?.name || 'Clinical Investigation Report';
 

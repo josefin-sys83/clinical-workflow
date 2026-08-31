@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { Lock, Info, CheckCircle2, ShieldCheck } from 'lucide-react';
+import DOMPurify from 'dompurify';
 import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 
@@ -68,6 +69,35 @@ function fmtDate(iso: string) {
   });
 }
 
+function hasHtmlMarkup(content: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(content);
+}
+
+function sanitizeProtocolHtml(content: string): string {
+  const sanitized = DOMPurify.sanitize(content, {
+    USE_PROFILES: { html: true },
+    ALLOWED_TAGS: ['h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'span', 'blockquote', 'code', 'pre'],
+    ALLOWED_ATTR: ['style'],
+  });
+  // Word/editor imports sometimes store every paragraph as an adjacent root-level
+  // <span> with no <p> or <br>. Preserve inline spans inside real block elements, but
+  // give those root spans paragraph separation in the approval document.
+  const container = document.createElement('div');
+  container.innerHTML = sanitized;
+  const children = Array.from(container.children);
+  if (children.length > 1 && children.every((child) => child.tagName === 'SPAN')) {
+    children.slice(1).forEach((child) => child.before(document.createElement('br')));
+  }
+  return container.innerHTML;
+}
+
+function protocolPlainText(content: string): string {
+  if (!hasHtmlMarkup(content)) return content;
+  const container = document.createElement('div');
+  container.innerHTML = sanitizeProtocolHtml(content);
+  return container.textContent || '';
+}
+
 export function ProtocolDocument() {
   const navigate = useNavigate();
   const { projectId } = useParams();
@@ -107,11 +137,14 @@ export function ProtocolDocument() {
         console.log('[PdfProtocol] full project response:', JSON.stringify(p, null, 2));
         console.log('[PdfProtocol] roles (data.roles):', p?.data?.roles);
 
-        if (p.data?.projectData) setProjectData(p.data.projectData);
+        setProjectData({
+          ...(p.data?.projectData || {}),
+          projectName: p.name,
+          deviceCategory: p.deviceCategory,
+          targetMarkets: p.targetMarkets || [],
+        });
 
         const fetchedRoles =
-          p?.data?.roles ||
-          p?.data?.projectData?.roles ||
           p?.roles ||
           [];
         setRoles(fetchedRoles);
@@ -242,12 +275,8 @@ export function ProtocolDocument() {
         const record: SignatureRecord = await res.json();
         setSignatures(prev => {
           const updated = { ...prev, [which]: record };
-          // Both signatures present — transition protocol-pdf to signed
-          if (updated.investigator && updated.sponsor && projectId) {
-            advanceWorkflowStep({ projectId, stepId: 'protocol-pdf', to: 'signed' }).catch((e) => {
-              setSignError(e instanceof WorkflowStepBlockedError ? e.message : 'Signature saved, but finalizing the sign-off failed. Please try again.');
-            });
-          }
+          // The backend atomically finalizes the workflow when both required signature
+          // slots are present. Do not attempt to move the now-final state backwards.
           return updated;
         });
         setConfirmingAs(null);
@@ -453,7 +482,7 @@ export function ProtocolDocument() {
                       label: 'Primary Objective',
                       value: (() => {
                         const s = sections.find(s => s.title?.toLowerCase().includes('objective') || s.title?.toLowerCase().includes('rationale'));
-                        if (s?.content) { const f = (s.content as string).split('\n')[0]; return f.length > 200 ? f.slice(0, 200) + '…' : f; }
+                        if (s?.content) { const f = protocolPlainText(String(s.content)).split('\n')[0]; return f.length > 200 ? f.slice(0, 200) + '…' : f; }
                         return `To demonstrate the safety and performance of the ${deviceName || 'investigational device'}`;
                       })(),
                     },
@@ -501,9 +530,11 @@ export function ProtocolDocument() {
                 <section style={{ marginBottom: '40px' }}>
                   <h2 style={h2Style}>{index + 1}. {section.title}</h2>
                   {section.content
-                    ? (section.content as string).split(/\n\n+/).map((para: string, pIdx: number) =>
-                        para.trim() ? <p key={pIdx} style={paraStyle}>{para.trim()}</p> : null
-                      )
+                    ? hasHtmlMarkup(String(section.content))
+                      ? <div style={paraStyle} dangerouslySetInnerHTML={{ __html: sanitizeProtocolHtml(String(section.content)) }} />
+                      : String(section.content).split(/\n\n+/).map((para: string, pIdx: number) =>
+                          para.trim() ? <p key={pIdx} style={paraStyle}>{para.trim()}</p> : null
+                        )
                     : <p style={{ ...paraStyle, color: '#9ca3af', fontStyle: 'italic' }}>Content pending for this section.</p>
                   }
                 </section>

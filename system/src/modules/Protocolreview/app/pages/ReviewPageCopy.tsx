@@ -50,8 +50,13 @@ export default function ReviewPageCopy() {
       .then((r) => r.json())
       .then((p) => {
         if (p.data) {
-          if (p.data.projectData) setProjectData(p.data.projectData);
-          if (p.data.roles) setRoles(p.data.roles);
+          setProjectData({
+            ...(p.data.projectData || {}),
+            projectName: p.name,
+            deviceCategory: p.deviceCategory,
+            targetMarkets: p.targetMarkets || [],
+          });
+          setRoles(p.roles || []);
           if (p.data.protocol) setProtocol(p.data.protocol);
         }
       })

@@ -3,7 +3,8 @@ import { useState, useEffect, useMemo } from "react";
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
-import { advanceWorkflowStep } from '@/shared/services/workflowService';
+import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
+import { apiErrorMessage } from '@/shared/api/http';
 import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
@@ -280,7 +281,7 @@ interface Role {
 export function Gate1() {
   const navigate = useNavigate();
   const { projectId } = useParams();
-  const { snapshot: workflowSnapshot } = useWorkflowSnapshot({ projectId });
+  const { snapshot: workflowSnapshot, refresh: refreshWorkflowSnapshot } = useWorkflowSnapshot({ projectId });
   const isScopeLocked = (workflowSnapshot?.steps?.['protocol-pdf']?.state as string) === 'final';
   const { latestAmendment } = useProtocolStatus(projectId);
 
@@ -296,7 +297,10 @@ export function Gate1() {
 
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
-  // to Prevent the autosave effect from writing the initial empty state before the
+  const [scopeSubmitError, setScopeSubmitError] = useState<string | null>(null);
+  const [submittingScope, setSubmittingScope] = useState(false);
+  // Prevent the autosave effect from writing the initial empty state before the
+  // project's saved setup/scope values have finished loading.
   const [scopeLoaded, setScopeLoaded] = useState(false);
 
   // Derive consequences when scope changes
@@ -384,6 +388,7 @@ export function Gate1() {
     setGeneratingRequirements(true);
     try {
       const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
+      // Markets are relational and GET /projects/:id exposes their codes at the top level.
       const targetMarkets = Array.isArray(project.targetMarkets)
         ? project.targetMarkets.join(', ')
         : '';
@@ -567,6 +572,8 @@ Return ONLY a JSON array, no markdown:
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // Keep Project Setup's authoritative values synchronized when the user
+          // adjusts them during Scope confirmation.
           deviceCategory,
           data: {
             projectData: { intendedUse, customIntendedUse },
@@ -791,10 +798,25 @@ Return ONLY a JSON array, no markdown:
   };
 
   const handleConfirmGate = async () => {
-    if (projectId) {
+    if (!projectId || submittingScope) return;
+
+    setScopeSubmitError(null);
+    setSubmittingScope(true);
+    try {
       await advanceWorkflowStep({ projectId, stepId: 'scope', to: 'approved' });
+      await refreshWorkflowSnapshot();
+      navigate(`/projects/${projectId}/workflow/protocol/make`);
+    } catch (error) {
+      const message = error instanceof WorkflowStepBlockedError
+        ? error.message
+        : apiErrorMessage(
+            error,
+            error instanceof Error ? error.message : 'Scope could not be submitted. Please try again.',
+          );
+      setScopeSubmitError(message);
+    } finally {
+      setSubmittingScope(false);
     }
-    navigate(`/projects/${projectId}/workflow/protocol/make`);
   };
 
   const maxStep = parseInt(localStorage.getItem('maxStep_' + projectId) || '0');
@@ -1251,27 +1273,35 @@ Return ONLY a JSON array, no markdown:
           </div>
 
           {/* Primary Action */}
-          <div className="bg-white border border-slate-200 rounded-lg p-6 flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-medium text-slate-900">Ready to proceed?</h3>
-              <p className="text-sm text-slate-600 mt-1">
-                {allReadinessChecksPassed
-                  ? "All required information has been provided" 
-                  : "Complete all requirements above to proceed"}
-              </p>
+          <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-medium text-slate-900">Ready to proceed?</h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  {allReadinessChecksPassed
+                    ? "All required information has been provided"
+                    : "Complete all requirements above to proceed"}
+                </p>
+              </div>
+              <Button
+                size="lg"
+                disabled={!allReadinessChecksPassed || submittingScope}
+                onClick={handleConfirmGate}
+                className={
+                  allReadinessChecksPassed && !submittingScope
+                    ? `${theme.button.primary} shadow-sm hover:shadow px-6 py-3 rounded-lg font-medium transition-all`
+                    : "bg-slate-200 text-slate-500 cursor-not-allowed px-6 py-3 rounded-lg font-medium"
+                }
+              >
+                {submittingScope ? 'Submitting Scope…' : 'Complete Scope & Intended Use'}
+              </Button>
             </div>
-            <Button
-              size="lg"
-              disabled={!allReadinessChecksPassed}
-              onClick={handleConfirmGate}
-              className={
-                allReadinessChecksPassed
-                  ? `${theme.button.primary} shadow-sm hover:shadow px-6 py-3 rounded-lg font-medium transition-all`
-                  : "bg-slate-200 text-slate-500 cursor-not-allowed px-6 py-3 rounded-lg font-medium"
-              }
-            >
-              Complete Scope & Intended Use
-            </Button>
+            {scopeSubmitError && (
+              <Alert variant="destructive" className="border-red-200 bg-red-50">
+                <AlertCircle />
+                <AlertDescription>{scopeSubmitError}</AlertDescription>
+              </Alert>
+            )}
           </div>
         </div>
       </div>

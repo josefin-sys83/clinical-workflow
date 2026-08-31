@@ -1,17 +1,20 @@
 import { useNavigate, useParams } from 'react-router-dom';
+import { useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import { ReportSection } from '../types';
 
 interface EnterReviewModeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onProceed: () => void;
+  onProceed: () => void | Promise<void>;
   sections: ReportSection[];
 }
 
 export function EnterReviewModeModal({ isOpen, onClose, onProceed, sections }: EnterReviewModeModalProps) {
   const navigate = useNavigate();
   const { projectId } = useParams();
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -66,6 +69,11 @@ export function EnterReviewModeModal({ isOpen, onClose, onProceed, sections }: E
           </div>
 
           <p className="text-[#6B7280] italic mb-4 text-xs">Review Mode allows you to receive feedback and make updates. You can exit and re-enter review as many times as needed until all issues are resolved and the protocol is approved.</p>
+          {submitError && (
+            <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+              {submitError}
+            </div>
+          )}
 
           <div>
             <h3 className="text-[#111827] font-semibold text-sm mb-2">What happens in Review Mode:</h3>
@@ -84,11 +92,23 @@ export function EnterReviewModeModal({ isOpen, onClose, onProceed, sections }: E
             Cancel
           </button>
           <button
-            onClick={() => { navigate(`/projects/${projectId}/workflow/report/review`); onProceed(); }}
-            className="px-4 py-2 bg-[#1F2937] text-white rounded hover:bg-[#111827] transition-colors flex items-center gap-2 text-sm font-medium"
+            disabled={submitting}
+            onClick={async () => {
+              setSubmitting(true);
+              setSubmitError(null);
+              try {
+                await onProceed();
+                navigate(`/projects/${projectId}/workflow/report/review`);
+              } catch (error) {
+                setSubmitError(error instanceof Error ? error.message : 'Could not prepare the report for review.');
+              } finally {
+                setSubmitting(false);
+              }
+            }}
+            className="px-4 py-2 bg-[#1F2937] text-white rounded hover:bg-[#111827] disabled:opacity-50 disabled:cursor-wait transition-colors flex items-center gap-2 text-sm font-medium"
           >
             <CheckCircle className="w-4 h-4" />
-            Proceed to Review
+            {submitting ? 'Generating and saving report…' : 'Proceed to Review'}
           </button>
         </div>
       </div>

@@ -5,6 +5,7 @@ interface ReviewFooterProps {
   onRequestChanges: () => void;
   canApprove: boolean;
   hasBlockers: boolean;
+  hasSections: boolean;
   totalFindings?: number;
   acceptedFindings?: number;
 }
@@ -14,6 +15,7 @@ export function ReviewFooter({
   onRequestChanges,
   canApprove,
   hasBlockers,
+  hasSections,
   totalFindings = 0,
   acceptedFindings = 0,
 }: ReviewFooterProps) {
@@ -21,10 +23,12 @@ export function ReviewFooter({
     <footer className="border-t border-neutral-200 bg-white px-12 py-4">
       {!canApprove && (
         <div className="mb-3 flex items-center gap-2 rounded-md bg-neutral-50 px-4 py-2 border border-neutral-200">
-          <p className="text-sm text-neutral-600">
-            {hasBlockers 
+          <p className="text-sm text-neutral-600 flex-1">
+            {!hasSections
+              ? 'Report cannot be approved because no persisted report sections were loaded. Return to Report Authoring and generate or save the report sections.'
+              : hasBlockers
               ? `Report cannot be approved. All findings must be accepted before approval. (${acceptedFindings}/${totalFindings} accepted)`
-              : `Report cannot be approved. Critical blockers must be resolved before approval. (${acceptedFindings}/${totalFindings} accepted)`}
+              : 'Report approval is temporarily unavailable.'}
           </p>
         </div>
       )}

@@ -290,6 +290,7 @@ export function AmendmentFormPage() {
   const [confirmNameInput, setConfirmNameInput] = useState('');
   const [documentHash, setDocumentHash] = useState('');
   const [saving, setSaving] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
 
   // Sidebar expand state
   const [expandedAmendmentId, setExpandedAmendmentId] = useState<string | null>(null);
@@ -307,8 +308,13 @@ export function AmendmentFormPage() {
       fetch(`${apiBase}/api/projects/${projectId}/amendments`).then(r => r.json()),
     ])
       .then(([project, amds]) => {
-        if (project.data?.projectData) setProjectData(project.data.projectData);
-        setRoles(project?.data?.roles || project?.data?.projectData?.roles || []);
+        setProjectData({
+          ...(project.data?.projectData || {}),
+          projectName: project.name,
+          deviceCategory: project.deviceCategory,
+          targetMarkets: project.targetMarkets || [],
+        });
+        setRoles(project.roles || []);
         if (project.data?.protocol) setProtocol(project.data.protocol);
         setAmendments(
           Array.isArray(amds) ? amds.filter((a: Amendment) => a.status === 'approved' || a.status === 'finalized') : []
@@ -378,6 +384,7 @@ export function AmendmentFormPage() {
   const hashPreview = documentHash ? `${documentHash.slice(0, 16)}…` : 'computing…';
 
   const handleSignClick = (role: 'amendment-lead' | 'amendment-vp') => {
+    setSignError(null);
     setConfirmChecked(false);
     setConfirmNameInput('');
     setConfirmingAs(role);
@@ -390,9 +397,7 @@ export function AmendmentFormPage() {
     const roleTitle   = confirmingAs === 'amendment-lead' ? protocolLeadTitle : clinicalVPTitle;
     const which = confirmingAs;
 
-    setConfirmingAs(null);
-    setConfirmNameInput('');
-    setConfirmChecked(false);
+    setSignError(null);
     setSaving(true);
 
     try {
@@ -408,27 +413,40 @@ export function AmendmentFormPage() {
           documentHash,
         }),
       });
-      if (res.ok) {
-        const record: SignatureRecord = await res.json();
-        const newSigs = { ...signatures, [which]: record };
-        setSignatures(newSigs);
-
-        // Both signatures now present — finalize all approved amendments
-        if (newSigs['amendment-lead'] && newSigs['amendment-vp']) {
-          await Promise.all(
-            amendments.map(a =>
-              fetch(`${apiBase}/api/projects/${projectId}/amendments/${a.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'finalize' }),
-              })
-            )
-          );
-          setAmendments(prev => prev.map(a => ({ ...a, status: 'finalized' })));
-        }
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}));
+        throw new Error(errorBody?.message || `Amendment signature failed (${res.status})`);
       }
+
+      const record: SignatureRecord = await res.json();
+      const newSigs = { ...signatures, [which]: record };
+      setSignatures(newSigs);
+
+      // Both signatures now present — finalize all approved amendments. Do not claim
+      // success locally unless every backend finalization actually succeeded.
+      if (newSigs['amendment-lead'] && newSigs['amendment-vp']) {
+        const finalizeResponses = await Promise.all(
+          amendments.filter((a) => a.status === 'approved').map(a =>
+            fetch(`${apiBase}/api/projects/${projectId}/amendments/${a.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'finalize' }),
+            })
+          )
+        );
+        const failed = finalizeResponses.find((response) => !response.ok);
+        if (failed) {
+          const errorBody = await failed.json().catch(() => ({}));
+          throw new Error(errorBody?.message || `Amendment finalization failed (${failed.status})`);
+        }
+        setAmendments(prev => prev.map(a => a.status === 'approved' ? { ...a, status: 'finalized' } : a));
+      }
+      setConfirmingAs(null);
+      setConfirmNameInput('');
+      setConfirmChecked(false);
     } catch (e) {
       console.error('[AmendmentForm] Signature error:', e);
+      setSignError(e instanceof Error ? e.message : 'Amendment signature failed. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -776,6 +794,11 @@ export function AmendmentFormPage() {
                       </div>
                     ))}
                   </div>
+                  {signError && (
+                    <p style={{ margin: '12px 0 0', color: '#b91c1c', fontSize: '12px' }}>
+                      {signError}
+                    </p>
+                  )}
                 </div>
               </div>
 

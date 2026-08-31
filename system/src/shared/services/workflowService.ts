@@ -81,7 +81,13 @@ export async function advanceWorkflowStep(args: {
   const currentState = snapshot.steps[args.stepId]?.state;
 
   const chain = [...(WORKFLOW_PREREQUISITES[args.to] ?? []), args.to];
-  const currentIndex = currentState ? chain.indexOf(currentState) : -1;
+  // Older backend rows use `ready`; the canonical frontend name is
+  // `ready_for_review`. Treat them as the same state so a retry does not attempt
+  // mark_ready twice and fail with an invalid ready -> ready transition.
+  const normalizedCurrentState = (currentState as string | undefined) === 'ready'
+    ? 'ready_for_review'
+    : currentState;
+  const currentIndex = normalizedCurrentState ? chain.indexOf(normalizedCurrentState) : -1;
   // currentState not found in this target's chain (e.g. still 'draft', or a branch
   // state like 'blocked' that re-enters at the top) means nothing has been done yet —
   // run the full chain. Otherwise only what's strictly after where it already sits.
