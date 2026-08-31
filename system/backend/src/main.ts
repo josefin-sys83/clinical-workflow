@@ -4,6 +4,9 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import helmet from 'helmet';
+import express, { Request, Response, NextFunction } from 'express';
+import { join } from 'path';
+import { existsSync } from 'fs';
 import { AppModule } from './app.module';
 
 // The generated OpenAPI document (SwaggerModule.createDocument) enumerates every
@@ -38,10 +41,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: false });
   // CSP as defense-in-depth against the stored-XSS class of bug fixed in Fix 15: even
   // if a future sanitizer gap let a <script>/event-handler payload through, script-src
-  // 'self' (no 'unsafe-inline', no 'unsafe-eval') blocks it from executing. This backend
-  // only serves HTML for the Swagger UI at /docs — the SPA itself is served by a
-  // separate frontend process/host, so an equivalent CSP needs to be configured there
-  // too for this to protect the actual app pages, not just /docs.
+  // 'self' (no 'unsafe-inline', no 'unsafe-eval') blocks it from executing. As of the
+  // single-container deployment this process serves the SPA as well as the Swagger UI at
+  // /docs, so these directives now apply to the actual app pages too — widening any of
+  // them weakens the app itself, not just the docs.
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -53,10 +56,14 @@ async function bootstrap() {
           styleSrc: ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", 'data:'],
           fontSrc: ["'self'"],
-          connectSrc: ["'self'"],
+          // MSAL signs in against Entra ID from the browser, so the SPA has to reach
+          // login.microsoftonline.com directly and render its iframe/redirect. Scoped to
+          // that one host rather than relaxed globally.
+          connectSrc: ["'self'", 'https://login.microsoftonline.com'],
+          frameSrc: ["'self'", 'https://login.microsoftonline.com'],
           objectSrc: ["'none'"],
           baseUri: ["'self'"],
-          formAction: ["'self'"],
+          formAction: ["'self'", 'https://login.microsoftonline.com'],
           frameAncestors: ["'none'"],
         },
       },
@@ -78,8 +85,8 @@ async function bootstrap() {
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
-  app.use(require('express').json({ limit: '50mb' }));
-  app.use(require('express').urlencoded({ limit: '50mb', extended: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.use(['/docs', '/docs-json'], requireAdminForDocs(app.get(JwtService)));
   const config = new DocumentBuilder()
@@ -90,6 +97,22 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('/docs', app, document);
+  // Single-container deployment: the Vite build is copied to ../public alongside dist/,
+  // and this process serves it. Every backend route already carries an /api prefix
+  // (@Controller('/api/...')), so the SPA can safely own every other path. Registered via
+  // app.use(), which runs ahead of Nest's router — hence the explicit /api and /docs
+  // bail-out below, without which the fallback would swallow the whole API.
+  // In local dev this directory doesn't exist; Vite serves the SPA on :5173 instead and
+  // proxies /api here, so the middleware simply never finds a file to send.
+  const clientDir = join(__dirname, '..', 'public');
+  if (existsSync(clientDir)) {
+    app.use(express.static(clientDir));
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/docs')) return next();
+      res.sendFile(join(clientDir, 'index.html'));
+    });
+  }
+
   const port = Number(process.env.PORT ?? 3001);
   await app.listen(port);
   console.log(`API running on http://localhost:${port} (docs at /docs)`);
