@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import DOMPurify from 'dompurify';
 import type { ReportSection, RegulatoryFinding } from '../types/review';
 import { TableView } from './TableView';
 import { FigureView } from './FigureView';
@@ -51,6 +52,23 @@ export function ReportContent({ sections, onSectionVisible, findings, projectDat
   };
 
   const renderContent = (section: ReportSection) => {
+    const rawContent = Array.isArray(section.content)
+      ? section.content.join('\n\n')
+      : section.content;
+
+    // AI-generated report sections are persisted as HTML. Rendering that value as
+    // a React text node exposes the tags instead of applying the document markup.
+    // Sanitize at the render boundary because report content is stored data and must
+    // never be trusted merely because the backend also sanitizes on write.
+    if (/<[a-z][\s\S]*>/i.test(rawContent)) {
+      return (
+        <div
+          className="text-neutral-700 leading-relaxed [&_p]:mb-4 [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:mb-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:mb-2 [&_strong]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-neutral-300 [&_th]:p-2 [&_td]:border [&_td]:border-neutral-300 [&_td]:p-2"
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(rawContent) }}
+        />
+      );
+    }
+
     const contentArray = Array.isArray(section.content) 
       ? section.content 
       : section.content.split('\n\n');
