@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException, ForbiddenException, UnauthorizedException, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, InternalServerErrorException, ForbiddenException, UnauthorizedException, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
-import { CreateProjectDto, UpdateProjectDto, UpdateSectionContentDto } from './dto';
+import { CreateProjectDto, UpdateProjectDto, UpdateReportSectionsDto, UpdateSectionContentDto } from './dto';
 import { ProjectsService, type ProjectAuditEvent } from './projects.service';
 import { AiService, PROTOCOL_SECTION_TITLES } from '../ai/ai.service';
 import { GenerationProgressService } from '../ai/generation-progress.service';
@@ -120,6 +120,7 @@ async getMarkets() {
   }
 
   @Get('/:projectId/report-sections')
+  @Header('Cache-Control', 'no-store')
   async getReportSections(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
     const scope = project?.data?.scope || {};
@@ -148,7 +149,22 @@ async getMarkets() {
   }
 
   @Get('/:projectId')
+  @Header('Cache-Control', 'no-store')
   get(@Param('projectId') projectId: string) { return this.projects.get(projectId); }
+
+  @Patch('/:projectId/report/sections')
+  updateReportSections(
+    @Param('projectId') projectId: string,
+    @Body() body: UpdateReportSectionsDto,
+    @Req() req: any,
+  ) {
+    return this.projects.updateReportSections(projectId, body.sections, {
+      userId: req.user?.userId,
+      name: req.user?.name,
+      roles: req.user?.roles,
+      isSuperadmin: req.user?.isSuperadmin,
+    });
+  }
 
   @Post()
   @Roles('admin', 'author')
@@ -1062,22 +1078,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    const newSections: Record<string, any> = { ...existingSections };
-    sectionDefs.forEach((section) => {
-      const generatedContent = generatedContents.get(section.id);
-      newSections[section.id] = {
-        ...(existingSections[section.id] || {}),
-        ...(generatedContent !== undefined ? { content: generatedContent } : {}),
-      };
-    });
-
-    await this.projects.update(
+    const generatedSectionPatches = Object.fromEntries(
+      Array.from(generatedContents, ([sectionId, content]) => [sectionId, { content }]),
+    );
+    const persistedSections = await this.projects.updateReportSections(
       projectId,
-      {
-        data: {
-          report: { ...existingReport, sections: newSections, sectionDefs },
-        },
-      },
+      generatedSectionPatches,
       { name: 'System' },
       [{
         type: 'report.ai.generated',
@@ -1095,12 +1101,15 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         },
       }],
     );
+    // Persist definitions separately. ProjectsService merges this into the latest
+    // report object under a row lock, so it cannot replace concurrently saved sections.
+    await this.projects.update(projectId, { data: { report: { sectionDefs } } }, { name: 'System' });
 
     return sectionDefs.map((s) => ({
       id: s.id,
       title: s.title,
       number: s.number,
-      content: String(newSections[s.id]?.content || ''),
+      content: String(persistedSections[s.id]?.content || ''),
     }));
   }
 
@@ -1116,15 +1125,6 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const roles = project.roles || [];
     const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
-    const existingReport = project?.data?.report || {};
-    // report.sections is sometimes persisted as an array rather than an id-keyed
-    // object — normalize so the spread below doesn't corrupt it into a hybrid
-    // array-plus-extra-key object.
-    const rawExistingSections = existingReport.sections || {};
-    const existingSections: Record<string, any> = Array.isArray(rawExistingSections)
-      ? Object.fromEntries(rawExistingSections.map((s: any) => [s.id, s]))
-      : rawExistingSections;
-
     // Same context resolution as generate-report
     const inferredFromRequirements: string[] = (scope?.requirements || [])
       .filter((r: any) => r.status === 'accepted')
@@ -1179,19 +1179,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // both stored and returned directly in the HTTP response.
     const trimmedContent = sanitizeSectionHtml(content.trim());
 
-    await this.projects.update(
+    await this.projects.updateReportSections(
       projectId,
-      {
-        data: {
-          report: {
-            ...existingReport,
-            sections: {
-              ...existingSections,
-              [body.sectionId]: { ...(existingSections[body.sectionId] || {}), content: trimmedContent },
-            },
-          },
-        },
-      },
+      { [body.sectionId]: { content: trimmedContent } },
       { name: 'System' },
       [{
         type: 'report.section.ai.generated',

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
@@ -14,6 +14,7 @@ export class WorkflowController {
   constructor(private readonly workflow: WorkflowService) {}
 
   @Get()
+  @Header('Cache-Control', 'no-store')
   getSnapshot(@Param('projectId') projectId: string) {
     return this.workflow.getSnapshot(projectId);
   }

@@ -295,26 +295,10 @@ export function ReportWorkspace() {
   const saveReportSectionState = async (sectionId: string, partialData: Record<string, any>) => {
     if (!projectId) return;
     try {
-      const projectRes = await fetch(apiBase + '/api/projects/' + projectId).then(r => r.json());
-      const existingReport = projectRes.data?.report || {};
-      const raw = existingReport.sections || {};
-      const existingSections = Array.isArray(raw)
-        ? Object.fromEntries(raw.map((s: any) => [s.id, s]))
-        : raw;
-      await fetch(apiBase + '/api/projects/' + projectId, {
+      await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          data: {
-            report: {
-              ...existingReport,
-              sections: {
-                ...existingSections,
-                [sectionId]: { ...(existingSections[sectionId] || {}), ...partialData },
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ sections: { [sectionId]: partialData } }),
       }).then(async (response) => {
         if (!response.ok) {
           const errorBody = await response.json().catch(() => ({}));
@@ -706,7 +690,7 @@ export function ReportWorkspace() {
     ));
 
     // Persist so approval survives page reload
-    saveReportSectionState(sectionId, { state: 'approved' });
+    saveReportSectionState(sectionId, { state: 'approved', content: section.content || section.aiDraft || '' });
 
   };
 

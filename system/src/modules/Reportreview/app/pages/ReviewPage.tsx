@@ -37,6 +37,7 @@ export default function ReviewPage() {
   const [requestChangesSubmitting, setRequestChangesSubmitting] = useState(false);
   const [reportData, setReportData] = useState<any>(null);
   const [comments, setComments] = useState<any[]>([]);
+  const [requiredSectionIds, setRequiredSectionIds] = useState<string[]>([]);
 
   // The reviewer acting on this page — "Protocol Lead" is the reviewer role
   // assigned when the report was created (see Makereport/ReportWorkspace.tsx).
@@ -52,8 +53,8 @@ export default function ReviewPage() {
   useEffect(() => {
     if (!projectId) return;
     Promise.all([
-      fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()),
-      fetch(apiBase + '/api/projects/' + projectId + '/report-sections').then(r => r.json()).catch(() => null),
+      fetch(apiBase + '/api/projects/' + projectId, { cache: 'no-store' }).then(r => r.json()),
+      fetch(apiBase + '/api/projects/' + projectId + '/report-sections', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
     ]).then(([p, sectionMeta]) => {
       // Project setup fields that have been normalized live at the response root;
       // projects.data only contains document/workspace data.
@@ -77,13 +78,20 @@ export default function ReviewPage() {
         : rawSections;
       const titleMap: Record<string, string> = {};
       (sectionMeta?.sections || []).forEach((s: any) => { titleMap[s.id] = s.title; });
+      const definedSectionIds: string[] = (sectionMeta?.sections || []).map((s: any) => s.id);
+      const orderedSectionIds = [
+        ...definedSectionIds,
+        ...Object.keys(savedSections).filter(id => !definedSectionIds.includes(id)),
+      ];
+      setRequiredSectionIds(definedSectionIds.length > 0 ? definedSectionIds : Object.keys(savedSections));
 
       const allComments = Object.entries(savedSections).flatMap(([id, data]: [string, any]) =>
         (data.comments || []).map((c: any) => ({ ...c, sectionId: id }))
       );
       setComments(allComments);
 
-      const sectionList = Object.entries(savedSections).map(([id, data]: [string, any]) => {
+      const sectionList = orderedSectionIds.map((id) => {
+        const data = savedSections[id] || {};
         const wontFixDescriptions = new Set<string>(
           Array.isArray(data.wontFixIssues) ? data.wontFixIssues : [],
         );
@@ -99,7 +107,7 @@ export default function ReviewPage() {
             !wontFixDescriptions.has(issue.description || issue.message || ''),
           ),
         };
-      }).filter((s: any) => s.content);
+      });
 
       setSections(sectionList);
       if (sectionList.length > 0) setActiveSection(sectionList[0].id);
@@ -296,7 +304,10 @@ export default function ReviewPage() {
 
   // Check if report can be approved
   const blockerCount = findings.filter((f: any) => f.severity === 'blocker' && !f.acceptedRisk).length;
-  const canApprove = blockerCount === 0 && sections.length > 0 && !approving;
+  const hasAllRequiredSections = requiredSectionIds.length > 0 && requiredSectionIds.every(
+    id => sections.some((section: any) => section.id === id && String(section.content || '').trim()),
+  );
+  const canApprove = blockerCount === 0 && hasAllRequiredSections && !approving;
 
   if (isLoading) {
     return <div className="h-screen flex items-center justify-center bg-neutral-50 text-neutral-500">Loading...</div>;
@@ -334,7 +345,7 @@ export default function ReviewPage() {
               onRequestChanges={handleRequestChanges}
               canApprove={canApprove}
               hasBlockers={blockerCount > 0}
-              hasSections={sections.length > 0}
+              hasSections={hasAllRequiredSections}
               totalFindings={findings.length}
               acceptedFindings={findings.filter((f: any) => f.acceptedRisk).length}
             />

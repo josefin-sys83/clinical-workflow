@@ -420,6 +420,61 @@ export class ProjectsService {
       client.release();
     }
   }
+  async updateReportSections(
+    id: string,
+    sectionPatches: Record<string, Record<string, any>>,
+    actor?: AuditActor,
+    auditEvents: ProjectAuditEvent[] = [],
+  ): Promise<Record<string, any>> {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query<{ data: any }>(
+        'SELECT data FROM projects WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      if (!rows[0]) throw new NotFoundException('Project not found');
+
+      const projectData = rows[0].data || {};
+      const report = projectData.report || {};
+      const rawSections = report.sections || {};
+      const sections: Record<string, any> = Array.isArray(rawSections)
+        ? Object.fromEntries(rawSections.filter((section: any) => section?.id).map((section: any) => [section.id, section]))
+        : { ...rawSections };
+      const sanitizedPatches = sanitizeIncomingProjectData({
+        report: { sections: sectionPatches },
+      })?.report?.sections || {};
+
+      for (const [sectionId, patch] of Object.entries(sanitizedPatches)) {
+        sections[sectionId] = { ...(sections[sectionId] || {}), ...(patch as Record<string, any>) };
+      }
+
+      const updatedData = {
+        ...projectData,
+        report: { ...report, sections },
+      };
+      await client.query(
+        'UPDATE projects SET data = $2, updated_at = $3 WHERE id = $1',
+        [id, JSON.stringify(updatedData), new Date().toISOString()],
+      );
+      await this.recordProjectMutation(
+        client,
+        id,
+        actor,
+        auditEvents,
+        'Updated report sections',
+        Object.keys(sectionPatches),
+      );
+      await client.query('COMMIT');
+      return sections;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async update(
     id: string,
     patch: {

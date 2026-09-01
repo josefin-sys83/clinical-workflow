@@ -438,25 +438,12 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const handleSaveSection = async (sectionId: string, newContent: string, previousContent: string, reason: string) => {
     setIsSaving(true);
     try {
-      const projectRes = await fetch(apiBase + '/api/projects/' + projectId).then(r => r.json());
-      const existingReport = projectRes.data?.report || {};
-      const existingSections = existingReport.sections || {};
-
-      await fetch(apiBase + '/api/projects/' + projectId, {
+      const response = await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          data: {
-            report: {
-              ...existingReport,
-              sections: {
-                ...existingSections,
-                [sectionId]: { ...(existingSections[sectionId] || {}), content: newContent },
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ sections: { [sectionId]: { content: newContent } } }),
       });
+      if (!response.ok) throw new Error(`Report section save failed (${response.status})`);
 
       onSectionUpdate(sectionId, newContent);
       // Re-run analysis on the updated content
@@ -1232,24 +1219,71 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
           if (isReportBlocked) {
             throw new Error('Finalize or reject the pending protocol amendment before entering Report Review.');
           }
+          if (sections.length === 0) {
+            throw new Error('No report sections are loaded. Return to Report Authoring and reload the project.');
+          }
 
-          // A report section scaffold is not report content. Generate and persist every
-          // missing section before the workflow can leave authoring. The previous flow
-          // navigated immediately and relied on a per-section, on-open AI draft effect,
-          // so a new project routinely arrived in Review with zero persisted sections.
-          const hasMissingSections = sections.some((section) =>
-            !section.content?.trim() && !section.aiDraft?.trim(),
+          const sectionSnapshot: Record<string, {
+            content: string;
+            state: ReportSection['state'];
+            wontFixIssues: string[];
+            completenessElements: CompletenessElement[];
+            issues: any[];
+          }> = Object.fromEntries(sections.map((section) => [
+            section.id,
+            {
+              content: section.content || section.aiDraft || '',
+              state: section.state,
+              wontFixIssues: savedWontFixIssues?.[section.id] || [],
+              completenessElements: section.completenessElements || [],
+              issues: sectionAiIssues[section.id] || [],
+            },
+          ]));
+          let missingSections = sections.filter((section) =>
+            !String(sectionSnapshot[section.id].content).trim(),
           );
-          if (hasMissingSections) {
-            const response = await fetch(`/api/projects/${projectId}/generate-report`, {
+
+          // This was part of the original Report -> Review handoff: complete every
+          // missing section with the backend AI before navigating. Keep non-empty
+          // displayed content authoritative; only copy generated content into slots
+          // that are still empty in this local snapshot. The backend also persists each
+          // generated patch atomically, and the single snapshot save below makes the
+          // exact content handed to Review explicit and race-safe.
+          if (missingSections.length > 0) {
+            const generationResponse = await fetch(`/api/projects/${projectId}/generate-report`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ onlyMissing: true }),
             });
-            const body = await response.json().catch(() => null);
-            if (!response.ok || !Array.isArray(body) || body.some((section: any) => !String(section.content || '').trim())) {
-              throw new Error(body?.message || 'Failed to generate and persist every required report section.');
+            const generatedSections = await generationResponse.json().catch(() => null);
+            if (!generationResponse.ok || !Array.isArray(generatedSections)) {
+              throw new Error(generatedSections?.message || 'Could not generate the missing report sections.');
             }
+
+            const generatedContentById = new Map<string, string>(
+              generatedSections.map((section: any) => [section.id, String(section.content || '')]),
+            );
+            for (const section of missingSections) {
+              const generatedContent = generatedContentById.get(section.id)?.trim() || '';
+              if (generatedContent) sectionSnapshot[section.id].content = generatedContent;
+            }
+
+            missingSections = sections.filter((section) =>
+              !String(sectionSnapshot[section.id].content).trim(),
+            );
+            if (missingSections.length > 0) {
+              throw new Error(`AI generation did not complete these report sections: ${missingSections.map(section => section.title).join(', ')}.`);
+            }
+          }
+
+          const saveResponse = await fetch(`/api/projects/${projectId}/report/sections`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sections: sectionSnapshot }),
+          });
+          if (!saveResponse.ok) {
+            const error = await saveResponse.json().catch(() => null);
+            throw new Error(error?.message || 'Could not save the report sections for Review.');
           }
 
           // Complete authoring and hand the populated review step to the reviewer.

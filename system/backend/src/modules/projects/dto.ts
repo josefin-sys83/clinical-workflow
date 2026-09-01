@@ -5,6 +5,7 @@ import {
   IsArray,
   IsIn,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   MaxLength,
@@ -141,6 +142,13 @@ export class UpdateProjectDto {
   @IsOptional()
   @NoNullBytes()
   data?: any;
+}
+
+export class UpdateReportSectionsDto {
+  @ApiProperty({ type: Object })
+  @IsObject()
+  @NoNullBytes()
+  sections!: Record<string, Record<string, any>>;
 }
 
 // Generous but bounded — real protocol/report sections can legitimately run to tens of

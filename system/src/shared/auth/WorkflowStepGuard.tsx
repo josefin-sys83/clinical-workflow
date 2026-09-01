@@ -16,19 +16,32 @@ export function WorkflowStepGuard({ stepId, children }: { stepId: WorkflowStepId
   const { projectId } = useParams();
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [checkedRoute, setCheckedRoute] = useState<string | null>(null);
+  const routeKey = projectId ? `${projectId}:${stepId}` : null;
 
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
     setStatus('loading');
     getWorkflowSnapshot(projectId)
-      .then(s => { if (!cancelled) { setSnapshot(s); setStatus('ready'); } })
-      .catch(() => { if (!cancelled) setStatus('error'); });
+      .then(s => {
+        if (!cancelled) {
+          setSnapshot(s);
+          setCheckedRoute(`${projectId}:${stepId}`);
+          setStatus('ready');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCheckedRoute(`${projectId}:${stepId}`);
+          setStatus('error');
+        }
+      });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, stepId]);
 
   if (!projectId) return <>{children}</>;
-  if (status === 'loading') {
+  if (status === 'loading' || checkedRoute !== routeKey) {
     return (
       <div className="flex items-center justify-center py-24 text-slate-400">
         <div className="w-6 h-6 border-2 border-slate-200 border-t-slate-500 rounded-full animate-spin" />

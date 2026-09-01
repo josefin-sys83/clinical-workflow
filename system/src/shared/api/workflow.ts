@@ -8,7 +8,9 @@ export interface WorkflowSnapshot {
 }
 
 export async function getWorkflow(projectId: string): Promise<WorkflowSnapshot> {
-  return apiFetch<WorkflowSnapshot>(`/projects/${encodeURIComponent(projectId)}/workflow`);
+  return apiFetch<WorkflowSnapshot>(`/projects/${encodeURIComponent(projectId)}/workflow`, {
+    cache: 'no-store',
+  });
 }
 
 export async function transitionWorkflowStep(args: {
