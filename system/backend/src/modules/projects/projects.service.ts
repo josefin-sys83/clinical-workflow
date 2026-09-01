@@ -475,6 +475,85 @@ export class ProjectsService {
     }
   }
 
+  async completeSynopsis(
+    id: string,
+    synopsisPatch: Record<string, any>,
+    actor?: AuditActor,
+  ): Promise<{ ok: true }> {
+    const checklist = synopsisPatch?.readinessChecklist;
+    if (!Array.isArray(checklist) || checklist.length === 0) {
+      throw new BadRequestException("Synopsis readiness checklist is required");
+    }
+    const incomplete = checklist.filter((item: any) =>
+      item?.status !== "complete" && item?.status !== "not-applicable",
+    );
+    if (incomplete.length > 0) {
+      throw new BadRequestException("All Synopsis readiness items must be resolved before completion");
+    }
+
+    const sanitized = sanitizeIncomingProjectData({ synopsis: synopsisPatch })?.synopsis;
+    if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) {
+      throw new BadRequestException("Invalid Synopsis data");
+    }
+
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: projectRows } = await client.query<{ data: any }>(
+        "SELECT data FROM projects WHERE id = $1 FOR UPDATE",
+        [id],
+      );
+      if (!projectRows[0]) throw new NotFoundException("Project not found");
+
+      const { rows: workflowRows } = await client.query<{ state: string }>(
+        `SELECT state FROM workflow_step_state
+         WHERE project_id = $1 AND step_id = 'synopsis'
+         FOR UPDATE`,
+        [id],
+      );
+      if (!workflowRows[0]) throw new NotFoundException("Synopsis workflow state not initialized");
+
+      const previousState = workflowRows[0].state;
+      const projectData = projectRows[0].data || {};
+      const completedSynopsis = {
+        ...(projectData.synopsis || {}),
+        ...sanitized,
+        synopsisStatus: "completed",
+      };
+      const now = new Date().toISOString();
+
+      await client.query(
+        "UPDATE projects SET data = $2, updated_at = $3 WHERE id = $1",
+        [id, JSON.stringify({ ...projectData, synopsis: completedSynopsis }), now],
+      );
+      await client.query(
+        `UPDATE workflow_step_state
+         SET state = 'approved', updated_at = $2
+         WHERE project_id = $1 AND step_id = 'synopsis'`,
+        [id, now],
+      );
+      await this.audit.record({
+        projectId: id,
+        stepId: "synopsis",
+        type: "synopsis.completed",
+        message: "Completed Synopsis and unlocked Scope",
+        actor: actor ?? { name: "System" },
+        entityType: "workflow_step",
+        entityId: "synopsis",
+        entityLabel: "Synopsis",
+        metadata: { previousState, nextState: "approved" },
+      }, client);
+
+      await client.query("COMMIT");
+      return { ok: true };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async update(
     id: string,
     patch: {

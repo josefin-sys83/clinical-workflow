@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { CheckCircle2, Circle, MinusCircle, FileText, Upload, Lock, Sparkles, AlertCircle } from 'lucide-react';
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate, useParams } from 'react-router-dom';
-import { advanceWorkflowStep } from '@/shared/services/workflowService';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { theme } from '@/app/theme';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
@@ -159,13 +158,29 @@ export function SynopsisPage() {
 
   const handleCompleteSynopsis = async () => {
     if (allChecked) {
-      setSynopsisStatus('completed');
-      if (maxStep < 3) localStorage.setItem(`maxStep_${projectId}`, '3');
-      await saveToBackend({ uploadedFileName, readinessChecklist, aiReviewComplete, synopsisStatus: 'completed' });
-      // Awaited so the scope route's WorkflowStepGuard (which re-fetches the workflow
-      // snapshot on mount) sees synopsis already 'approved' instead of racing it.
-      await advanceWorkflowStep({ projectId: projectId!, stepId: 'synopsis', to: 'approved' });
-      navigate(`/projects/${projectId}/workflow/scope`);
+      try {
+        const response = await fetch(`${apiBase}/api/projects/${projectId}/synopsis/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            synopsis: {
+              uploadedFileName,
+              readinessChecklist,
+              aiReviewComplete,
+              synopsisStatus: 'completed',
+            },
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(body?.message || `Synopsis completion failed (HTTP ${response.status})`);
+        }
+        setSynopsisStatus('completed');
+        if (maxStep < 3) localStorage.setItem(`maxStep_${projectId}`, '3');
+        navigate(`/projects/${projectId}/workflow/scope`);
+      } catch (error) {
+        setAnalysisError(error instanceof Error ? error.message : 'Could not complete Synopsis. Please try again.');
+      }
     } else {
       alert('Please complete all readiness checklist items before proceeding.');
     }

@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
@@ -281,6 +281,7 @@ interface Role {
 export function Gate1() {
   const navigate = useNavigate();
   const { projectId } = useParams();
+  const isMountedRef = useRef(true);
   const { snapshot: workflowSnapshot, refresh: refreshWorkflowSnapshot } = useWorkflowSnapshot({ projectId });
   const isScopeLocked = (workflowSnapshot?.steps?.['protocol-pdf']?.state as string) === 'final';
   const { latestAmendment } = useProtocolStatus(projectId);
@@ -302,6 +303,14 @@ export function Gate1() {
   // Prevent the autosave effect from writing the initial empty state before the
   // project's saved setup/scope values have finished loading.
   const [scopeLoaded, setScopeLoaded] = useState(false);
+
+  // A workflow transition can take several requests. If the user leaves Scope while
+  // it is in flight, its promise must not navigate from the now-unmounted page when it
+  // eventually resolves (for example, hijacking a Synopsis page back to Protocol Make).
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   // Derive consequences when scope changes
   const consequences = useMemo(() => {
@@ -804,9 +813,12 @@ Return ONLY a JSON array, no markdown:
     setSubmittingScope(true);
     try {
       await advanceWorkflowStep({ projectId, stepId: 'scope', to: 'approved' });
+      if (!isMountedRef.current) return;
       await refreshWorkflowSnapshot();
+      if (!isMountedRef.current) return;
       navigate(`/projects/${projectId}/workflow/protocol/make`);
     } catch (error) {
+      if (!isMountedRef.current) return;
       const message = error instanceof WorkflowStepBlockedError
         ? error.message
         : apiErrorMessage(
@@ -815,7 +827,7 @@ Return ONLY a JSON array, no markdown:
           );
       setScopeSubmitError(message);
     } finally {
-      setSubmittingScope(false);
+      if (isMountedRef.current) setSubmittingScope(false);
     }
   };
 

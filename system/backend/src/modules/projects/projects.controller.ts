@@ -152,6 +152,21 @@ async getMarkets() {
   @Header('Cache-Control', 'no-store')
   get(@Param('projectId') projectId: string) { return this.projects.get(projectId); }
 
+  @Post('/:projectId/synopsis/complete')
+  @Roles('admin', 'author')
+  completeSynopsis(
+    @Param('projectId') projectId: string,
+    @Body() body: { synopsis?: Record<string, any> },
+    @Req() req: any,
+  ) {
+    return this.projects.completeSynopsis(projectId, body.synopsis || {}, {
+      userId: req.user?.userId,
+      name: req.user?.name,
+      roles: req.user?.roles,
+      isSuperadmin: req.user?.isSuperadmin,
+    });
+  }
+
   @Patch('/:projectId/report/sections')
   updateReportSections(
     @Param('projectId') projectId: string,
