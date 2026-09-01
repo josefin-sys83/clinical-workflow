@@ -100,15 +100,18 @@ async function bootstrap() {
   // Single-container deployment: the Vite build is copied to ../public alongside dist/,
   // and this process serves it. Every backend route already carries an /api prefix
   // (@Controller('/api/...')), so the SPA can safely own every other path. Registered via
-  // app.use(), which runs ahead of Nest's router — hence the explicit /api and /docs
-  // bail-out below, without which the fallback would swallow the whole API.
+  // app.use(), which runs ahead of Nest's router — hence the explicit bail-out below,
+  // without which the fallback would swallow every backend route. Every controller is
+  // mounted under /api except the Swagger UI (/docs, /docs-json) and the health probe,
+  // so those three prefixes are the complete list.
   // In local dev this directory doesn't exist; Vite serves the SPA on :5173 instead and
   // proxies /api here, so the middleware simply never finds a file to send.
+  const BACKEND_PREFIXES = ['/api', '/docs', '/health'];
   const clientDir = join(__dirname, '..', 'public');
   if (existsSync(clientDir)) {
     app.use(express.static(clientDir));
     app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.path.startsWith('/api') || req.path.startsWith('/docs')) return next();
+      if (BACKEND_PREFIXES.some((prefix) => req.path.startsWith(prefix))) return next();
       res.sendFile(join(clientDir, 'index.html'));
     });
   }
