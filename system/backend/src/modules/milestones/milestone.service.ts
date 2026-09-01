@@ -19,6 +19,13 @@ export interface MilestonesResult {
   complexityLabel: string;
   complexityPoints: number;
   milestones: MilestoneStatus[];
+  warnings: MilestoneWarning[];
+}
+
+export interface MilestoneWarning {
+  code: 'anchor_order' | 'timeline_not_feasible';
+  message: string;
+  affectedMilestones?: string[];
 }
 
 @Injectable()
@@ -148,9 +155,18 @@ export class MilestoneService {
     return role;
   }
 
-  computeMilestones(project: any, workflowStates: Record<string, string>): MilestonesResult {
+  computeWarnings(project: any, now = new Date()): MilestoneWarning[] {
+    const result = this.computeMilestones(project, {}, now);
+    return result.warnings;
+  }
+
+  computeMilestones(project: any, workflowStates: Record<string, string>, now = new Date()): MilestonesResult {
     const scope = project.data?.scope || {};
-    const projectData = { ...(project.data?.projectData || {}), deviceCategory: scope.deviceCategory || project.data?.projectData?.deviceCategory || '' };
+    const projectData = {
+      ...(project.data?.projectData || {}),
+      targetMarkets: project.targetMarkets || project.data?.projectData?.targetMarkets || [],
+      deviceCategory: scope.deviceCategory || project.deviceCategory || project.data?.projectData?.deviceCategory || '',
+    };
     const synopsis = project.data?.synopsis || {};
     const roles = project.data?.roles || [];
 
@@ -165,6 +181,8 @@ export class MilestoneService {
       ? new Date(projectData.ethicsSubmissionTarget) : null;
     const submissionDate = projectData.regulatorySubmissionTarget
       ? new Date(projectData.regulatorySubmissionTarget) : null;
+    const firstPatientInDate = projectData.firstPatientInTarget
+      ? new Date(projectData.firstPatientInTarget) : null;
 
     const deadlines: Record<string, { date: Date; anchor: string; anchorDate: string } | null> = {};
 
@@ -200,7 +218,9 @@ export class MilestoneService {
       const isComplete = ['approved', 'final', 'signed'].includes(state);
       const deadlineInfo = deadlines[stepId] ?? null;
       const deadline = deadlineInfo ? this.formatDate(deadlineInfo.date) : null;
-      const daysUntil = deadlineInfo ? this.daysDiff(new Date(deadlineInfo.date)) : null;
+      const daysUntil = deadlineInfo
+        ? Math.round((new Date(deadlineInfo.date).setHours(0, 0, 0, 0) - new Date(now).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24))
+        : null;
 
       return {
         stepId,
@@ -215,11 +235,37 @@ export class MilestoneService {
       };
     });
 
+    const warnings: MilestoneWarning[] = [];
+    const validDate = (date: Date | null): date is Date => Boolean(date && !Number.isNaN(date.getTime()));
+    const orderInvalid =
+      (validDate(ethicsDate) && validDate(firstPatientInDate) && ethicsDate > firstPatientInDate) ||
+      (validDate(firstPatientInDate) && validDate(submissionDate) && firstPatientInDate > submissionDate) ||
+      (validDate(ethicsDate) && validDate(submissionDate) && ethicsDate > submissionDate);
+
+    if (orderInvalid) {
+      warnings.push({
+        code: 'anchor_order',
+        message: 'Ethics Submission must be less than or equal to First Patient In, and First Patient In must be less than or equal to Regulatory Submission. This order ensures approvals occur before enrollment and the study completes before regulatory submission.',
+      });
+    }
+
+    const pastIncompleteMilestones = milestones.filter(m =>
+      m.deadline !== null && m.daysUntil !== null && m.daysUntil < 0 && m.status !== 'complete',
+    );
+    if (pastIncompleteMilestones.length > 0) {
+      warnings.push({
+        code: 'timeline_not_feasible',
+        message: `This timeline is not feasible with the current ${complexityLabels[level].toLowerCase()} complexity: ${pastIncompleteMilestones.map(m => `${m.stepName} (${m.deadline})`).join(', ')} ${pastIncompleteMilestones.length === 1 ? 'is' : 'are'} already due. Adjust the anchor dates or proceed with the acknowledged risk.`,
+        affectedMilestones: pastIncompleteMilestones.map(m => m.stepId),
+      });
+    }
+
     return {
       complexity: level,
       complexityLabel: complexityLabels[level],
       complexityPoints: points,
       milestones,
+      warnings,
     };
   }
 }

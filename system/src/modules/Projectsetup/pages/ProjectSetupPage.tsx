@@ -7,12 +7,13 @@ import { AuditLog } from '../components/AuditLog';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { LockedStateContainer } from '../components/LockedStateContainer';
 import { PersonAutocomplete } from '../components/PersonAutocomplete';
-import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { MilestoneBanner, MilestoneWarnings } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { getMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
 import { INTENDED_USE_OPTIONS, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { theme } from '@/app/theme';
+import type { MilestoneWarning } from '@/shared/hooks/useMilestones';
 
 interface Role {
   title: string;
@@ -115,6 +116,7 @@ export function ProjectSetupPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [timelineWarnings, setTimelineWarnings] = useState<MilestoneWarning[]>([]);
   const previousProjectDataRef = useRef<ProjectData>(projectData);
   const previousRolesRef = useRef<Role[]>(roles);
   const isInitialMount = useRef(true);
@@ -283,6 +285,37 @@ export function ProjectSetupPage() {
   const handleInputChange = (field: keyof ProjectData, value: string) => {
     setProjectData(prev => ({ ...prev, [field]: value }));
   };
+
+  // Preview the backend's authoritative advisory checks while setup is being entered.
+  // Saving remains governed only by the existing required setup fields and roles.
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/projects/milestones/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectData,
+            targetMarkets: projectData.targetMarkets,
+            deviceCategory: projectData.deviceCategory,
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const result = await response.json();
+        setTimelineWarnings(Array.isArray(result.warnings) ? result.warnings : []);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setTimelineWarnings([]);
+        }
+      }
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [projectData.ethicsSubmissionTarget, projectData.firstPatientInTarget, projectData.regulatorySubmissionTarget, projectData.targetMarkets, projectData.deviceCategory]);
 
   const handleMarketToggle = (market: string) => {
     setProjectData(prev => ({
@@ -484,7 +517,7 @@ export function ProjectSetupPage() {
       </aside>
 
       <main className="flex-1 overflow-y-auto">
-        <MilestoneBanner projectId={projectId!} currentStepId="project-setup" />
+        <MilestoneBanner projectId={isNew ? undefined : projectId} currentStepId="project-setup" />
         {protocolFinalized && (
           <div className="mx-6 mt-4">
             <ProtocolFinalizedBanner
@@ -800,6 +833,7 @@ export function ProjectSetupPage() {
                   <input type="date" value={projectData.regulatorySubmissionTarget} onChange={(e) => handleInputChange('regulatorySubmissionTarget', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500" />
                 </div>
               </div>
+              <MilestoneWarnings warnings={timelineWarnings} className="mt-4" />
             </section>
 
             {/* Section 4: Readiness */}

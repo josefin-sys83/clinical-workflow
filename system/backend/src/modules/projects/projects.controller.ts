@@ -109,6 +109,22 @@ async getMarkets() {
     return this.projects.list(req.user?.companyId, req.user?.isSuperadmin);
   }
 
+  @Post('/milestones/preview')
+  previewMilestoneWarnings(@Body() body: { projectData?: Record<string, any>; synopsis?: Record<string, any>; targetMarkets?: string[]; deviceCategory?: string | null }) {
+    return {
+      warnings: this.milestones.computeWarnings({
+        data: {
+          projectData: {
+            ...(body.projectData || {}),
+            targetMarkets: body.targetMarkets || body.projectData?.targetMarkets || [],
+            deviceCategory: body.deviceCategory || body.projectData?.deviceCategory || '',
+          },
+          synopsis: body.synopsis || {},
+        },
+      }),
+    };
+  }
+
   @Get('/completed')
   listCompleted(@Req() req: any) {
     return this.projects.listCompleted(req.user?.companyId, req.user?.isSuperadmin);
@@ -188,12 +204,13 @@ async getMarkets() {
     // itself now, under the same locked transaction as the insert — see
     // AdminService.enforceProjectLimit() for why that's required to close the race.
     const companyId: string | undefined = req.user?.companyId;
-    return this.projects.create(dto, companyId, {
+    const project = await this.projects.create(dto, companyId, {
       userId: req.user?.userId,
       name: req.user?.name,
       roles: req.user?.roles,
       isSuperadmin: req.user?.isSuperadmin,
     });
+    return { ...project, milestoneWarnings: this.milestones.computeWarnings(project) };
   }
 
   @Patch('/:projectId')

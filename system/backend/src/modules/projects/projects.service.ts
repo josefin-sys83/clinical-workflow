@@ -314,8 +314,10 @@ export class ProjectsService {
       const id = crypto.randomUUID();
 
       const incomingData = {
+        ...(dto.data || {}),
         projectData: {
-          deviceName: dto.deviceName,
+          ...(dto.data?.projectData || {}),
+          deviceName: dto.deviceName ?? dto.data?.projectData?.deviceName,
         },
       };
 
@@ -368,10 +370,17 @@ export class ProjectsService {
       await this.replaceProjectStandards(
         client,
         id,
-        [], // No markets have been selected during initial creation.
+        dto.targetMarkets ?? [],
         dto.risk ?? null,
         dto.deviceCategory ?? null,
       );
+
+      if (dto.targetMarkets !== undefined) {
+        await this.replaceProjectMarkets(client, id, dto.targetMarkets);
+      }
+      if (dto.roles !== undefined) {
+        await this.syncProjectMembers(id, dto.roles, client);
+      }
 
       await client.query(
         `INSERT INTO workflow_step_state (

@@ -17,9 +17,16 @@ export interface MilestonesResult {
   complexityLabel: string;
   complexityPoints: number;
   milestones: MilestoneStatus[];
+  warnings: MilestoneWarning[];
 }
 
-export function useMilestones(projectId: string | undefined) {
+export interface MilestoneWarning {
+  code: 'anchor_order' | 'timeline_not_feasible';
+  message: string;
+  affectedMilestones?: string[];
+}
+
+export function useMilestones(projectId: string | undefined, refreshKey?: unknown) {
   const [milestones, setMilestones] = useState<MilestonesResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +53,7 @@ export function useMilestones(projectId: string | undefined) {
         setError(e instanceof Error ? e.message : 'Failed to load milestones');
       })
       .finally(() => setLoading(false));
-  }, [projectId]);
+  }, [projectId, refreshKey]);
 
   return { milestones, loading, error };
 }

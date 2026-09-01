@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { CheckCircle2, Circle, MinusCircle, FileText, Upload, Lock, Sparkles, AlertCircle } from 'lucide-react';
 import { WorkflowBreadcrumb } from './WorkflowBreadcrumb';
 import { useNavigate, useParams } from 'react-router-dom';
-import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
+import { MilestoneBanner, MilestoneWarnings } from '@/shared/components/MilestoneBanner';
 import { theme } from '@/app/theme';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
@@ -339,6 +339,11 @@ export function SynopsisPage() {
                     />
                   )}
                 </div>
+                <MilestoneWarnings
+                  projectId={projectId}
+                  refreshKey={`${uploadedFileName || ''}:${isAnalyzing}`}
+                  className="mb-5"
+                />
                 <div className="space-y-3 mb-4">
                   {readinessChecklist.map((item) => (
                     <div key={item.id} className={`flex items-start gap-3 p-4 rounded-lg border ${
