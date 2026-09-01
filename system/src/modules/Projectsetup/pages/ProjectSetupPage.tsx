@@ -117,6 +117,8 @@ export function ProjectSetupPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [timelineWarnings, setTimelineWarnings] = useState<MilestoneWarning[]>([]);
+  const [estimatedComplexity, setEstimatedComplexity] = useState<{ label: string; points: number }>({ label: 'Low', points: 0 });
+  const [synopsisForComplexity, setSynopsisForComplexity] = useState<Record<string, any>>({});
   const previousProjectDataRef = useRef<ProjectData>(projectData);
   const previousRolesRef = useRef<Role[]>(roles);
   const isInitialMount = useRef(true);
@@ -235,6 +237,7 @@ export function ProjectSetupPage() {
         let loadedRoles = roles;
         setProjectNumber(project.project_number || '');
         const pd = project.data?.projectData || {};
+        setSynopsisForComplexity(project.data?.synopsis || {});
         const storedIntendedUse = normalizeStoredIntendedUse(
           pd.intendedUse,
           pd.customIntendedUse,
@@ -299,12 +302,17 @@ export function ProjectSetupPage() {
             projectData,
             targetMarkets: projectData.targetMarkets,
             deviceCategory: projectData.deviceCategory,
+            risk: projectData.risk || null,
+            synopsis: synopsisForComplexity,
           }),
           signal: controller.signal,
         });
         if (!response.ok) return;
         const result = await response.json();
         setTimelineWarnings(Array.isArray(result.warnings) ? result.warnings : []);
+        if (typeof result.complexity?.label === 'string' && typeof result.complexity?.points === 'number') {
+          setEstimatedComplexity({ label: result.complexity.label, points: result.complexity.points });
+        }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === 'AbortError')) {
           setTimelineWarnings([]);
@@ -315,7 +323,7 @@ export function ProjectSetupPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [projectData.ethicsSubmissionTarget, projectData.firstPatientInTarget, projectData.regulatorySubmissionTarget, projectData.targetMarkets, projectData.deviceCategory]);
+  }, [projectData.ethicsSubmissionTarget, projectData.firstPatientInTarget, projectData.regulatorySubmissionTarget, projectData.targetMarkets, projectData.deviceCategory, projectData.risk, synopsisForComplexity]);
 
   const handleMarketToggle = (market: string) => {
     setProjectData(prev => ({
@@ -449,22 +457,6 @@ export function ProjectSetupPage() {
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const calculateComplexity = (data: ProjectData): string => {
-    let points = 0;
-    const markets = data.targetMarkets || [];
-    if (markets.includes('EU')) points += 3;
-    if (markets.includes('US')) points += 3;
-    if (markets.includes('UK')) points += 2;
-    if (markets.includes('Japan')) points += 3;
-    if (markets.includes('China')) points += 4;
-    if (markets.includes('Canada')) points += 1;
-    if (markets.includes('Australia')) points += 1;
-    if (points <= 4) return 'Low';
-    if (points <= 8) return 'Medium';
-    if (points <= 13) return 'High';
-    return 'Very High';
   };
 
   return (
@@ -802,19 +794,12 @@ export function ProjectSetupPage() {
                 <h3 className="text-lg font-semibold text-slate-900 mb-1">Project Milestones</h3>
                 <p className="text-sm text-slate-600">Enter your three external anchor dates. The system automatically calculates when each workflow step must start based on project complexity.</p>
               </div>
-              <div className="mb-4 p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
-                <div className="flex items-start gap-3">
-                  <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
-                    AI
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-purple-900 mb-1">AI-calculated complexity</div>
-                    <p className="text-xs text-purple-700">Based on target markets, device category, and study scope.</p>
-                  </div>
-                </div>
+              <div className="mb-4 p-3 bg-slate-50 border-l-4 border-slate-400 rounded">
+                <div className="text-sm font-medium text-slate-900 mb-1">Estimated complexity</div>
+                <p className="text-xs text-slate-600">Rule-based estimate using Risk Class, device category, and study factors found in the synopsis.</p>
               </div>
               <div className="mb-4 flex items-center gap-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2">
-                <span>Estimated complexity: <strong className="text-slate-900">{calculateComplexity(projectData)}</strong></span>
+                <span>Estimated complexity: <strong className="text-slate-900">{estimatedComplexity.label} ({estimatedComplexity.points} points)</strong></span>
               </div>
               <div className="grid grid-cols-3 gap-6">
                 <div className="flex flex-col">

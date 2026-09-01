@@ -72,21 +72,20 @@ export class MilestoneService {
   calculateComplexity(projectData: any, synopsis: any): { level: ComplexityLevel; points: number } {
     let points = 0;
 
-    const markets: string[] = projectData?.targetMarkets || [];
-    if (markets.includes('EU')) points += 3;
-    if (markets.includes('US')) points += 3;
-    if (markets.includes('UK')) points += 2;
-    if (markets.includes('Japan')) points += 3;
-    if (markets.includes('China')) points += 4;
-    if (markets.includes('Canada')) points += 1;
-    if (markets.includes('Australia')) points += 1;
+    // Risk Class is ordinal, so its rule-based contribution rises with the
+    // regulatory risk classification. Markets intentionally do not contribute.
+    const riskPoints: Record<string, number> = {
+      I: 0,
+      IIa: 1,
+      IIb: 2,
+      III: 3,
+    };
+    points += riskPoints[projectData?.risk] ?? 0;
 
     const category = projectData?.deviceCategory || '';
     if (['SaMD', 'Software', 'samd', 'simd', 'ai-ml'].includes(category)) points += 3;
     else if (['AIMD', 'aimd'].includes(category)) points += 3;
     else if (['IVD', 'ivd'].includes(category)) points += 2;
-    else if (category === 'Class IIb') points += 2;
-    else if (category === 'Class IIa') points += 1;
 
     const synopsisText = typeof synopsis === 'string' ? synopsis :
       synopsis?.readiness || synopsis?.text || JSON.stringify(synopsis || '');
@@ -106,7 +105,7 @@ export class MilestoneService {
     if (subjects >= 500) points += 2;
     else if (subjects >= 100) points += 1;
 
-    if (/randomized|RCT|controlled/i.test(synopsisText)) points += 2;
+    if (/randomi[sz](?:ed|ation)|RCT|controlled/i.test(synopsisText)) points += 2;
     else if (/single.arm|observational/i.test(synopsisText)) points += 1;
 
     let level: ComplexityLevel;
@@ -165,7 +164,8 @@ export class MilestoneService {
     const projectData = {
       ...(project.data?.projectData || {}),
       targetMarkets: project.targetMarkets || project.data?.projectData?.targetMarkets || [],
-      deviceCategory: scope.deviceCategory || project.deviceCategory || project.data?.projectData?.deviceCategory || '',
+      risk: project.risk ?? project.data?.projectData?.risk ?? '',
+      deviceCategory: project.deviceCategory || scope.deviceCategory || project.data?.projectData?.deviceCategory || '',
     };
     const synopsis = project.data?.synopsis || {};
     const roles = project.data?.roles || [];
@@ -201,13 +201,26 @@ export class MilestoneService {
     }
 
     if (submissionDate) {
+      const clampToFirstPatientIn = (candidate: Date) => {
+        const usesFirstPatientIn = Boolean(
+          firstPatientInDate &&
+          !Number.isNaN(firstPatientInDate.getTime()) &&
+          candidate < firstPatientInDate,
+        );
+        return {
+          date: usesFirstPatientIn ? new Date(firstPatientInDate!) : new Date(candidate),
+          anchor: usesFirstPatientIn ? 'First Patient In' : 'Regulatory Submission',
+          anchorDate: this.formatDate(usesFirstPatientIn ? firstPatientInDate! : submissionDate),
+        };
+      };
+
       let d = new Date(submissionDate);
       d = this.subtractWeeks(d, leadTimes['report-pdf']);
-      deadlines['report-pdf'] = { date: new Date(d), anchor: 'Regulatory Submission', anchorDate: this.formatDate(submissionDate) };
+      deadlines['report-pdf'] = clampToFirstPatientIn(d);
       d = this.subtractWeeks(d, leadTimes['report-review']);
-      deadlines['report-review'] = { date: new Date(d), anchor: 'Regulatory Submission', anchorDate: this.formatDate(submissionDate) };
+      deadlines['report-review'] = clampToFirstPatientIn(d);
       d = this.subtractWeeks(d, leadTimes['report-make']);
-      deadlines['report-make'] = { date: new Date(d), anchor: 'Regulatory Submission', anchorDate: this.formatDate(submissionDate) };
+      deadlines['report-make'] = clampToFirstPatientIn(d);
     }
 
     const stepOrder = ['synopsis', 'scope', 'protocol-make', 'protocol-review', 'protocol-pdf', 'report-make', 'report-review', 'report-pdf'];

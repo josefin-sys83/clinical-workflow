@@ -110,18 +110,27 @@ async getMarkets() {
   }
 
   @Post('/milestones/preview')
-  previewMilestoneWarnings(@Body() body: { projectData?: Record<string, any>; synopsis?: Record<string, any>; targetMarkets?: string[]; deviceCategory?: string | null }) {
+  previewMilestoneWarnings(@Body() body: { projectData?: Record<string, any>; synopsis?: Record<string, any>; targetMarkets?: string[]; deviceCategory?: string | null; risk?: string | null }) {
+    const projectData = {
+      ...(body.projectData || {}),
+      targetMarkets: body.targetMarkets || body.projectData?.targetMarkets || [],
+      deviceCategory: body.deviceCategory || body.projectData?.deviceCategory || '',
+      risk: body.risk ?? body.projectData?.risk ?? '',
+    };
+    const complexity = this.milestones.calculateComplexity(projectData, body.synopsis || {});
     return {
       warnings: this.milestones.computeWarnings({
         data: {
-          projectData: {
-            ...(body.projectData || {}),
-            targetMarkets: body.targetMarkets || body.projectData?.targetMarkets || [],
-            deviceCategory: body.deviceCategory || body.projectData?.deviceCategory || '',
-          },
+          projectData,
           synopsis: body.synopsis || {},
         },
       }),
+      complexity: {
+        ...complexity,
+        label: complexity.level === 'very_high'
+          ? 'Very High'
+          : complexity.level.charAt(0).toUpperCase() + complexity.level.slice(1),
+      },
     };
   }
 
