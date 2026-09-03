@@ -18,15 +18,17 @@ import {
   Settings,
   LogOut,
   Activity,
+  UserRound,
 } from 'lucide-react';
 import { WORKFLOW_STEPS, buildWorkflowPath, getStepByPathname } from '@/shared/workflow/steps';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState, WorkflowStepId } from '@/shared/workflow/types';
 import { AuditTrailButton } from '@/shared/components/AuditTrailButton';
 import { Button } from '@/app/components/ui/button';
-import { getToken, isSuperadmin, logout } from '@/shared/auth/token';
+import { isSuperadmin } from '@/shared/auth/token';
 import { LogoutButton } from './LogoutButton';
 import {useLogout} from '@/shared/hooks/LogOut'
+import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 
 
 function isDone(state: DocumentLifecycleState | undefined): boolean {
@@ -75,7 +77,7 @@ const DOMAIN_LABELS: Partial<Record<string, string>> = {
 export function Shell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hasApprovedAmendments, setHasApprovedAmendments] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{ name: string } | null>(null);
+  const { user: currentUser, status: currentUserStatus } = useCurrentUser();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
@@ -86,32 +88,6 @@ export function Shell() {
   const isStandalonePage = location.pathname === '/settings' || location.pathname === '/audit';
   const { snapshot, refresh } = useWorkflowSnapshot({ projectId });
   const handleLogout=useLogout()
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    let cancelled = false;
-    // A transient backend hiccup here (a mid-request restart, a dropped connection) used
-    // to leave currentUser permanently null for the rest of the session — the header
-    // avatar/name would just vanish with no explanation, easily misread as "signed out"
-    // even though the JWT was still valid. Retry a couple of times before giving up.
-    const attempt = (retriesLeft: number) => {
-      fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => (r.ok ? r.json() : null))
-        .then((u: { name: string } | null) => {
-          if (cancelled) return;
-          if (u) setCurrentUser(u);
-          else if (retriesLeft > 0) setTimeout(() => attempt(retriesLeft - 1), 2000);
-        })
-        .catch(() => {
-          if (!cancelled && retriesLeft > 0) setTimeout(() => attempt(retriesLeft - 1), 2000);
-        });
-    };
-    attempt(2);
-    return () => { cancelled = true; };
-  }, []);
-
-
-
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -283,9 +259,8 @@ export function Shell() {
             Refresh
           </Button>
           <AuditTrailButton />
-          {currentUser && (
-            <div className="flex items-center gap-2 pl-3 ml-1 border-l border-slate-200">
-              {isSuperadmin() && (
+          <div className="flex items-center gap-2 pl-3 ml-1 border-l border-slate-200">
+              {currentUserStatus === 'ready' && isSuperadmin() && (
                 <Link
                   to="/admin"
                   title="Admin panel"
@@ -297,13 +272,22 @@ export function Shell() {
               <div className="relative" ref={menuRef}>
                 <button
                   onClick={() => setShowUserMenu(prev => !prev)}
+                  aria-label={currentUserStatus === 'loading' ? 'Loading profile' : currentUserStatus === 'error' ? 'Profile unavailable' : `Open profile menu for ${currentUser?.name}`}
+                  title={currentUserStatus === 'loading' ? 'Loading profile…' : currentUserStatus === 'error' ? 'Profile unavailable' : currentUser?.name}
                   className="flex items-center gap-2 hover:opacity-80 transition-opacity"
                 >
-                  <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
-                    {currentUser.name.charAt(0).toUpperCase()}
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
+                    currentUserStatus === 'ready' ? 'bg-blue-600 text-white' :
+                    currentUserStatus === 'loading' ? 'bg-slate-200 animate-pulse' : 'bg-slate-100 text-slate-500 border border-slate-300'
+                  }`}>
+                    {currentUserStatus === 'ready' && currentUser
+                      ? currentUser.name.charAt(0).toUpperCase()
+                      : currentUserStatus === 'error'
+                        ? <UserRound className="w-4 h-4" />
+                        : null}
                   </div>
                   <span className="text-xs text-slate-600 max-w-[120px] truncate hidden sm:block">
-                    {currentUser.name}
+                    {currentUserStatus === 'ready' ? currentUser?.name : currentUserStatus === 'error' ? 'Profile unavailable' : 'Loading profile…'}
                   </span>
                 </button>
                 {showUserMenu && (
@@ -330,8 +314,7 @@ export function Shell() {
                   </div>
                 )}
               </div>
-            </div>
-          )}
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto">

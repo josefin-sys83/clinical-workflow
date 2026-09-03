@@ -4,6 +4,8 @@ export type CurrentUser = {
   id: string;
   name: string;
   email: string;
+  roles: string[];
+  company_id?: string | null;
   must_reset_password: boolean;
 };
 

@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/ca
 import { Input } from '@/app/components/ui/input';
 import { Textarea } from '@/app/components/ui/textarea';
 import { Badge } from '@/app/components/ui/badge';
-import { getMe } from '@/shared/api/me';
+import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 import {
   getAddendum,
   updateAddendum,
@@ -28,7 +28,7 @@ function StatusBadge({ status }: { status: AddendumRecord['status'] }) {
 export default function AddendumPage() {
   const { projectId, docType, addendumId } = useParams();
   const navigate = useNavigate();
-  const [me, setMe] = useState<{ roles: string[] } | null>(null);
+  const { user: me } = useCurrentUser();
 
   const [data, setData] = useState<AddendumRecord | null>(null);
   const [files, setFiles] = useState<AddendumFile[]>([]);
@@ -44,17 +44,6 @@ export default function AddendumPage() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [changeReason, setChangeReason] = useState('');
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const m = await getMe();
-        setMe({ roles: (m as any)?.roles ?? [] });
-      } catch {
-        setMe({ roles: [] });
-      }
-    })();
-  }, []);
 
   async function refresh() {
     if (!projectId || !docType || !addendumId) return;

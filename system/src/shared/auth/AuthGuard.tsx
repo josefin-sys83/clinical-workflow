@@ -3,6 +3,8 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { getToken } from './token';
 import { getMe } from '@/shared/api/me';
 import { ForcedPasswordReset } from './ForcedPasswordReset';
+import { CurrentUserProvider, type CurrentUserStatus } from './CurrentUserContext';
+import type { CurrentUser } from '@/shared/api/me';
 
 // A valid token isn't enough on its own — an account with must_reset_password still set
 // (temp password never changed) must be forced into the reset screen no matter which URL
@@ -12,25 +14,36 @@ import { ForcedPasswordReset } from './ForcedPasswordReset';
 export function AuthGuard() {
   const location = useLocation();
   const token = getToken();
-  const [mustReset, setMustReset] = useState<boolean | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [userStatus, setUserStatus] = useState<CurrentUserStatus>('loading');
 
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
+    setUserStatus('loading');
     getMe()
-      .then((u) => { if (!cancelled) setMustReset(u.must_reset_password); })
-      .catch(() => { if (!cancelled) setMustReset(false); });
+      .then((u) => {
+        if (cancelled) return;
+        setCurrentUser(u);
+        setUserStatus('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCurrentUser(null);
+        setUserStatus('error');
+      });
     return () => { cancelled = true; };
   }, [token]);
 
   if (!token) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  if (mustReset === null) {
-    return null;
+  if (currentUser?.must_reset_password) {
+    return <ForcedPasswordReset onDone={() => setCurrentUser(user => user ? { ...user, must_reset_password: false } : user)} />;
   }
-  if (mustReset) {
-    return <ForcedPasswordReset onDone={() => setMustReset(false)} />;
-  }
-  return <Outlet />;
+  return (
+    <CurrentUserProvider user={currentUser} status={userStatus}>
+      <Outlet />
+    </CurrentUserProvider>
+  );
 }

@@ -20,7 +20,7 @@ import { Clock } from 'lucide-react';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
-import { getToken } from '@/shared/auth/token';
+import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 
 function userFromRole(rawRoles: any[], roleTitle: string): User {
   const role = rawRoles.find((r: any) => r.title === roleTitle);
@@ -37,7 +37,7 @@ export function ReportWorkspace() {
   const [projectData, setProjectData] = useState<any>(null);
   const [scope, setScope] = useState<any>(null);
   const [rawRoles, setRawRoles] = useState<any[]>([]);
-  const [sessionUser, setSessionUser] = useState<{ id: string; name: string; email: string | null } | null>(null);
+  const { user: sessionUser } = useCurrentUser();
   const [apiSectionDefs, setApiSectionDefs] = useState<Array<{ id: string; title: string; number: number }>>([]);
   const [targetMarkets, setTargetMarkets] = useState<string[]>([]);
 
@@ -94,17 +94,6 @@ export function ReportWorkspace() {
       .then(data => setProtocolAmendments(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [projectId]);
-
-  // Real authenticated identity, used to determine which sections/issues are
-  // actually "mine" — independent of the project's role assignments below.
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => (r.ok ? r.json() : null))
-      .then((u: { id: string; name: string; email: string | null } | null) => { if (u) setSessionUser(u); })
-      .catch(() => {});
-  }, []);
 
   const pendingProtocolAmendments = protocolAmendments.filter(
     (a: any) => a.status !== 'finalized' && a.status !== 'rejected',

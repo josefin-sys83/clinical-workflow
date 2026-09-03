@@ -16,7 +16,7 @@ import { AmendmentModal } from './components/AmendmentModal';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
-import { getToken } from '@/shared/auth/token';
+import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 import {
   listProtocolAttachments,
   uploadProtocolAttachment,
@@ -35,7 +35,7 @@ export default function App() {
   const [reviewCycle, setReviewCycle] = useState<number>(0);
   const [showReviewConfirmation, setShowReviewConfirmation] = useState<boolean>(false);
   const [issueFilter, setIssueFilter] = useState<'my-issues' | 'all-issues'>('my-issues');
-  const [sessionUser, setSessionUser] = useState<{ id: string; name: string; email: string | null; roles: string[] } | null>(null);
+  const { user: sessionUser } = useCurrentUser();
   const [showAuditLog, setShowAuditLog] = useState<boolean>(false);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mainContentRef = useRef<HTMLDivElement | null>(null);
@@ -199,19 +199,6 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     const interval = setInterval(poll, 2000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [generatingProtocol, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Real authenticated identity, used to determine which sections/issues are
-  // actually "mine" — independent of the project's role assignments below.
-  React.useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => (r.ok ? r.json() : null))
-      .then((u: { id: string; name: string; email: string | null; roles?: string[] } | null) => {
-        if (u) setSessionUser({ ...u, roles: u.roles || [] });
-      })
-      .catch(() => {});
-  }, []);
 
   React.useEffect(() => {
     if (!projectId) return;
