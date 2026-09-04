@@ -9,13 +9,17 @@ import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBa
 import { AIInsightBadge } from '@/shared/components/AIInsightBadge';
 import { AuditEntry } from './AuditTrail';
 import { aiAnalysisErrorMessage } from '@/shared/api/http';
+import { AIFindingOverrideDialog } from '@/shared/components/AIFindingOverrideDialog';
+import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 
 
 interface ReadinessItem {
   id: string;
   label: string;
-  status: 'complete' | 'needs-review' | 'missing' | 'not-applicable';
+  status: 'complete' | 'needs-review' | 'missing' | 'not-applicable' | 'overridden';
   reason?: string;
+  aiStatus?: string;
+  override?: { justification: string; overriddenAt: string; overriddenBy?: string | null };
 }
 
 type SynopsisStatus = 'not-started' | 'in-progress' | 'completed';
@@ -38,6 +42,11 @@ export function SynopsisPage() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [synopsisStatus, setSynopsisStatus] = useState<SynopsisStatus>('not-started');
   const { protocolFinalized, isLocked, latestAmendment } = useProtocolStatus(projectId);
+  const { user } = useCurrentUser();
+  const [overrideFinding, setOverrideFinding] = useState<ReadinessItem | null>(null);
+  const [overrideSubmitting, setOverrideSubmitting] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const canOverride = user?.roles.includes('admin') || user?.roles.includes('author');
 
   const [readinessChecklist, setReadinessChecklist] = useState<ReadinessItem[]>([
     { id: '1', label: 'Synopsis document uploaded', status: 'missing' },
@@ -126,7 +135,7 @@ export function SynopsisPage() {
         if (!result) return item;
         const status: ReadinessItem['status'] =
           result.status === 'complete' || result.status === 'not-applicable' ? result.status : 'missing';
-        return { ...item, status, reason: result.reason };
+        return { ...item, status, reason: result.reason, aiStatus: undefined, override: undefined };
       });
       updatedChecklist[0] = { ...updatedChecklist[0], status: 'complete', reason: 'Document uploaded successfully' };
 
@@ -170,7 +179,28 @@ export function SynopsisPage() {
   };
 
   const isAnalyzing = analysisStatus === 'running';
-  const allChecked = analysisStatus === 'succeeded' && aiReviewComplete && readinessChecklist.every(item => item.status === 'complete' || item.status === 'not-applicable');
+  const allChecked = analysisStatus === 'succeeded' && aiReviewComplete && readinessChecklist.every(item => item.status === 'complete' || item.status === 'not-applicable' || item.status === 'overridden');
+
+  const submitOverride = async (justification: string) => {
+    if (!overrideFinding || !projectId || !justification.trim()) return;
+    setOverrideSubmitting(true);
+    setOverrideError(null);
+    try {
+      const response = await fetch(`${apiBase}/api/projects/${projectId}/synopsis/findings/${overrideFinding.id}/override`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ justification }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.message || `Override failed (${response.status})`);
+      setReadinessChecklist(current => current.map(item => item.id === overrideFinding.id ? body.finding : item));
+      setOverrideFinding(null);
+    } catch (error) {
+      setOverrideError(error instanceof Error ? error.message : 'The override could not be saved. Please try again.');
+    } finally {
+      setOverrideSubmitting(false);
+    }
+  };
 
   const handleCompleteSynopsis = async () => {
     if (allChecked) {
@@ -374,11 +404,13 @@ export function SynopsisPage() {
                 <div className="space-y-3 mb-4">
                   {readinessChecklist.map((item) => (
                     <div key={item.id} className={`flex items-start gap-3 p-4 rounded-lg border ${
-                      item.status === 'complete' ? 'border-blue-100 bg-blue-50' : item.status === 'not-applicable' ? 'border-slate-100 bg-slate-50' : 'border-slate-200 bg-slate-50'
+                      item.status === 'complete' ? 'border-blue-100 bg-blue-50' : item.status === 'overridden' ? 'border-amber-200 bg-amber-50' : item.status === 'not-applicable' ? 'border-slate-100 bg-slate-50' : 'border-slate-200 bg-slate-50'
                     }`}>
                       <div className="flex-shrink-0 mt-0.5">
                         {item.status === 'complete' ? (
                           <CheckCircle2 className="w-5 h-5 text-blue-600" />
+                        ) : item.status === 'overridden' ? (
+                          <AlertCircle className="w-5 h-5 text-amber-600" />
                         ) : item.status === 'not-applicable' ? (
                           <MinusCircle className="w-5 h-5 text-slate-400" />
                         ) : (
@@ -390,10 +422,28 @@ export function SynopsisPage() {
                         {item.status === 'not-applicable' && (
                           <span className="ml-2 text-xs font-medium text-slate-400 uppercase">Not applicable</span>
                         )}
+                        {item.status === 'overridden' && (
+                          <span className="ml-2 text-xs font-medium text-amber-700 uppercase">Overridden</span>
+                        )}
                         {item.reason && (
                           <p className="text-xs text-slate-500 mt-0.5">{item.reason}</p>
                         )}
+                        {item.override && (
+                          <div className="mt-2 rounded border border-amber-200 bg-white/70 p-2 text-xs text-amber-900">
+                            <span className="font-medium">Human override:</span> {item.override.justification}
+                            {item.override.overriddenBy && <span className="block mt-1 text-amber-700">By {item.override.overriddenBy}</span>}
+                          </div>
+                        )}
                       </div>
+                      {canOverride && (item.status === 'missing' || item.status === 'needs-review') && analysisStatus === 'succeeded' && (
+                        <button
+                          type="button"
+                          onClick={() => { setOverrideError(null); setOverrideFinding(item); }}
+                          className="ml-auto flex-shrink-0 rounded border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-50"
+                        >
+                          Override
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -429,6 +479,15 @@ export function SynopsisPage() {
           </div>{/* end protocolFinalized overlay */}
         </main>
       </div>
+      <AIFindingOverrideDialog
+        key={overrideFinding?.id || 'closed'}
+        open={Boolean(overrideFinding)}
+        findingLabel={overrideFinding?.label || ''}
+        submitting={overrideSubmitting}
+        error={overrideError}
+        onCancel={() => { setOverrideFinding(null); setOverrideError(null); }}
+        onSubmit={submitOverride}
+      />
     </div>
   );
 }

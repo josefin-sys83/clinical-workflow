@@ -16,6 +16,13 @@ export type ProjectAuditEvent = Omit<RecordAuditEvent, "projectId" | "actor">;
 
 export type RiskClass = "I" | "IIa" | "IIb" | "III";
 
+export function requireOverrideJustification(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new BadRequestException("Override justification is required");
+  }
+  return value.trim();
+}
+
 export type Project = {
   id: string;
   project_number: string;
@@ -494,7 +501,9 @@ export class ProjectsService {
       throw new BadRequestException("Synopsis readiness checklist is required");
     }
     const incomplete = checklist.filter((item: any) =>
-      item?.status !== "complete" && item?.status !== "not-applicable",
+      item?.status !== "complete"
+      && item?.status !== "not-applicable"
+      && !(item?.status === "overridden" && typeof item?.override?.justification === "string" && item.override.justification.trim()),
     );
     if (incomplete.length > 0) {
       throw new BadRequestException("All Synopsis readiness items must be resolved before completion");
@@ -558,6 +567,82 @@ export class ProjectsService {
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async overrideSynopsisFinding(
+    id: string,
+    findingId: string,
+    justificationValue: unknown,
+    actor: AuditActor,
+  ): Promise<{ finding: any }> {
+    const justification = requireOverrideJustification(justificationValue);
+    if (!findingId?.trim()) throw new BadRequestException("Finding ID is required");
+
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query<{ data: any }>(
+        "SELECT data FROM projects WHERE id = $1 FOR UPDATE",
+        [id],
+      );
+      if (!rows[0]) throw new NotFoundException("Project not found");
+
+      const projectData = rows[0].data || {};
+      const synopsis = projectData.synopsis || {};
+      const checklist = Array.isArray(synopsis.readinessChecklist) ? synopsis.readinessChecklist : [];
+      const index = checklist.findIndex((item: any) => String(item?.id) === String(findingId));
+      if (index === -1) throw new NotFoundException("Synopsis finding not found");
+
+      const originalFinding = checklist[index];
+      if (originalFinding.status === "complete" || originalFinding.status === "not-applicable") {
+        throw new BadRequestException("Only a blocking AI finding can be overridden");
+      }
+
+      const now = new Date().toISOString();
+      const overriddenFinding = {
+        ...originalFinding,
+        aiStatus: originalFinding.aiStatus || originalFinding.status,
+        status: "overridden",
+        override: {
+          justification,
+          overriddenAt: now,
+          overriddenBy: actor.name || null,
+          overriddenByUserId: actor.userId || null,
+        },
+      };
+      const updatedChecklist = [...checklist];
+      updatedChecklist[index] = overriddenFinding;
+
+      await client.query(
+        "UPDATE projects SET data = $2, updated_at = $3 WHERE id = $1",
+        [id, JSON.stringify({ ...projectData, synopsis: { ...synopsis, readinessChecklist: updatedChecklist } }), now],
+      );
+      await this.audit.record({
+        projectId: id,
+        stepId: "synopsis",
+        type: "ai.finding.overridden",
+        message: `Overrode AI synopsis finding: ${originalFinding.label || findingId}`,
+        actor,
+        entityType: "ai_finding",
+        entityId: String(findingId),
+        entityLabel: originalFinding.label || String(findingId),
+        metadata: {
+          decisionContext: "synopsis-readiness",
+          justification,
+          finding: originalFinding,
+          previousStatus: originalFinding.status,
+          nextStatus: "overridden",
+        },
+      }, client);
+
+      await client.query("COMMIT");
+      return { finding: overriddenFinding };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
     } finally {
       client.release();
     }

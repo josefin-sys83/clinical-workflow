@@ -192,6 +192,22 @@ async getMarkets() {
     });
   }
 
+  @Post('/:projectId/synopsis/findings/:findingId/override')
+  @Roles('admin', 'author')
+  overrideSynopsisFinding(
+    @Param('projectId') projectId: string,
+    @Param('findingId') findingId: string,
+    @Body() body: { justification?: string },
+    @Req() req: any,
+  ) {
+    return this.projects.overrideSynopsisFinding(projectId, findingId, body.justification, {
+      userId: req.user?.userId,
+      name: req.user?.name,
+      roles: req.user?.roles,
+      isSuperadmin: req.user?.isSuperadmin,
+    });
+  }
+
   @Patch('/:projectId/report/sections')
   updateReportSections(
     @Param('projectId') projectId: string,
@@ -623,7 +639,13 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     await this.assertDocumentNotSigned(projectId, 'protocol-pdf');
     await this.assertProtocolPrerequisites(projectId);
     const project = await this.projects.get(projectId);
-    const projectData = project?.data?.projectData || {};
+    // Project Setup stores the authoritative title in the relational/top-level `name`
+    // field and intentionally omits `projectName` from data.projectData. Enrich the AI
+    // input here so protocol generation does not fall back to "[Study Title]".
+    const projectData = {
+      ...(project?.data?.projectData || {}),
+      projectName: project.name,
+    };
     const roles = project.roles || [];
     const scope = project?.data?.scope || {};
     const synopsisData = project?.data?.synopsis || {};
