@@ -4,7 +4,7 @@ import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
-import { apiErrorMessage } from '@/shared/api/http';
+import { aiAnalysisErrorMessage, apiErrorMessage } from '@/shared/api/http';
 import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
@@ -42,6 +42,8 @@ interface ProjectStandard {
   code: string;
   title: string;
 }
+
+type RequirementsAnalysisStatus = 'not-run' | 'running' | 'succeeded' | 'failed';
 
 const reconcileMandatoryStandards = (
   currentRequirements: Requirement[],
@@ -299,6 +301,8 @@ export function Gate1() {
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [scopeSubmitError, setScopeSubmitError] = useState<string | null>(null);
+  const [requirementsAnalysisStatus, setRequirementsAnalysisStatus] = useState<RequirementsAnalysisStatus>('not-run');
+  const [requirementsAnalysisError, setRequirementsAnalysisError] = useState<string | null>(null);
   const [submittingScope, setSubmittingScope] = useState(false);
   // Prevent the autosave effect from writing the initial empty state before the
   // project's saved setup/scope values have finished loading.
@@ -395,8 +399,12 @@ export function Gate1() {
 
   const generateRequirements = async () => {
     setGeneratingRequirements(true);
+    setRequirementsAnalysisStatus('running');
+    setRequirementsAnalysisError(null);
     try {
-      const project = await fetch(`${apiBase}/api/projects/${projectId}`).then(r => r.json());
+      const projectResponse = await fetch(`${apiBase}/api/projects/${projectId}`);
+      if (!projectResponse.ok) throw new Error(`Failed to load project (${projectResponse.status})`);
+      const project = await projectResponse.json();
       // Markets are relational and GET /projects/:id exposes their codes at the top level.
       const targetMarkets = Array.isArray(project.targetMarkets)
         ? project.targetMarkets.join(', ')
@@ -450,31 +458,37 @@ Return ONLY a JSON array, no markdown:
   }
 ]`;
 
-      // The AI call is wrapped in its own try/catch, separate from the outer one, so a
-      // failed or malformed AI response still falls through to the mandatory-standards
-      // merge below rather than leaving `requirements` empty (handleConfirmScope already
-      // cleared it to [] before calling this).
-      let aiRequirements: Requirement[] = [];
-      try {
-        const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt })
-        });
-        const data = await res.json();
-        if (Array.isArray(data)) aiRequirements = data;
-      } catch (e) {
-        console.error('AI requirement generation failed', e);
-      }
+      const res = await fetch(`${apiBase}/api/projects/${projectId}/analyze-scope`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+      if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error(aiAnalysisErrorMessage(502));
+      const aiRequirements: Requirement[] = data;
 
       // project_standards is the source of truth for mandatory standards. It was
       // calculated from the project's risk, device category, and target markets.
       const projectStandards = await fetchProjectStandards();
-      const merged = reconcileMandatoryStandards(aiRequirements, projectStandards);
+      const manuallyManaged = requirements.filter(requirement =>
+        requirement.source === 'library' || requirement.source === 'user-defined'
+      );
+      const merged = reconcileMandatoryStandards([...manuallyManaged, ...aiRequirements], projectStandards);
       setRequirements(merged);
-
+      setRequirementsAnalysisStatus('succeeded');
     } catch (e) {
       console.error('Failed to generate requirements', e);
+      setRequirementsAnalysisError(e instanceof Error ? e.message : aiAnalysisErrorMessage(0));
+      setRequirementsAnalysisStatus('failed');
+      // Mandatory standards remain useful and visible, but cannot make the gate pass
+      // while the separate AI-analysis state is failed.
+      try {
+        const projectStandards = await fetchProjectStandards();
+        setRequirements(current => reconcileMandatoryStandards(current, projectStandards));
+      } catch (standardsError) {
+        console.error('Failed to load mandatory standards after AI failure', standardsError);
+      }
     } finally {
       setGeneratingRequirements(false);
     }
@@ -483,6 +497,7 @@ Return ONLY a JSON array, no markdown:
   const handleConfirmScope = async () => {
     setScopeConfirmed(true);
     setRequirements([]);
+    setRequirementsAnalysisStatus('not-run');
     await generateRequirements();
   };
 
@@ -530,6 +545,14 @@ Return ONLY a JSON array, no markdown:
         }
         if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
         const savedRequirements: Requirement[] = Array.isArray(s.requirements) ? s.requirements : [];
+        const savedAnalysisStatus = s.requirementsAnalysisStatus as RequirementsAnalysisStatus | undefined;
+        if (savedAnalysisStatus === 'succeeded' || savedAnalysisStatus === 'failed') {
+          setRequirementsAnalysisStatus(savedAnalysisStatus);
+        } else if (savedRequirements.some(requirement => requirement.source === 'ai-suggested')) {
+          // Backward compatibility for projects saved before this state was persisted.
+          setRequirementsAnalysisStatus('succeeded');
+        }
+        if (typeof s.requirementsAnalysisError === 'string') setRequirementsAnalysisError(s.requirementsAnalysisError);
         if (savedRequirements.length > 0 || s.scopeConfirmed) {
           try {
             const projectStandards = await fetchProjectStandards();
@@ -586,13 +609,13 @@ Return ONLY a JSON array, no markdown:
           deviceCategory,
           data: {
             projectData: { intendedUse, customIntendedUse },
-            scope: { deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements }
+            scope: { deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError }
           }
         })
       }).catch(() => {});
     }, 1000);
     return () => clearTimeout(timer);
-  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, isScopeLocked, scopeLoaded]);
+  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError, isScopeLocked, scopeLoaded]);
 
   // Section 2: Requirements (default values loaded from backend or set below)
   // requirements useState moved above
@@ -713,7 +736,7 @@ Return ONLY a JSON array, no markdown:
 
   // Readiness checks
   const scopeAndDeviceConfirmed = scopeConfirmed;
-  const requirementsApplicabilityConfirmed = requirements.length > 0 && requirements.every(req => req.status === "accepted" || req.status === "not-applicable");
+  const requirementsApplicabilityConfirmed = requirementsAnalysisStatus === 'succeeded' && requirements.length > 0 && requirements.every(req => req.status === "accepted" || req.status === "not-applicable");
   const allReadinessChecksPassed = scopeAndDeviceConfirmed && requirementsApplicabilityConfirmed;
 
   // Helper to check if a library requirement is already added
@@ -1034,9 +1057,25 @@ Return ONLY a JSON array, no markdown:
               </div>
             </CardHeader>
             <CardContent>
-              {!generatingRequirements && !scopeConfirmed && requirements.length === 0 && (
+              {requirementsAnalysisStatus === 'failed' && requirementsAnalysisError && (
+                <Alert variant="destructive" className="mb-4 border-red-200 bg-red-50">
+                  <AlertCircle />
+                  <AlertDescription className="flex items-center justify-between gap-3">
+                    <span>{requirementsAnalysisError}</span>
+                    <Button type="button" size="sm" variant="outline" onClick={generateRequirements} disabled={generatingRequirements || isScopeLocked}>
+                      Retry analysis
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {!generatingRequirements && requirementsAnalysisStatus === 'not-run' && requirements.length === 0 && (
                 <p className="text-sm text-muted-foreground py-4 text-center">
                   Confirm your scope and device type above to generate AI-suggested requirements.
+                </p>
+              )}
+              {!generatingRequirements && requirementsAnalysisStatus === 'succeeded' && aiSuggestedRequirements.length === 0 && (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  AI analysis completed and found no additional suggested requirements.
                 </p>
               )}
               <div className="space-y-2">

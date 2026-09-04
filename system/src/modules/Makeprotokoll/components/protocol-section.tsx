@@ -106,7 +106,8 @@ interface ProtocolSectionProps {
   onApprove?: (comment: string) => Promise<void>;
   onUnlock?: (reason: string) => Promise<void>;
   deadline?: { date: string; status: string } | null;
-  analysisFailed?: boolean;
+  analysisStatus?: 'not-run' | 'running' | 'succeeded' | 'failed';
+  analysisError?: string;
   analysisRetrying?: boolean;
   onRetryAnalysis?: () => void;
   attachments?: ProtocolAttachment[];
@@ -219,7 +220,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisFailed = false, analysisRetrying = false, onRetryAnalysis, attachments = [] }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [] }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -259,6 +260,7 @@ function ProtocolSectionComponent(
   const warningCount = openIssues.filter(i => i.severity === 'warning').length;
   const totalIssues = openIssues.length;
   const isBlocked = blockerCount > 0;
+  const analysisBlocksApproval = section.aiGenerated && analysisStatus !== 'succeeded';
 
   // ─── contentEditable rich text editor ───────────────────────────────────
 
@@ -682,21 +684,25 @@ function ProtocolSectionComponent(
 
             {/* 3. COMPLETENESS STATUS - INSPECTION CRITICAL */}
             {/* Always shown in a collapsible box */}
-            {analysisFailed ? (
-              <div className="px-3 py-2.5 border border-amber-200 bg-amber-50 rounded flex items-center justify-between gap-3">
-                <span className="text-xs text-amber-800">
-                  Completeness analysis unavailable — the last check failed, so results below may be out of date.
+            {analysisStatus === 'failed' ? (
+              <div className="px-3 py-2.5 border border-red-200 bg-red-50 rounded flex items-center justify-between gap-3">
+                <span className="text-xs text-red-800">
+                  {analysisError || 'AI analysis failed. Results below may be out of date.'}
                 </span>
                 {onRetryAnalysis && (
                   <button
                     onClick={onRetryAnalysis}
                     disabled={analysisRetrying}
-                    className="text-xs font-medium text-amber-800 hover:text-amber-900 disabled:text-amber-400 disabled:no-underline underline flex-shrink-0 flex items-center gap-1.5"
+                    className="text-xs font-medium text-red-800 hover:text-red-900 disabled:text-red-400 disabled:no-underline underline flex-shrink-0 flex items-center gap-1.5"
                   >
                     {analysisRetrying && <span className="w-3 h-3 border-2 border-amber-300 border-t-amber-800 rounded-full animate-spin" />}
                     {analysisRetrying ? 'Retrying…' : 'Retry'}
                   </button>
                 )}
+              </div>
+            ) : analysisStatus === 'not-run' || analysisStatus === 'running' ? (
+              <div className="px-3 py-2.5 border border-slate-200 bg-slate-50 rounded text-xs text-slate-600">
+                {analysisStatus === 'running' ? 'AI regulatory analysis is running…' : 'AI regulatory analysis has not run yet.'}
               </div>
             ) : (
               section.requiredElements && section.requiredElements.length > 0 && (
@@ -1058,7 +1064,9 @@ function ProtocolSectionComponent(
                     ) : (
                       <button
                         onClick={() => setShowApproveModal(true)}
-                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors font-medium flex items-center gap-1.5"
+                        disabled={analysisBlocksApproval}
+                        title={analysisBlocksApproval ? 'A successful AI analysis is required before approval.' : undefined}
+                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-1.5"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Approve Section
@@ -1083,7 +1091,9 @@ function ProtocolSectionComponent(
                     ) : (
                       <button
                         onClick={() => setShowApproveModal(true)}
-                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors flex items-center gap-1.5"
+                        disabled={analysisBlocksApproval}
+                        title={analysisBlocksApproval ? 'A successful AI analysis is required before approval.' : undefined}
+                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Approve Section
@@ -1173,7 +1183,7 @@ function ProtocolSectionComponent(
           <AlertDialogFooter>
             <AlertDialogCancel disabled={approveLoading}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={approveLoading}
+              disabled={approveLoading || analysisBlocksApproval}
               onClick={async (e) => {
                 e.preventDefault(); // keep the dialog open until the async approval settles
                 if (!onApprove) return;

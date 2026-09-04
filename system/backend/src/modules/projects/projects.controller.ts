@@ -552,20 +552,23 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   @UseGuards(AiThrottlerGuard)
   @UseInterceptors(FileInterceptor('file', SYNOPSIS_UPLOAD_OPTIONS))
   async analyzeSynopsis(@Param('projectId') projectId: string, @UploadedFile() file: any) {
-    if (!file) throw new BadRequestException('No file uploaded');
+    // Retry may happen after a page reload, when the browser no longer has the original
+    // File object. In that case analyze the synopsis already stored for this project.
+    const sourceFile = file || await this.projects.getSynopsisFile(projectId);
     let text = '';
-    const mimetype = file.mimetype || '';
-    const filename = file.originalname || '';
+    const mimetype = sourceFile.mimetype || sourceFile.contentType || '';
+    const filename = sourceFile.originalname || sourceFile.fileName || '';
+    const buffer = sourceFile.buffer || sourceFile.bytes;
     if (mimetype.includes('word') || filename.endsWith('.docx') || filename.endsWith('.doc')) {
       const mammoth = require('mammoth');
-      const result = await mammoth.extractRawText({ buffer: file.buffer });
+      const result = await mammoth.extractRawText({ buffer });
       text = result.value;
     } else if (mimetype === 'application/pdf' || filename.endsWith('.pdf')) {
       const pdfParse = require('pdf-parse');
-      const parsed = await pdfParse(file.buffer);
+      const parsed = await pdfParse(buffer);
       text = parsed.text;
     } else {
-      text = file.buffer.toString('utf-8');
+      text = buffer.toString('utf-8');
     }
     console.log('[analyzeSynopsis] extracted text length:', text.length, '| preview:', text.slice(0, 300));
 

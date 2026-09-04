@@ -8,6 +8,13 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   return message ?? fallback;
 }
 
+export function aiAnalysisErrorMessage(status: number): string {
+  if (status === 503) return 'The AI service is busy. Try again shortly.';
+  if (status === 504) return 'The AI review timed out. Please retry.';
+  if (status === 502) return 'The AI returned a response that could not be analyzed. Please retry.';
+  return 'The AI analysis could not be completed. Please try again.';
+}
+
 export class ApiError extends Error {
   status: number;
   payload?: unknown;

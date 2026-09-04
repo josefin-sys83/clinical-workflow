@@ -23,7 +23,7 @@ import {
   removeProtocolAttachment,
   type ProtocolAttachment,
 } from '@/shared/api/documents';
-import { apiErrorMessage, apiFetch } from '@/shared/api/http';
+import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
 
 
 
@@ -56,7 +56,8 @@ export default function App() {
   const [generationProgress, setGenerationProgress] = React.useState<{ completed: number; total: number; currentLabel: string | null } | null>(null);
   const [protocolError, setProtocolError] = React.useState<string | null>(null);
 const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
-  const [sectionAnalysisFailed, setSectionAnalysisFailed] = React.useState<Record<string, boolean>>({});
+  const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
+  const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
   const [sectionAnalyzing, setSectionAnalyzing] = React.useState<Record<string, boolean>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
@@ -64,6 +65,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   const [amendments, setAmendments] = React.useState<any[]>([]);
   const [amendmentSuccessMessage, setAmendmentSuccessMessage] = React.useState<string | null>(null);
   const [synopsisConsistencyIssues, setSynopsisConsistencyIssues] = React.useState<any[]>([]);
+  const [synopsisConsistencyStatus, setSynopsisConsistencyStatus] = React.useState<'not-run' | 'running' | 'succeeded' | 'failed'>('not-run');
+  const [synopsisConsistencyError, setSynopsisConsistencyError] = React.useState<string | null>(null);
   const [protocolMakeDeadline, setProtocolMakeDeadline] = React.useState<{ date: string; status: string } | null>(null);
   const [protocolAttachments, setProtocolAttachments] = React.useState<ProtocolAttachment[]>([]);
   const [attachmentBusy, setAttachmentBusy] = React.useState(false);
@@ -82,14 +85,21 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const runSynopsisConsistencyCheck = async () => {
     if (!projectId) return;
+    setSynopsisConsistencyStatus('running');
+    setSynopsisConsistencyError(null);
     try {
       const res = await fetch(apiBase + '/api/projects/' + projectId + '/check-synopsis-consistency', {
         method: 'POST',
       });
+      if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
       const data = await res.json();
+      if (!data || !Array.isArray(data.issues)) throw new Error(aiAnalysisErrorMessage(502));
       setSynopsisConsistencyIssues(data.issues || []);
+      setSynopsisConsistencyStatus('succeeded');
     } catch (e) {
       console.error('Synopsis consistency check failed', e);
+      setSynopsisConsistencyStatus('failed');
+      setSynopsisConsistencyError(e instanceof Error ? e.message : aiAnalysisErrorMessage(0));
     }
   };
 
@@ -128,6 +138,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         setRoles(p.roles || p.data?.roles || []);
         if (p.data?.protocol?.sections?.length) {
           setProtocol(p.data.protocol);
+          setSectionAnalysisStatus(Object.fromEntries(p.data.protocol.sections.map((s: any) => [s.id, s.analysisStatus || 'not-run'])));
+          setSectionAnalysisError(Object.fromEntries(p.data.protocol.sections.filter((s: any) => s.analysisError).map((s: any) => [s.id, s.analysisError])));
           p.data.protocol.sections?.forEach((s: any) => {
             if (s.content && s.approvalStatus !== 'approved' && s.aiGenerated !== false)
               analyzeSectionWithAI(s.title, s.content, s.id);
@@ -217,23 +229,19 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   // Current user context
   const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0): Promise<number> => {
+    setSectionAnalyzing(prev => ({ ...prev, [sectionId]: true }));
+    setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
+    setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
     try {
       const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
       });
+      if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
       const result = await res.json();
-
-      // A failed AI call/parse is an explicit error state, not an empty success.
-      // Never merge it into issues/requiredElements — that would silently mask
-      // the failure as "AI confirmed nothing/everything is missing."
-      if (!res.ok || result?.error) {
-        console.error('Section analysis failed', result?.message || res.statusText);
-        setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: true }));
-        return 0;
-      }
-      setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: Boolean(result.aiUnavailable) }));
+      if (!result || !Array.isArray(result.issues)) throw new Error(aiAnalysisErrorMessage(502));
+      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'succeeded' }));
 
       let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
       const elements = result.requiredElements || [];
@@ -248,7 +256,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       await new Promise<void>((resolve) => {
         setProtocol((prev: any) => {
           const updatedSections = prev.sections.map((s: any) =>
-            s.id === sectionId ? { ...s, issues: issuesArr, requiredElements: elements.length > 0 ? elements : s.requiredElements } : s
+            s.id === sectionId ? { ...s, issues: issuesArr, requiredElements: elements.length > 0 ? elements : s.requiredElements, analysisStatus: 'succeeded', analysisError: undefined } : s
           );
           const updated = { ...prev, sections: updatedSections };
           fetch(apiBase + '/api/projects/' + projectId, {
@@ -263,8 +271,18 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       return resolvedCount;
     } catch (e) {
       console.error('Section analysis failed', e);
-      setSectionAnalysisFailed(prev => ({ ...prev, [sectionId]: true }));
+      const message = e instanceof Error ? e.message : aiAnalysisErrorMessage(0);
+      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
+      setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
+      setProtocol((prev: any) => {
+        if (!prev) return prev;
+        const updated = { ...prev, sections: prev.sections.map((s: any) => s.id === sectionId ? { ...s, analysisStatus: 'failed', analysisError: message } : s) };
+        fetch(apiBase + '/api/projects/' + projectId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { protocol: updated } }) });
+        return updated;
+      });
       return 0;
+    } finally {
+      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: false }));
     }
   };
 
@@ -384,6 +402,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   };
 
   const handleApproveSection = async (sectionId: string, comment: string) => {
+    const section = protocol?.sections?.find((candidate: any) => candidate.id === sectionId);
+    const analysisStatus = sectionAnalysisStatus[sectionId] || section?.analysisStatus || 'not-run';
+    if (section?.aiGenerated !== false && analysisStatus !== 'succeeded') return;
     const now = new Date().toISOString();
     setProtocol((prev: any) => {
       if (!prev) return prev;
@@ -641,6 +662,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     approvalStatus: s.approvalStatus || 'draft',
     approvedBy: s.approvedBy || '',
     approvedAt: s.approvedAt || '',
+    analysisStatus: sectionAnalysisStatus[s.id] || s.analysisStatus || 'not-run',
+    analysisError: sectionAnalysisError[s.id] || s.analysisError || '',
   })) || [];
 
   // Helper function to get section status visualization
@@ -977,12 +1000,11 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         onApprove={(comment) => handleApproveSection(section.id, comment)}
                         onUnlock={(reason) => handleUnlockSection(section.id, reason)}
                         deadline={protocolMakeDeadline}
-                        analysisFailed={!!sectionAnalysisFailed[section.id]}
+                        analysisStatus={section.analysisStatus}
+                        analysisError={section.analysisError}
                         analysisRetrying={!!sectionAnalyzing[section.id]}
                         onRetryAnalysis={() => {
-                          setSectionAnalyzing(prev => ({ ...prev, [section.id]: true }));
-                          analyzeSectionWithAI(section.title, section.content, section.id)
-                            .finally(() => setSectionAnalyzing(prev => ({ ...prev, [section.id]: false })));
+                          analyzeSectionWithAI(section.title, section.content, section.id);
                         }}
                         attachments={protocolAttachments}
                       />
@@ -1202,7 +1224,16 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     });
                   })}
 
-                  {filteredSections.every(s => (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && (
+                  {(filteredSections.some(s => s.analysisStatus === 'failed') || synopsisConsistencyStatus === 'failed') && (
+                    <div className="p-4 border border-red-200 bg-red-50 rounded text-sm text-red-800">
+                      <div className="font-medium">AI review incomplete</div>
+                      <p className="text-xs mt-1">One or more analyses failed. Retry the affected section before treating this protocol as having no findings.</p>
+                      {synopsisConsistencyStatus === 'failed' && (
+                        <button onClick={runSynopsisConsistencyCheck} className="text-xs font-medium underline mt-2">Retry synopsis consistency check</button>
+                      )}
+                    </div>
+                  )}
+                  {filteredSections.every(s => s.analysisStatus === 'succeeded' && (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && synopsisConsistencyStatus === 'succeeded' && (
                     <div className="p-6 text-center">
                       <CheckCircle2 className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                       <p className="text-sm text-slate-700 mb-1">No issues found</p>
@@ -1231,8 +1262,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     },
                     {
                       category: 'No open blockers',
-                      passed: totalBlockers === 0,
-                      message: totalBlockers === 0 ? 'No blockers found' : `${totalBlockers} blocker${totalBlockers > 1 ? 's' : ''} must be resolved`,
+                      passed: totalBlockers === 0 && protocolSections.every((s: any) => s.aiGenerated === false || s.analysisStatus === 'succeeded'),
+                      message: protocolSections.some((s: any) => s.aiGenerated !== false && s.analysisStatus !== 'succeeded') ? 'AI review incomplete for one or more sections' : totalBlockers === 0 ? 'No blockers found' : `${totalBlockers} blocker${totalBlockers > 1 ? 's' : ''} must be resolved`,
                     },
                     {
                       category: 'Required elements covered',
@@ -1243,8 +1274,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     },
                     {
                       category: 'Cross-section consistency',
-                      passed: synopsisConsistencyIssues.length === 0,
-                      message: synopsisConsistencyIssues.length === 0
+                      passed: synopsisConsistencyStatus === 'succeeded' && synopsisConsistencyIssues.length === 0,
+                      message: synopsisConsistencyStatus === 'failed' ? (synopsisConsistencyError || 'Synopsis consistency analysis failed') : synopsisConsistencyStatus !== 'succeeded' ? 'Synopsis consistency check has not completed' : synopsisConsistencyIssues.length === 0
                         ? 'No consistency issues detected'
                         : `${synopsisConsistencyIssues.length} consistency issue${synopsisConsistencyIssues.length > 1 ? 's' : ''} detected`,
                       details: synopsisConsistencyIssues.length > 0 ? synopsisConsistencyIssues.map((i: any) => `${i.section}: ${i.description}`).join(' · ') : undefined,

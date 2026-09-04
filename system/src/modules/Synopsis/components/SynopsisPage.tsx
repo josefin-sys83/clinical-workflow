@@ -8,6 +8,7 @@ import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { AIInsightBadge } from '@/shared/components/AIInsightBadge';
 import { AuditEntry } from './AuditTrail';
+import { aiAnalysisErrorMessage } from '@/shared/api/http';
 
 
 interface ReadinessItem {
@@ -18,6 +19,7 @@ interface ReadinessItem {
 }
 
 type SynopsisStatus = 'not-started' | 'in-progress' | 'completed';
+type AnalysisStatus = 'not-run' | 'running' | 'succeeded' | 'failed';
 
 interface WorkflowStep {
   id: string;
@@ -32,7 +34,7 @@ export function SynopsisPage() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [aiReviewComplete, setAiReviewComplete] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('not-run');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [synopsisStatus, setSynopsisStatus] = useState<SynopsisStatus>('not-started');
   const { protocolFinalized, isLocked, latestAmendment } = useProtocolStatus(projectId);
@@ -71,7 +73,10 @@ export function SynopsisPage() {
           const s = project.data.synopsis;
           if (s.uploadedFileName) setUploadedFileName(s.uploadedFileName);
           if (s.readinessChecklist) setReadinessChecklist(s.readinessChecklist);
-          if (s.aiReviewComplete) setAiReviewComplete(s.aiReviewComplete);
+          if (s.aiReviewComplete) {
+            setAiReviewComplete(true);
+            setAnalysisStatus('succeeded');
+          }
           if (s.synopsisStatus) setSynopsisStatus(s.synopsisStatus);
         }
       })
@@ -98,13 +103,55 @@ export function SynopsisPage() {
 
   const auditEntries: AuditEntry[] = [];
 
+  const runAnalysis = async (file?: File) => {
+    setAnalysisStatus('running');
+    setAiReviewComplete(false);
+    setAnalysisError(null);
+
+    try {
+      const analyzeForm = new FormData();
+      if (file) analyzeForm.append('file', file);
+      const response = await fetch(`${apiBase}/api/projects/${projectId}/analyze-synopsis`, {
+        method: 'POST',
+        body: analyzeForm,
+      });
+
+      if (!response.ok) throw new Error(aiAnalysisErrorMessage(response.status));
+
+      const results = await response.json();
+      if (!Array.isArray(results)) throw new Error(aiAnalysisErrorMessage(502));
+
+      const updatedChecklist = readinessChecklist.map(item => {
+        const result = results.find((r: any) => String(r.id) === String(item.id));
+        if (!result) return item;
+        const status: ReadinessItem['status'] =
+          result.status === 'complete' || result.status === 'not-applicable' ? result.status : 'missing';
+        return { ...item, status, reason: result.reason };
+      });
+      updatedChecklist[0] = { ...updatedChecklist[0], status: 'complete', reason: 'Document uploaded successfully' };
+
+      setReadinessChecklist(updatedChecklist);
+      setAiReviewComplete(true);
+      setAnalysisStatus('succeeded');
+      await saveToBackend({ uploadedFileName: file?.name || uploadedFileName, readinessChecklist: updatedChecklist, aiReviewComplete: true, synopsisStatus });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : aiAnalysisErrorMessage(0);
+      setAnalysisError(message);
+      setAnalysisStatus('failed');
+      setAiReviewComplete(false);
+      await saveToBackend({ uploadedFileName: file?.name || uploadedFileName, readinessChecklist, aiReviewComplete: false, synopsisStatus });
+      console.error('Analysis error:', error);
+    }
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     setUploadedFile(file);
     setUploadedFileName(file.name);
-    setIsAnalyzing(true);
+    setAnalysisStatus('not-run');
+    setAiReviewComplete(false);
     setAnalysisError(null);
 
     // Upload file to backend for storage
@@ -119,42 +166,11 @@ export function SynopsisPage() {
       console.error('Failed to upload file', e);
     }
 
-    // Analyze with AI
-    try {
-      const analyzeForm = new FormData();
-      analyzeForm.append('file', file);
-      const response = await fetch(`${apiBase}/api/projects/${projectId}/analyze-synopsis`, {
-        method: 'POST',
-        body: analyzeForm,
-      });
-
-      if (!response.ok) throw new Error('Analysis failed');
-
-      const results = await response.json();
-      const updatedChecklist = readinessChecklist.map(item => {
-        const result = results.find((r: any) => String(r.id) === String(item.id));
-        if (!result) return item;
-        const status: 'complete' | 'needs-review' | 'missing' | 'not-applicable' =
-          result.status === 'complete' || result.status === 'not-applicable' ? result.status : 'missing';
-        return { ...item, status, reason: result.reason };
-      });
-      // Mark item 1 as complete since file is uploaded
-      updatedChecklist[0] = { ...updatedChecklist[0], status: 'complete', reason: 'Document uploaded successfully' };
-
-      const passedCount = updatedChecklist.filter(i => i.status === 'complete' || i.status === 'not-applicable').length;
-
-      setReadinessChecklist(updatedChecklist);
-      setAiReviewComplete(true);
-      await saveToBackend({ uploadedFileName: file.name, readinessChecklist: updatedChecklist, aiReviewComplete: true, synopsisStatus });
-    } catch (e) {
-      setAnalysisError('AI analysis failed. Please try again.');
-      console.error('Analysis error:', e);
-    } finally {
-      setIsAnalyzing(false);
-    }
+    await runAnalysis(file);
   };
 
-  const allChecked = readinessChecklist.every(item => item.status === 'complete' || item.status === 'not-applicable');
+  const isAnalyzing = analysisStatus === 'running';
+  const allChecked = analysisStatus === 'succeeded' && aiReviewComplete && readinessChecklist.every(item => item.status === 'complete' || item.status === 'not-applicable');
 
   const handleCompleteSynopsis = async () => {
     if (allChecked) {
@@ -181,6 +197,8 @@ export function SynopsisPage() {
       } catch (error) {
         setAnalysisError(error instanceof Error ? error.message : 'Could not complete Synopsis. Please try again.');
       }
+    } else if (analysisStatus === 'failed') {
+      setAnalysisError('The AI review must complete successfully before you can proceed. Please retry the analysis.');
     } else {
       alert('Please complete all readiness checklist items before proceeding.');
     }
@@ -301,10 +319,19 @@ export function SynopsisPage() {
                         <CheckCircle2 className="w-5 h-5 text-blue-600" />
                       ) : null}
                     </div>
-                    {analysisError && (
-                      <div className={`flex items-center gap-2 p-3 ${theme.status.error} rounded-md text-sm`}>
-                        <AlertCircle className="w-4 h-4" />
-                        {analysisError}
+                    {analysisStatus === 'failed' && analysisError && (
+                      <div className={`flex items-center justify-between gap-3 p-3 ${theme.status.error} rounded-md text-sm`}>
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                          <span>{analysisError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => runAnalysis(uploadedFile || undefined)}
+                          className="px-3 py-1.5 rounded-md border border-red-300 bg-white text-red-700 font-medium hover:bg-red-50 whitespace-nowrap"
+                        >
+                          Retry analysis
+                        </button>
                       </div>
                     )}
                     <label className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer transition-colors">
@@ -327,7 +354,7 @@ export function SynopsisPage() {
                       </div>
                     )}
                   </div>
-                  {aiReviewComplete ? (
+                  {analysisStatus === 'succeeded' ? (
                     <p className="text-sm text-slate-500 mt-1">
                       {`${readinessChecklist.filter(i => i.status === 'complete' || i.status === 'not-applicable').length} of ${readinessChecklist.length} criteria met`}
                     </p>
@@ -335,7 +362,7 @@ export function SynopsisPage() {
                     <AIInsightBadge
                       className="mt-3"
                       title="AI Analysis"
-                      description="Upload a document to start AI analysis"
+                      description={analysisStatus === 'failed' ? 'Analysis did not complete — retry before proceeding' : 'Upload a document to start AI analysis'}
                     />
                   )}
                 </div>
@@ -377,7 +404,13 @@ export function SynopsisPage() {
                   <div>
                     <h4 className="text-base font-semibold text-slate-900 mb-1">Ready to proceed?</h4>
                     <p className="text-sm text-slate-500">
-                      {allChecked ? 'All criteria met — you can proceed to Scope.' : `${readinessChecklist.filter(i => i.status === 'missing').length} criteria still missing.`}
+                      {analysisStatus === 'failed'
+                        ? 'AI review failed — retry is required before proceeding.'
+                        : analysisStatus !== 'succeeded'
+                        ? 'AI review has not completed yet.'
+                        : allChecked
+                        ? 'All criteria met — you can proceed to Scope.'
+                        : `${readinessChecklist.filter(i => i.status === 'missing').length} criteria still missing.`}
                     </p>
                   </div>
                   <button
