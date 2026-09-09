@@ -210,7 +210,7 @@ export class AiService {
       crossSectionContext,
       acceptedRequirements,
       synopsisExcerpt,
-      protocolAttachments,
+      // protocolAttachments,
     });
   }
 
