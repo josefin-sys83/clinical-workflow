@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import sanitizeHtml from 'sanitize-html';
 
 // Protocol/report section content is rendered client-side via dangerouslySetInnerHTML
@@ -49,36 +50,11 @@ export function sanitizeSectionHtml(input: string | null | undefined): string {
   });
 }
 
-// Report sections in projects.data are rendered via dangerouslySetInnerHTML.
-// Protocol sections are normalized and sanitized by ProtocolsService. Report
-// endpoints still accept a generic `data` patch, so
-// ProjectsService.update() is also reachable directly with an arbitrary `data` blob
-// (the generic PATCH /:projectId "save the whole project" pattern, and generateReport()'s
-// bulk write) — sanitizing here too means no write path into section content can bypass
-// it, regardless of which endpoint or future endpoint calls update().
+// Generic project JSON cannot be used to bypass normalized report/signature APIs.
 export function sanitizeIncomingProjectData(data: any): any {
   if (!data || typeof data !== 'object') return data;
-  const result = { ...data };
-  if (result.report?.sections) {
-    const sections = result.report.sections;
-    if (Array.isArray(sections)) {
-      result.report = {
-        ...result.report,
-        sections: sections.map((s: any) =>
-          s && typeof s === 'object' && typeof s.content === 'string'
-            ? { ...s, content: sanitizeSectionHtml(s.content) }
-            : s
-        ),
-      };
-    } else if (typeof sections === 'object') {
-      const sanitizedSections: Record<string, any> = {};
-      for (const [id, s] of Object.entries(sections)) {
-        sanitizedSections[id] = s && typeof s === 'object' && typeof (s as any).content === 'string'
-          ? { ...(s as any), content: sanitizeSectionHtml((s as any).content) }
-          : s;
-      }
-      result.report = { ...result.report, sections: sanitizedSections };
-    }
+  if (Object.prototype.hasOwnProperty.call(data, 'report') || Object.prototype.hasOwnProperty.call(data, 'signatures')) {
+    throw new BadRequestException('Reports and signatures must use their dedicated endpoints');
   }
-  return result;
+  return { ...data };
 }

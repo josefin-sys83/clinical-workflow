@@ -85,7 +85,7 @@ export class CreateProjectDto {
 
 // Mirrors CreateProjectDto's validation for name/description so PATCH can't be used to bypass
 // the length/content limits enforced at creation. `data` remains an intentionally open-ended
-// blob for report sections, synopsis, scope, and other not-yet-normalized details. The
+// blob for synopsis, scope, and other not-yet-normalized details. Reports use dedicated endpoints. The
 // protocol compatibility key is intercepted and persisted relationally.
 export class UpdateProjectDto {
   @ApiProperty({ required: false })

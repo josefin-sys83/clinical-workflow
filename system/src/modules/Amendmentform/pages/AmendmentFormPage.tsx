@@ -320,9 +320,9 @@ export function AmendmentFormPage() {
           Array.isArray(amds) ? amds.filter((a: Amendment) => a.status === 'approved' || a.status === 'finalized') : []
         );
         // Restore persisted amendment signatures
-        if (Array.isArray(project.data?.signatures)) {
+        if (Array.isArray(project.signatures)) {
           const map: { 'amendment-lead'?: SignatureRecord; 'amendment-vp'?: SignatureRecord } = {};
-          for (const s of project.data.signatures as SignatureRecord[]) {
+          for (const s of project.signatures as SignatureRecord[]) {
             if (s.role === 'amendment-lead' || s.role === 'amendment-vp') {
               map[s.role] = s;
             }

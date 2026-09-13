@@ -7,11 +7,12 @@ import { WorkflowModule } from '../workflow/workflow.module';
 import { MilestoneService } from '../milestones/milestone.service';
 import { AdminModule } from '../admin/admin.module';
 import { ProtocolsService } from './protocols.service';
+import { ReportsService } from './reports.service';
 
 @Module({
   imports: [AiModule, AuditModule, WorkflowModule, AdminModule],
   controllers: [ProjectsController],
-  providers: [ProjectsService, ProtocolsService, MilestoneService],
-  exports: [ProjectsService, ProtocolsService],
+  providers: [ProjectsService, ProtocolsService, ReportsService, MilestoneService],
+  exports: [ProjectsService, ProtocolsService, ReportsService],
 })
 export class ProjectsModule {}
