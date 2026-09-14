@@ -4,6 +4,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
 import { CreateProjectDto, UpdateProjectDto, UpdateReportSectionsDto, UpdateSectionContentDto } from './dto';
 import { ProjectsService, type ProjectAuditEvent } from './projects.service';
+import { ReportsService } from './reports.service';
+import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
 import { AiService, PROTOCOL_SECTION_TITLES } from '../ai/ai.service';
 import { GenerationProgressService } from '../ai/generation-progress.service';
 import { WorkflowService } from '../workflow/workflow.service';
@@ -47,6 +49,7 @@ const SIGNATURE_STEP_ROLES: Record<string, { stepId?: string; requiredRoles: str
 export class ProjectsController {
   constructor(
     private readonly projects: ProjectsService,
+    private readonly reports: ReportsService,
     private readonly ai: AiService,
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
@@ -150,19 +153,7 @@ async getMarkets() {
     const project = await this.projects.get(projectId);
     const scope = project?.data?.scope || {};
 
-    const inferredFromRequirements: string[] = (scope?.requirements || [])
-      .filter((r: any) => r.status === 'accepted')
-      .map((r: any) => {
-        if (r.title.includes('FDA') || r.title.includes('US')) return 'FDA';
-        if (r.title.includes('EU') || r.title.includes('MDR')) return 'EU';
-        return null;
-      })
-      .filter(Boolean);
-    const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
-    const targetMarkets: string[] =
-      project.targetMarkets.length > 0
-        ? project.targetMarkets
-        : (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
+    const targetMarkets = resolveReportMarkets(project.targetMarkets, scope);
 
     const sections = this.getDynamicReportSections(targetMarkets, scope);
     return {
@@ -220,6 +211,22 @@ async getMarkets() {
       roles: req.user?.roles,
       isSuperadmin: req.user?.isSuperadmin,
     });
+  }
+
+  @Get('/:projectId/report')
+  getReport(@Param('projectId') projectId: string) {
+    return this.reports.getByProject(projectId);
+  }
+
+  @Patch('/:projectId/report/consistency-dismissals')
+  dismissReportConsistency(@Param('projectId') projectId: string, @Body() body: { findingKeys: string[] }, @Req() req: any) {
+    return this.reports.dismissConsistency(projectId, body.findingKeys, req.user);
+  }
+
+  @Post('/:projectId/report/sections/:sectionKey/comments')
+  addReportComment(@Param('projectId') projectId: string, @Param('sectionKey') key: string,
+    @Body() body: { content: string; type?: string; parentCommentKey?: string }, @Req() req: any) {
+    return this.reports.addComment(projectId, key, body, req.user);
   }
 
   @Post()
@@ -916,7 +923,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     @Req() req: any,
   ) {
     if (body.action === 'finalize') {
-      const signatures = await this.projects.get(projectId).then((project) => project.data?.signatures || []);
+      const signatures = await this.projects.get(projectId).then((project) => project.signatures || []);
       const hasLeadSignature = signatures.some((signature: any) => signature.role === 'amendment-lead');
       const hasVpSignature = signatures.some((signature: any) => signature.role === 'amendment-vp');
       if (!hasLeadSignature || !hasVpSignature) {
@@ -1025,40 +1032,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     targetMarkets: string[],
     scope: any,
   ): Array<{ id: string; title: string; number: number }> {
-    const baseSections = [
-      { id: 'section-1', title: 'Executive Summary', number: 1 },
-      { id: 'section-2', title: 'Introduction and Background', number: 2 },
-      { id: 'section-3', title: 'Objectives and Endpoints', number: 3 },
-      { id: 'section-4', title: 'Clinical Investigation Design', number: 4 },
-      { id: 'section-5', title: 'Statistical Methods', number: 5 },
-      { id: 'section-6', title: 'Subject Disposition and Baseline', number: 6 },
-      { id: 'section-7', title: 'Clinical Performance Results', number: 7 },
-      { id: 'section-8', title: 'Safety Analysis', number: 8 },
-      { id: 'section-9', title: 'Conclusions and Benefit-Risk Assessment', number: 9 },
-    ];
-
-    const dynamicSections: Array<{ id: string; title: string }> = [];
-    if (targetMarkets.includes('EU')) {
-      dynamicSections.push({
-        id: 'section-eu-compliance',
-        title: 'Regulatory Compliance Statement (EU MDR 2017/745)',
-      });
-    }
-    if (targetMarkets.includes('FDA') || targetMarkets.includes('US')) {
-      dynamicSections.push({
-        id: 'section-us-ide',
-        title: 'Investigational Device Exemption (IDE) Compliance Summary',
-      });
-    }
-
-    const numbered = dynamicSections.map((s, i) => ({ ...s, number: 10 + i }));
-    const appendicesNumber = 10 + dynamicSections.length;
-
-    return [
-      ...baseSections,
-      ...numbered,
-      { id: 'section-appendices', title: 'Report Appendices', number: appendicesNumber },
-    ];
+    return getReportSectionDefinitions(targetMarkets);
   }
 
   @Post('/:projectId/generate-report')
@@ -1066,6 +1040,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   async generateReport(
     @Param('projectId') projectId: string,
     @Body() body: { onlyMissing?: boolean } = {},
+    @Req() req: any,
   ) {
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
@@ -1073,11 +1048,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const roles = project.roles || [];
     const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
-    const existingReport = project?.data?.report || {};
-    const rawExistingSections = existingReport.sections || {};
-    const existingSections: Record<string, any> = Array.isArray(rawExistingSections)
-      ? Object.fromEntries(rawExistingSections.map((section: any) => [section.id, section]))
-      : rawExistingSections;
+    const existingReport = project?.report || {};
+    const existingSections: Record<string, any> = existingReport.sections || {};
 
     // Resolve targetMarkets from multiple sources
     const inferredFromRequirements: string[] = (scope?.requirements || [])
@@ -1145,12 +1117,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     }
 
     const generatedSectionPatches = Object.fromEntries(
-      Array.from(generatedContents, ([sectionId, content]) => [sectionId, { content }]),
+      sectionDefs.map(s => [s.id, { title: s.title, number: s.number, order: s.number, ...(generatedContents.has(s.id) ? { content: generatedContents.get(s.id), aiDraft: null } : {}) }]),
     );
     const persistedSections = await this.projects.updateReportSections(
       projectId,
       generatedSectionPatches,
-      { name: 'System' },
+      req.user,
       [{
         type: 'report.ai.generated',
         message: 'Clinical Investigation Report generated by AI',
@@ -1167,9 +1139,6 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
         },
       }],
     );
-    // Persist definitions separately. ProjectsService merges this into the latest
-    // report object under a row lock, so it cannot replace concurrently saved sections.
-    await this.projects.update(projectId, { data: { report: { sectionDefs } } }, { name: 'System' });
 
     return sectionDefs.map((s) => ({
       id: s.id,
@@ -1184,6 +1153,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   async generateReportSection(
     @Param('projectId') projectId: string,
     @Body() body: { sectionId: string; sectionTitle: string; sectionNumber: number },
+    @Req() req: any,
   ) {
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
@@ -1247,8 +1217,8 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
     await this.projects.updateReportSections(
       projectId,
-      { [body.sectionId]: { content: trimmedContent } },
-      { name: 'System' },
+      { [body.sectionId]: { content: trimmedContent, aiDraft: null, title: body.sectionTitle, number: body.sectionNumber, order: body.sectionNumber } },
+      req.user,
       [{
         type: 'report.section.ai.generated',
         message: `Report section "${body.sectionTitle}" generated by AI`,
@@ -1281,7 +1251,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const intendedUse = project?.data?.scope?.intendedUse || '';
 
     const protocol = project?.data?.protocol || {};
-    const reportSections = project?.data?.report?.sections || {};
+    const reportSections = project?.report?.sections || {};
     const amendments = protocol.amendments || [];
 
     // Find approved amendments that affect this report section
@@ -1309,11 +1279,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   @UseGuards(AiThrottlerGuard)
   async checkCrossConsistency(
     @Param('projectId') projectId: string,
+    @Req() req: any,
   ) {
     await this.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol || {};
-    const report = project?.data?.report || {};
+    const report = project?.report || {};
     const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
     const deviceCategory = project.deviceCategory || '';
 
@@ -1340,19 +1311,17 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     };
 
     const reportSections = Object.entries(report.sections || {}).map(([id, data]: [string, any]) => ({
-      title: sectionTitleMap[id] || data.title || id,
+      title: data.title || sectionTitleMap[id] || id,
       content: data.content || '',
     })).filter((s: any) => s.content);
 
     const result = await this.ai.checkCrossConsistency(protocolSections, reportSections, targetMarkets, deviceCategory);
 
-    // Cache the result on the project so the frontend only has to re-run this (AI,
+    // Persist the report analysis so the frontend only has to re-run this (AI,
     // non-deterministic wording) check on an explicit user action, not on every page
     // load — otherwise a "Won't fix" dismissal keyed on the finding's text can lapse
     // as soon as the AI rewords the same finding on the next automatic re-check.
-    await this.projects.update(projectId, {
-      data: { report: { crossConsistencyIssues: result.issues } },
-    });
+    await this.reports.updateConsistency(projectId, result.issues, req.user);
 
     return result;
   }
@@ -1381,7 +1350,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   @Post('/:projectId/validate-statistics')
   async validateStatistics(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
-    const reportSections = project?.data?.report?.sections || {};
+    const reportSections = project?.report?.sections || {};
     const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
 
     // Find relevant sections

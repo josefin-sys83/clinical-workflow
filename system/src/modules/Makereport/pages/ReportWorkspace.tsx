@@ -120,15 +120,15 @@ export function ReportWorkspace() {
       const reviewer = userFromRole(newRoles, 'Protocol Lead');
       const approver = userFromRole(newRoles, 'Clinical Affairs VP');
 
-      const projectUploadedFiles: UploadedFile[] = p.data?.report?.uploadedFiles || p.data?.uploadedFiles || [];
+      const projectUploadedFiles: UploadedFile[] = p.data?.uploadedFiles || [];
       setUploadedFiles(projectUploadedFiles);
 
-      const projectDataAssets: DataAsset[] = p.data?.report?.dataAssets || p.data?.dataAssets || [];
+      const projectDataAssets: DataAsset[] = p.data?.dataAssets || [];
       if (projectDataAssets.length > 0) setDataAssets(projectDataAssets);
 
       // Store API section defs and target markets for sidebar badges
       const apiDefs: Array<{ id: string; title: string; number: number }> =
-        sectionMeta?.sections || p.data?.report?.sectionDefs || [];
+        sectionMeta?.sections || p.report?.sectionDefs || [];
       if (apiDefs.length > 0) setApiSectionDefs(apiDefs);
       setTargetMarkets(sectionMeta?.targetMarkets || p.targetMarkets || []);
 
@@ -136,7 +136,7 @@ export function ReportWorkspace() {
         setProtocolSectionsForAmendment(p.data.protocol.sections.map((s: any) => ({ id: s.id, title: s.title })));
       }
 
-      const savedSections = p.data?.report?.sections;
+      const savedSections = p.report?.sections;
 
       // Collect wont-fix suppressions from any saved section
       const wontFixMap: Record<string, string[]> = {};
@@ -156,8 +156,8 @@ export function ReportWorkspace() {
 
       // Cross-consistency dismissals are project-level (span Protocol + Report), so
       // they're stored on `report` directly rather than under an individual section.
-      if (Array.isArray(p.data?.report?.wontFixCrossConsistencyIssues)) {
-        setWontFixCrossConsistencyIds(p.data.report.wontFixCrossConsistencyIssues);
+      if (Array.isArray(p.report?.wontFixCrossConsistencyIssues)) {
+        setWontFixCrossConsistencyIds(p.report.wontFixCrossConsistencyIssues);
       }
 
       // The cross-consistency check hits the AI and its wording isn't fully
@@ -165,9 +165,9 @@ export function ReportWorkspace() {
       // on the finding's text) lapse if it re-runs on every page load. So: use the
       // cached result from the last run if one exists, and only invoke the AI check
       // automatically the very first time (never run before for this project).
-      const hasCachedCrossConsistency = Array.isArray(p.data?.report?.crossConsistencyIssues);
+      const hasCachedCrossConsistency = p.report?.crossConsistencyChecked === true;
       if (hasCachedCrossConsistency) {
-        setCrossConsistencyIssues(p.data.report.crossConsistencyIssues);
+        setCrossConsistencyIssues(p.report.crossConsistencyIssues);
       }
 
       // Restore persisted AI issues — same persistence pattern as completenessElements,
@@ -215,12 +215,9 @@ export function ReportWorkspace() {
         // Dynamic section with no scaffold — build minimal object
         return {
           id: def.id,
-          title: def.title,
           helperText: '',
           content: saved?.content || '',
-          order: def.number,
           state: (saved?.state as any) || 'draft',
-          roles,
           comments: [],
           validationFindings: [],
           aiDraftGenerated: false,
@@ -234,6 +231,13 @@ export function ReportWorkspace() {
             commonPitfalls: [],
             referencedDocuments: [],
           },
+          // Relational responses are keyed objects for dynamic sections too.
+          // Preserve their saved comments, evidence and draft just as the old
+          // full-section array path did.
+          ...(saved ?? {}),
+          title: def.title,
+          order: def.number,
+          roles,
         } as any;
       };
 
@@ -315,10 +319,10 @@ export function ReportWorkspace() {
     setWontFixCrossConsistencyIds(ids);
     if (!projectId) return;
     try {
-      await fetch(apiBase + '/api/projects/' + projectId, {
+      await fetch(apiBase + '/api/projects/' + projectId + '/report/consistency-dismissals', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { report: { wontFixCrossConsistencyIssues: ids } } }),
+        body: JSON.stringify({ findingKeys: ids }),
       });
     } catch {
       // silently fail — state already applied in memory
@@ -378,7 +382,7 @@ export function ReportWorkspace() {
   // for the first time and has no content yet.
   useEffect(() => {
     const section = sections.find(s => s.id === currentSection);
-    if (!section || section.aiDraftGenerated || section.content || section.userEdited) return;
+    if (!section || section.aiDraft || section.aiDraftGenerated || section.content || section.userEdited) return;
     if (aiDraftRequestedRef.current.has(section.id)) return;
     aiDraftRequestedRef.current.add(section.id);
 

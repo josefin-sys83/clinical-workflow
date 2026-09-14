@@ -126,7 +126,7 @@ export function ClinicalInvestigationReport() {
         (sectionMeta?.sections || []).forEach((s: any) => { titleMap[s.id] = s.title; });
 
         // Build report sections from saved data
-        const savedSections = p.data?.report?.sections || {};
+        const savedSections = p.report?.sections || {};
         const sectionList = Object.entries(savedSections).map(([id, data]: [string, any]) => ({
           id,
           title: titleMap[id] || data.title || id,
@@ -136,9 +136,9 @@ export function ClinicalInvestigationReport() {
         setReportSections(sectionList);
 
         // Restore persisted signatures
-        if (Array.isArray(p.data?.signatures)) {
+        if (Array.isArray(p.signatures)) {
           const restored: { investigator?: SignatureRecord; sponsor?: SignatureRecord } = {};
-          for (const sig of p.data.signatures as SignatureRecord[]) {
+          for (const sig of p.signatures as SignatureRecord[]) {
             if (sig.role === 'report-investigator') restored.investigator = sig;
             if (sig.role === 'report-sponsor') restored.sponsor = sig;
           }

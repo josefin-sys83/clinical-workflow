@@ -1,0 +1,102 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+// Browser regression fixture: all API calls are intercepted; no AI or DB writes.
+// Open /tests/report-storage.html through Vite, or use headless Chrome --dump-dom.
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import { ReportWorkspace } from '/src/modules/Makereport/pages/ReportWorkspace.tsx';
+import ReviewPage from '/src/modules/Reportreview/app/pages/ReviewPage.tsx';
+import { ClinicalInvestigationReport } from '/src/modules/Pdfreport/components/ClinicalInvestigationReport.tsx';
+import { initialReportSections } from '/src/modules/Makereport/data/mockData.ts';
+
+const errors = [];
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+
+const definitions = initialReportSections.map(s => ({ id: s.id, title: s.title, number: s.order }));
+definitions.push({ id: 'section-custom', title: 'Custom section', number: 11 });
+const saved = {
+  'section-1': { content: '<p>Saved executive text</p>', state: 'draft' },
+  'section-3': { content: '', userEdited: true, state: 'draft' },
+  'section-2': { issues: [], completenessElements: [], state: 'draft' },
+  'section-custom': { content: '<p>Saved custom text</p>', state: 'draft',
+    comments: [{ id: 'c1', text: 'Persisted comment', author: { name: 'Writer' }, replies: [] }],
+    completenessElements: [{ id: 'e1', title: 'Persisted evidence', isoReference: 'Clause 1', status: 'verified' }] },
+};
+const user = { id: 'writer', email: 'writer@example.test', name: 'Writer' };
+const project = { id: 'fixture', name: 'Storage regression', targetMarkets: ['Canada'],
+  data: {}, report: { sections: saved, sectionDefs: definitions, crossConsistencyChecked: true, crossConsistencyIssues: [] },
+  roles: ['Medical Writer', 'Protocol Lead', 'Clinical Affairs VP'].map(title => ({ title, assignedTo: [user] })) };
+window.fetch = async (input, init = {}) => {
+  const url = String(input);
+  const body = init.body ? JSON.parse(init.body) : {};
+  if (body.data?.report) throw new Error('Legacy report JSON write');
+  let payload;
+  if (url.endsWith('/report/sections')) {
+    for (const [id, patch] of Object.entries(body.sections)) saved[id] = { ...saved[id], ...patch };
+    payload = saved;
+  } else if (url.endsWith('/report-sections')) payload = { sections: definitions, targetMarkets: ['Canada'] };
+  else if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/analyze-report-section')) payload = { issues: [], requiredElements: [] };
+  else if (url.endsWith('/milestones')) payload = { milestones: [], warnings: [] };
+  else if (url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/generate-report-section')) throw new Error('Unexpected draft regeneration');
+  else payload = {};
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+
+const el = React.createElement;
+let root;
+function mount(Component) {
+  root?.unmount();
+  root = createRoot(document.getElementById('root'));
+  root.render(el(CurrentUserProvider, { user, status: 'ready' },
+    el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
+      el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(Component) })))));
+}
+const waitFor = async (predicate) => {
+  for (let i = 0; i < 100; i++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for rendered report: ${errors.join('; ')}`);
+};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const contains = text => document.getElementById('root').textContent.includes(text);
+try {
+  for (let reload = 0; reload < 3; reload++) {
+    mount(ReportWorkspace);
+    await waitFor(() => contains('Saved executive text') && contains('Saved custom text'));
+    assert(contains('Regulatory and Clinical Context'), 'Missing content did not retain the previous authoring fallback');
+    assert(contains('No content yet'), 'Explicitly cleared content was replaced');
+    const completeness = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Completeness Status'));
+    assert(completeness, 'Dynamic section lost saved completeness evidence');
+    completeness.click();
+    await waitFor(() => contains('Persisted evidence'));
+  }
+  // Exercise the actual editor and its save callback before another reload.
+  [...document.querySelectorAll('button')].find(b => b.textContent === 'Edit').click();
+  await waitFor(() => document.querySelector('[contenteditable="true"]'));
+  document.querySelector('[contenteditable="true"]').innerHTML = '<p>Edited executive text</p>';
+  [...document.querySelectorAll('button')].find(b => b.textContent === 'Save').click();
+  await waitFor(() => document.querySelector('textarea[placeholder^="e.g."]'));
+  const reason = document.querySelector('textarea[placeholder^="e.g."]');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(reason, 'Migration regression check');
+  reason.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Confirm' && !b.disabled));
+  [...document.querySelectorAll('button')].find(b => b.textContent === 'Confirm').click();
+  await waitFor(() => saved['section-1'].content.includes('Edited executive text'));
+  mount(ReportWorkspace);
+  await waitFor(() => contains('Edited executive text'));
+  mount(ReviewPage);
+  await waitFor(() => contains('Edited executive text') && contains('Saved custom text'));
+  mount(ClinicalInvestigationReport);
+  await waitFor(() => contains('Edited executive text') && contains('Saved custom text'));
+  document.getElementById('result').textContent = 'PASS: make reloads, missing/empty content, dynamic evidence, edit/save, review and PDF reads';
+} catch (error) {
+  document.getElementById('result').textContent = `FAIL: ${error.message}`;
+}
+</script></body></html>

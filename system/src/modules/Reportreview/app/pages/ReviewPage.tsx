@@ -1,3 +1,4 @@
+import { addReportComment, toReviewComment } from '@/shared/api/reports';
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ReviewHeader } from '../components/ReviewHeader';
@@ -69,13 +70,7 @@ export default function ReviewPage() {
         },
       });
 
-      // report.sections is sometimes persisted as an array (see Makereport's
-      // saveReportSectionState) and sometimes as an id-keyed object — normalize
-      // to id-keyed so lookups below don't silently key off array indices.
-      const rawSections = p.data?.report?.sections || {};
-      const savedSections: Record<string, any> = Array.isArray(rawSections)
-        ? Object.fromEntries(rawSections.map((s: any) => [s.id, s]))
-        : rawSections;
+      const savedSections: Record<string, any> = p.report?.sections || {};
       const titleMap: Record<string, string> = {};
       (sectionMeta?.sections || []).forEach((s: any) => { titleMap[s.id] = s.title; });
       const definedSectionIds: string[] = (sectionMeta?.sections || []).map((s: any) => s.id);
@@ -86,7 +81,7 @@ export default function ReviewPage() {
       setRequiredSectionIds(definedSectionIds.length > 0 ? definedSectionIds : Object.keys(savedSections));
 
       const allComments = Object.entries(savedSections).flatMap(([id, data]: [string, any]) =>
-        (data.comments || []).map((c: any) => ({ ...c, sectionId: id }))
+        (data.comments || []).map((c: any) => toReviewComment(c, id))
       );
       setComments(allComments);
 
@@ -245,61 +240,26 @@ export default function ReviewPage() {
 
   const handleAddComment = async (content: string, type: 'general' | 'issue' | 'approval-request') => {
     if (!projectId || !activeSection || !content.trim()) return;
-    const comment = {
-      id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      author: currentReviewer.name,
-      authorRole: currentReviewer.role,
-      content,
-      type,
-      timestamp: new Date().toISOString(),
-      replies: [],
-    };
-
-    setReportData((prev: any) => {
-      const updated = { ...prev };
-      const sections = { ...(updated.report?.sections || {}) };
-      const section = { ...(sections[activeSection] || {}) };
-      section.comments = [...(section.comments || []), comment];
-      sections[activeSection] = section;
-      updated.report = { ...(updated.report || {}), sections };
-
-      // Persist to backend (fire and forget)
-      fetch(apiBase + '/api/projects/' + projectId, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { report: updated.report } }),
-      }).catch(() => {});
-
-      return updated;
-    });
-
-    // Update comments state for immediate UI update
-    setComments(prev => [...prev, {
-      id: comment.id,
-      sectionId: activeSection,
-      author: comment.author,
-      authorRole: comment.authorRole,
-      content: comment.content,
-      type: comment.type,
-      timestamp: comment.timestamp,
-      replies: [],
-    }]);
+    try {
+      const saved = await addReportComment(projectId, activeSection, content, type);
+      setComments(prev => [...prev.filter(c => c.sectionId !== activeSection), ...saved.map(c => toReviewComment(c, activeSection))]);
+    } catch (error) {
+      console.error('Comment save failed', error);
+      window.alert('The comment could not be saved. Please retry.');
+    }
   };
 
   const handleAddReply = async (commentId: string, replyText: string) => {
     if (!projectId || !replyText.trim()) return;
-    const reply = {
-      id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      author: currentReviewer.name,
-      content: replyText,
-      timestamp: new Date().toISOString(),
-    };
-
-    setComments(prev => prev.map(c =>
-      c.id === commentId
-        ? { ...c, replies: [...(c.replies || []), reply] }
-        : c
-    ));
+    const parent = comments.find(c => c.id === commentId);
+    if (!parent) return;
+    try {
+      const saved = await addReportComment(projectId, parent.sectionId, replyText, 'general', commentId);
+      setComments(prev => [...prev.filter(c => c.sectionId !== parent.sectionId), ...saved.map(c => toReviewComment(c, parent.sectionId))]);
+    } catch (error) {
+      console.error('Reply save failed', error);
+      window.alert('The reply could not be saved. Please retry.');
+    }
   };
 
   // Check if report can be approved

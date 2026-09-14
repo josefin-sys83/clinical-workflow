@@ -11,6 +11,7 @@ import { sanitizeIncomingProjectData } from "../../common/sanitize-section-html"
 import { AuditService } from "../audit/audit.service";
 import type { AuditActor, RecordAuditEvent } from "../audit/audit.service";
 import { ProtocolsService } from "./protocols.service";
+import { ReportsService } from "./reports.service";
 
 export type ProjectAuditEvent = Omit<RecordAuditEvent, "projectId" | "actor">;
 
@@ -32,6 +33,8 @@ export type Project = {
   deviceCategory: string | null;
   status: "active" | "completed";
   data?: any;
+  report?: any;
+  signatures?: any[];
   targetMarkets: string[];
   roles: Array<{
     title: string;
@@ -47,6 +50,7 @@ export class ProjectsService {
     private readonly admin: AdminService,
     private readonly audit: AuditService,
     private readonly protocols: ProtocolsService,
+    private readonly reports: ReportsService,
   ) {}
 
   // Resolves the authenticated user's real name/email from the DB, so callers
@@ -65,7 +69,7 @@ export class ProjectsService {
 
   // List views only ever render summary fields (ProjectCard reads id/name/description/status,
   // plus the two projectData submission-target dates for its Timeline toggle) — never the full
-  // report/synopsis content that lives in `data`. Pulling the whole jsonb blob per
+  // synopsis/scope content that lives in `data`. Pulling the whole jsonb blob per
   // row here made the dashboard load scale with total document content instead of project count
   // (11.3MB for 100 realistic projects). Project detail's get() still selects the full `data`.
   private static readonly LIST_SUMMARY_DATA_SQL = `
@@ -161,16 +165,14 @@ export class ProjectsService {
     const protocol = await this.protocols.getByProject(id);
     const protocolSignatures = await this.protocols.getSignaturesByProject(id);
     const projectData = p.data && typeof p.data === "object" ? p.data : {};
-    const reportSignatures = Array.isArray(projectData.signatures)
-      ? projectData.signatures.filter((signature: any) => String(signature?.role || "").startsWith("report-"))
-      : [];
-    const responseData = {
-      ...projectData,
-      signatures: [...reportSignatures, ...protocolSignatures],
-    };
+    const report = await this.reports.getByProject(id);
+    const reportSignatures = await this.reports.getSignaturesByProject(id);
+    const { signatures: _signatures, ...responseData } = projectData;
 
     return {
       ...p,
+      report,
+      signatures: [...reportSignatures, ...protocolSignatures],
       // Compatibility response only. Protocol rows are authoritative; this does not
       // put the protocol back into projects.data in PostgreSQL.
       data: protocol ? { ...responseData, protocol } : responseData,
@@ -373,6 +375,7 @@ export class ProjectsService {
       // A project owns one protocol aggregate from creation onward. Sections and
       // amendments are added later, but attachments/artifacts can already use this FK.
       await this.protocols.ensureForProject(id, client);
+      await this.reports.ensureForProject(id, client, actor);
 
       await this.replaceProjectStandards(
         client,
@@ -442,53 +445,7 @@ export class ProjectsService {
     actor?: AuditActor,
     auditEvents: ProjectAuditEvent[] = [],
   ): Promise<Record<string, any>> {
-    const client = await getPool().connect();
-    try {
-      await client.query('BEGIN');
-      const { rows } = await client.query<{ data: any }>(
-        'SELECT data FROM projects WHERE id = $1 FOR UPDATE',
-        [id],
-      );
-      if (!rows[0]) throw new NotFoundException('Project not found');
-
-      const projectData = rows[0].data || {};
-      const report = projectData.report || {};
-      const rawSections = report.sections || {};
-      const sections: Record<string, any> = Array.isArray(rawSections)
-        ? Object.fromEntries(rawSections.filter((section: any) => section?.id).map((section: any) => [section.id, section]))
-        : { ...rawSections };
-      const sanitizedPatches = sanitizeIncomingProjectData({
-        report: { sections: sectionPatches },
-      })?.report?.sections || {};
-
-      for (const [sectionId, patch] of Object.entries(sanitizedPatches)) {
-        sections[sectionId] = { ...(sections[sectionId] || {}), ...(patch as Record<string, any>) };
-      }
-
-      const updatedData = {
-        ...projectData,
-        report: { ...report, sections },
-      };
-      await client.query(
-        'UPDATE projects SET data = $2, updated_at = $3 WHERE id = $1',
-        [id, JSON.stringify(updatedData), new Date().toISOString()],
-      );
-      await this.recordProjectMutation(
-        client,
-        id,
-        actor,
-        auditEvents,
-        'Updated report sections',
-        Object.keys(sectionPatches),
-      );
-      await client.query('COMMIT');
-      return sections;
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
+    return this.reports.updateSections(id, sectionPatches, actor ?? { name: 'System' }, auditEvents);
   }
 
   async completeSynopsis(
@@ -671,6 +628,9 @@ export class ProjectsService {
     );
     if (patch.data && Object.prototype.hasOwnProperty.call(patch.data, "signatures")) {
       throw new BadRequestException("Electronic signatures must use the signing endpoint");
+    }
+    if (patch.data && Object.prototype.hasOwnProperty.call(patch.data, "report")) {
+      throw new BadRequestException("Reports must use the report endpoints");
     }
     const incomingProtocol = hasProtocolPatch ? patch.data.protocol : undefined;
     const nonProtocolPatch = patch.data ? { ...patch.data } : undefined;
@@ -1333,9 +1293,7 @@ export class ProjectsService {
     }
   }
 
-  // Protocol signatures are immutable relational rows. Report signatures remain in
-  // projects.data until the report domain is normalized, while this compatibility
-  // method returns the combined array expected by the current frontend.
+  // Both document domains store immutable relational signatures.
   async updateSignaturesAtomic(
     id: string,
     mutate: (signatures: any[], data: any) => any[],
@@ -1354,9 +1312,7 @@ export class ProjectsService {
         throw new NotFoundException("Project not found");
       }
       const existingData = rows[0].data || {};
-      const reportSignatures: any[] = Array.isArray(existingData.signatures)
-        ? existingData.signatures.filter((signature: any) => String(signature?.role || "").startsWith("report-"))
-        : [];
+      const reportSignatures = await this.reports.getSignaturesByProject(id, client);
       const protocolSignatures = await this.protocols.getSignaturesByProject(id, client);
       const existingSignatures = [...reportSignatures, ...protocolSignatures];
       const newSignatures = mutate(existingSignatures, existingData);
@@ -1367,12 +1323,8 @@ export class ProjectsService {
         (signature: any) => !String(signature?.role || "").startsWith("report-"),
       );
       await this.protocols.appendSignatures(id, nextProtocolSignatures, actor, client);
-      const mergedData = { ...existingData, signatures: nextReportSignatures };
-      delete mergedData.protocol;
-      await client.query(
-        `update projects set data=$2, updated_at=$3 where id=$1`,
-        [id, JSON.stringify(mergedData), now],
-      );
+      await this.reports.appendSignatures(id, nextReportSignatures, actor, client);
+      await client.query('update projects set updated_at=$2 where id=$1', [id, now]);
       await this.audit.record({
         projectId: id,
         type: "project.signatures.updated",

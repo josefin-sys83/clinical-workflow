@@ -153,9 +153,9 @@ export function ProtocolDocument() {
 
         // Restore persisted signatures — backend stores them as an array;
         // map back to { investigator?, sponsor? } for UI convenience.
-        if (Array.isArray(p.data?.signatures)) {
+        if (Array.isArray(p.signatures)) {
           const map: { investigator?: SignatureRecord; sponsor?: SignatureRecord } = {};
-          for (const s of p.data.signatures as SignatureRecord[]) {
+          for (const s of p.signatures as SignatureRecord[]) {
             if (s.role === 'investigator' || s.role === 'sponsor') map[s.role] = s;
           }
           setSignatures(map);
