@@ -1,65 +1,215 @@
 # Clinical AI Service
 
-Python/FastAPI service that will take over the AI work currently implemented in
-TypeScript at `system/backend/src/modules/ai/ai.service.ts`.
+Python/FastAPI service for the Clinical Workflow platform's AI capabilities.
 
-Owned end to end by the AI team. Its dependencies, test framework, formatter and CI job
-are independent of the TypeScript apps — nobody will ask you to match their tooling.
+## Running It
 
-## Running it
+From `services/ai`:
 
 ```bash
-cd services/ai
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env          # fill in the Azure OpenAI values
-uvicorn clinical_ai.main:app --reload --port 8000
+cp .env.example .env
 ```
 
-Then `curl localhost:8000/health`.
+Fill in the required configuration, then start the service:
 
-Run the tests with `pytest`.
+```bash
+uvicorn clinical_ai.main:app \
+  --app-dir src \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --reload \
+  --env-file .env
+```
+
+The service can also be installed locally for development:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install -e ".[dev]"
+
+uvicorn clinical_ai.main:app \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --reload \
+  --env-file .env
+```
+
+Check the service:
+
+```bash
+curl http://127.0.0.1:8001/health
+curl http://127.0.0.1:8001/ready
+```
+
+Run tests with:
+
+```bash
+pytest
+```
 
 ## Layout
 
-```
+```text
 src/clinical_ai/
-  main.py       FastAPI app factory, /health, router mounting
-  config.py     every environment variable, in one place
-  api/v1/       one module per workflow stage (synopsis, scope, protocol, report, ...)
-  schemas/      pydantic request/response models — THE contract
-  domain/       section titles, regulatory standards, other shared data
-  prompts/      prompt templates as files, not string literals
-  core/         Azure OpenAI client, concurrency limiting, error mapping
-tests/
+├── main.py          FastAPI application and health/readiness endpoints
+├── config.py        Service and AI runtime configuration
+├── ai_service.py    Facade connecting API routes to AI modules
+├── errors.py        Service-level exceptions
+├── utils.py         Shared deterministic helpers
+│
+├── api/
+│   ├── routes.py    Internal HTTP endpoints
+│   └── schemas.py   Request and response models
+│
+├── modules/
+│   ├── synopsis/    Synopsis analysis
+│   ├── scope/       Scope derivation and analysis
+│   ├── protocol/    Protocol generation, review and validation
+│   ├── report/      Report generation, review and validation
+│   └── consistency/ Cross-document consistency checks
+│
+└── llm/
+    ├── gateway.py   Concurrency, queueing, retries and timeouts
+    ├── provider.py  LLM provider contract
+    ├── factory.py   Provider selection
+    ├── types.py     Prompt and LLM request types
+    ├── exceptions.py
+    └── providers/
+        └── azure_openai.py
 ```
 
-## Ground rules
+## AI Modules
 
-- **Never talk to the database, never talk to the frontend.** Everything needed arrives
-  in the request body. If something is missing, that is a contract change to negotiate,
-  not a query to write.
-- **The pydantic schemas are the contract.** Changing one changes the types the NestJS
-  client generates, so call out schema changes in the PR description.
-- **The service must run standalone** — uvicorn plus an Azure OpenAI key, no Postgres,
-  no NestJS. If it can't, the boundary has leaked.
-- **No live model calls in CI.** Use fixtures; put anything that hits Azure behind a
-  separate, manually triggered job.
-- **Errors must be typed, not generic 500s.** The backend already distinguishes "busy"
-  from "timed out" from "failed" and shows different UI for each — preserve that
-  distinction in the status codes you return.
-- **Prompts live in `prompts/` as files.** The current ones are buried in TypeScript
-  string literals where they can't be diffed or reviewed by a regulatory person.
+* `synopsis` — synopsis readiness and regulatory analysis
+* `scope` — device category and intended-use derivation
+* `protocol` — protocol generation, review, requirements, and validation
+* `report` — Clinical Investigation Report generation, review, and statistical validation
+* `consistency` — synopsis, protocol, report, and statistical consistency checks
 
-## Concurrency
+## LLM Layer
 
-Port the existing limiter rather than reinventing it: a ceiling of 6 concurrent Azure
-calls with a 25-second queue timeout. The comments in `ai.service.ts` explain why those
-numbers — load testing showed 24 concurrent users driving single-call latency from a few
-seconds to 40-105 seconds — and are worth reading before deleting that file.
+The LLM layer separates provider-independent execution from provider-specific integration.
 
-## Deployment
+`gateway.py` handles:
 
-Deployed as a second Azure Container App in the same environment as the main app, with
-**internal ingress only** — reachable from the NestJS container, never from the public
-internet. The NestJS backend calls it over the environment's internal DNS.
+* concurrency limiting
+* request queueing
+* retries and backoff
+* `Retry-After` handling
+* overall AI call timeout
+* trusted and untrusted prompt-content separation
+* JSON-mode detection
+
+`provider.py` defines the provider contract.
+
+`factory.py` selects the configured provider.
+
+`providers/azure_openai.py` contains the Azure OpenAI integration and provider-specific configuration.
+
+## Configuration
+
+Create a local `.env` file from `.env.example`.
+
+```env
+# Service runtime
+PORT=8001
+
+# LLM provider selection
+LLM_PROVIDER=azure_openai
+
+# Internal service authentication
+AI_SERVICE_TOKEN=change-me
+
+# AI execution limits
+AI_CONCURRENCY_LIMIT=6
+AI_QUEUE_MAX_WAIT_MS=25000
+AI_CALL_TIMEOUT_MS=45000
+AI_MAX_ATTEMPTS=5
+
+# Azure OpenAI provider
+AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT=YOUR-DEPLOYMENT
+AZURE_OPENAI_API_VERSION=YOUR-API-VERSION
+AZURE_OPENAI_API_KEY=YOUR-KEY
+```
+
+The real `.env` file is local runtime configuration and must not be committed.
+
+## Runtime Limits
+
+The AI gateway uses the operational limits migrated from the existing AI implementation:
+
+```text
+Concurrent AI calls:   6
+Queue timeout:         25 seconds
+Overall call timeout:  45 seconds
+Maximum attempts:      5
+```
+
+Retry handling and provider throttling are managed by the LLM gateway.
+
+## Health Checks
+
+Service health:
+
+```bash
+curl http://127.0.0.1:8001/health
+```
+
+Expected response:
+
+```json
+{
+  "ok": true
+}
+```
+
+Provider readiness:
+
+```bash
+curl http://127.0.0.1:8001/ready
+```
+
+Expected response:
+
+```json
+{
+  "ok": true,
+  "provider": "azure_openai"
+}
+```
+
+## Backend Integration
+
+Configure the backend with:
+
+```env
+PYTHON_AI_SERVICE_URL=http://127.0.0.1:8001
+AI_SERVICE_TOKEN=...
+```
+
+The same `AI_SERVICE_TOKEN` must be configured for both services.
+
+The frontend continues to communicate with the backend and does not call the AI service directly.
+
+## Docker
+
+Build the service:
+
+```bash
+cd services/ai
+docker build -t clinical-ai .
+```
+
+Run locally:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -p 8001:8001 \
+  clinical-ai
+```
+
+Runtime configuration and secrets are supplied through environment variables and are not stored in the image.

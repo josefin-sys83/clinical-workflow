@@ -1,43 +1,30 @@
-from functools import lru_cache
+from __future__ import annotations
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from dataclasses import dataclass
+import os
 
 
-class Settings(BaseSettings):
-    """Every environment variable the service reads, in one place.
+@dataclass(frozen=True)
+class Settings:
+    """Application-level AI settings only.
 
-    Nothing else in the codebase should touch os.environ directly — that way the full
-    configuration surface is visible here and can be validated at startup rather than
-    failing on the first request that happens to need a missing value.
+    Provider-specific configuration belongs in app.llm.providers.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    port: int = 8000
-
-    azure_openai_endpoint: str = ""
-    azure_openai_api_key: str = ""
-    azure_openai_deployment: str = ""
-    azure_openai_api_version: str = ""
-
-    # Shared secret proving a request came from our NestJS backend. This service is
-    # deployed with internal-only ingress, so this is defence in depth rather than the
-    # only thing standing between it and the internet.
-    ai_service_token: str = ""
-
+    llm_provider: str = "azure_openai"
     ai_concurrency_limit: int = 6
     ai_queue_max_wait_ms: int = 25_000
+    ai_call_timeout_ms: int = 45_000
+    ai_max_attempts: int = 5
+    ai_service_token: str = ""
 
-    @property
-    def azure_configured(self) -> bool:
-        return bool(
-            self.azure_openai_endpoint
-            and self.azure_openai_api_key
-            and self.azure_openai_deployment
-            and self.azure_openai_api_version
+    @classmethod
+    def from_env(cls) -> "Settings":
+        return cls(
+            llm_provider=os.getenv("LLM_PROVIDER", "azure_openai").strip().lower(),
+            ai_concurrency_limit=int(os.getenv("AI_CONCURRENCY_LIMIT", "6")),
+            ai_queue_max_wait_ms=int(os.getenv("AI_QUEUE_MAX_WAIT_MS", "25000")),
+            ai_call_timeout_ms=int(os.getenv("AI_CALL_TIMEOUT_MS", "45000")),
+            ai_max_attempts=int(os.getenv("AI_MAX_ATTEMPTS", "5")),
+            ai_service_token=os.getenv("AI_SERVICE_TOKEN", ""),
         )
-
-
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
