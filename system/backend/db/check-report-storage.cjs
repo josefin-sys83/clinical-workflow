@@ -88,8 +88,8 @@ async function main() {
     const data = (await client.query('select data from projects where id=$1', [projectId])).rows[0].data;
     assert.deepEqual(data.uploadedFiles, [{ id: 'file-1' }]);
     assert.deepEqual(data.dataAssets, [{ id: 'asset-1' }]);
-    assert.equal(data.report.sections['section-2'].content, undefined);
-    console.log('PASS: migration, missing vs empty content, ordering, edit/reload, evidence, row identity, and asset metadata.');
+    assert.equal(Object.hasOwn(data, 'report'), false);
+    console.log('PASS: migration, missing vs empty content, ordering, edit/reload, evidence, row identity, asset metadata, and legacy report JSON removal.');
   } finally {
     await client.query('ROLLBACK');
     client.release();

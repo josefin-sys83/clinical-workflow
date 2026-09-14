@@ -167,7 +167,7 @@ export class ProjectsService {
     const projectData = p.data && typeof p.data === "object" ? p.data : {};
     const report = await this.reports.getByProject(id);
     const reportSignatures = await this.reports.getSignaturesByProject(id);
-    const { report: _report, signatures: _signatures, ...responseData } = projectData;
+    const { signatures: _signatures, ...responseData } = projectData;
 
     return {
       ...p,
