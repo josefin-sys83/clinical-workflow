@@ -14,6 +14,7 @@ import { getMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
 import { INTENDED_USE_OPTIONS, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { theme } from '@/app/theme';
 import type { MilestoneWarning } from '@/shared/hooks/useMilestones';
+import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 
 interface Role {
   title: string;
@@ -83,8 +84,9 @@ export function ProjectSetupPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
   const isNew = projectId === 'new' || !projectId;
-  const currentUser = 'Dr. Sarah Chen (sarah.chen@medtech.com)';
-  const currentUserEmail = 'sarah.chen@medtech.com';
+  const { user: sessionUser } = useCurrentUser();
+  const currentUser = sessionUser?.name || sessionUser?.email || 'Authenticated user';
+  const currentUserEmail = sessionUser?.email || '';
 
   const [projectNumber, setProjectNumber] = useState<string>('');
   const [projectData, setProjectData] = useState<ProjectData>({
@@ -185,7 +187,7 @@ export function ProjectSetupPage() {
   const logAudit = (entry: Omit<AuditLogEntry, 'id' | 'timestamp' | 'userBy' | 'userEmail'>) => {
     const now = new Date();
     const formattedTimestamp = `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    setAuditTrail(prev => [...prev, { ...entry, id: `audit-${Date.now()}`, timestamp: formattedTimestamp, userBy: 'Dr. Sarah Chen', userEmail: currentUserEmail }]);
+    setAuditTrail(prev => [...prev, { ...entry, id: `audit-${Date.now()}`, timestamp: formattedTimestamp, userBy: currentUser, userEmail: currentUserEmail }]);
   };
 
   useEffect(() => {

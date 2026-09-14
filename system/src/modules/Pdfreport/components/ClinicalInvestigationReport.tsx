@@ -328,16 +328,19 @@ export function ClinicalInvestigationReport() {
       }
 
       // Add metadata
+      const protocolId = projectData?.data?.protocol?.protocolId || projectData?.id || 'report';
+      const studyTitle = projectData?.name || 'Clinical Investigation Report';
+      const sponsor = projectData?.data?.projectData?.sponsor || 'Clinical Investigation Sponsor';
       pdf.setProperties({
-        title: 'Clinical Investigation Report - CIP-2024-MED-0847',
-        subject: 'CARDIA-SUPPORT-2026 Clinical Investigation Report',
-        author: 'CardiaFlow Medical Technologies GmbH',
+        title: `Clinical Investigation Report - ${protocolId}`,
+        subject: `${studyTitle} Clinical Investigation Report`,
+        author: sponsor,
         keywords: 'Clinical Investigation, EU MDR, Cardiac Device',
         creator: 'CardiaFlow Regulatory Platform'
       });
 
       // Save the PDF
-      pdf.save('ClinicalInvestigationReport_CIP-2024-MED-0847_v1.0.pdf');
+      pdf.save(`ClinicalInvestigationReport_${String(protocolId).replace(/[^a-zA-Z0-9._-]/g, '_')}_v1.0.pdf`);
 
       // Remove loading message
       document.body.removeChild(loadingMessage);

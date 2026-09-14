@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
+import { hasReportText } from '@/shared/api/reports';
 
 function highlightPlaceholders(html: string): string {
   return html.replace(
@@ -103,6 +104,11 @@ interface ReportContentProps {
   scrollTrigger?: number;
   /** Id of the section currently awaiting an AI-generated draft from the backend. */
   generatingSectionId?: string | null;
+  expandedSections: Record<string, boolean>;
+  onToggleSection: (sectionId: string) => void;
+  getSectionLockReason: (sectionId: string) => string | undefined;
+  draftErrors: Record<string, string>;
+  onRetryDraft: (sectionId: string) => void;
 }
 
 export function ReportContent({
@@ -139,6 +145,11 @@ export function ReportContent({
   onInitiateAmendment,
   scrollTrigger,
   generatingSectionId,
+  expandedSections,
+  onToggleSection,
+  getSectionLockReason,
+  draftErrors,
+  onRetryDraft,
 }: ReportContentProps) {
   const { projectId } = useParams();
   const apiBase = '';
@@ -162,7 +173,6 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const [reviewModeModalOpen, setReviewModeModalOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Record<string, Array<{ name: string }>>>({});
   const [issuesExpanded, setIssuesExpanded] = useState<Record<string, boolean>>({});
-  const [sectionExpanded, setSectionExpanded] = useState<Record<string, boolean>>({});
   const [wontFixModal, setWontFixModal] = useState<{ sectionId: string; issueId: string } | null>(null);
   const [wontFixComment, setWontFixComment] = useState('');
   const wontFixDescRef = useRef<Record<string, string[]>>({});
@@ -515,7 +525,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             Report Sections
           </h2>
           <p className="text-[#6B7280]" style={{ fontSize: '13px', fontWeight: 400, fontFamily: 'system-ui, sans-serif' }}>
-            Review, edit, and approve each section according to your role and responsibilities
+            Expand a section to load its AI draft. Later sections unlock once all earlier sections have text. Saved text is not regenerated.
           </p>
         </div>
 
@@ -536,7 +546,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
               a.selected && a.suggestedSections?.includes(section.id)
             );
 
-            const hasContent = section.content && section.content.trim().length > 0;
+            const hasContent = hasReportText(section.content);
             const isEditing = editingSection === section.id;
             const sectionNumber = section.order ?? (sections.indexOf(section) + 1);
             const stateBadge = getStateBadge(section.state);
@@ -557,11 +567,15 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             const totalElements = section.completenessElements?.length || 0;
             const verifiedElements = section.completenessElements?.filter(el => el.status === 'verified').length || 0;
             const completenessText = totalElements > 0 ? `${verifiedElements}/${totalElements}` : (hasContent ? '1/1' : '0/1');
-            const isExpanded = sectionExpanded[section.id] !== false;
+            const lockReason = getSectionLockReason(section.id);
+            const isExpanded = !!expandedSections[section.id] && !lockReason;
+            const isGenerating = generatingSectionId === section.id;
+            const draftError = draftErrors[section.id];
 
             return (
               <div
                 key={section.id}
+                data-report-section={section.id}
                 ref={(el) => (sectionRefs.current[section.id] = el)}
                 className="border border-[#E5E7EB] rounded bg-white scroll-mt-16"
               >
@@ -626,13 +640,24 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
                     {/* Expand/Collapse Toggle */}
                     <button
-                      onClick={() => setSectionExpanded(prev => ({ ...prev, [section.id]: !isExpanded }))}
-                      className="p-1 hover:bg-slate-100 rounded transition-colors flex-shrink-0"
+                      onClick={() => onToggleSection(section.id)}
+                      disabled={!!lockReason}
+                      title={lockReason}
+                      aria-expanded={isExpanded}
+                      className="p-1 hover:bg-slate-100 rounded transition-colors flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
                       aria-label={isExpanded ? 'Collapse section' : 'Expand section'}
                     >
                       <ChevronDown className={`w-5 h-5 text-[#6B7280] transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
                     </button>
                   </div>
+
+                  <p className={`mb-2 text-xs ${draftError ? 'text-red-700' : 'text-slate-500'}`} aria-live="polite">
+                    {lockReason || (isGenerating ? 'Loading AI draft… Later sections remain locked until this finishes.'
+                      : draftError ? 'AI draft failed to load. Expand this section to retry.'
+                      : hasContent ? 'Saved text loaded.'
+                      : hasReportText(section.aiDraft) ? 'AI draft loaded — ready to review.'
+                      : 'Expand to generate this section’s AI draft.')}
+                  </p>
 
                   {/* Second Row: Owner, Review Cycle, Deadline, Comments */}
                   <div className="flex items-center gap-4 text-[#6B7280] mb-3" style={{ fontSize: '12px', fontFamily: 'system-ui, sans-serif', fontWeight: 400 }}>
@@ -853,15 +878,20 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                   />
 
                   {/* AI draft generation in progress (real backend AI call) */}
-                  {generatingSectionId === section.id && !hasContent && !section.aiDraft && (
-                    <div className="mb-4 flex flex-col gap-1 text-[#6B7280]" style={{ fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
+                  {isGenerating && !hasContent && !section.aiDraft && (
+                    <div role="status" className="mb-4 flex flex-col gap-1 text-[#6B7280]" style={{ fontSize: '13px', fontFamily: 'system-ui, sans-serif' }}>
                       <div className="flex items-center gap-2">
                         <span className="inline-block w-3.5 h-3.5 border-2 border-[#D1D5DB] border-t-[#2563EB] rounded-full animate-spin" />
                         Generating AI draft for this section…
                       </div>
-                      <span className="text-[11px] text-[#9CA3AF] pl-5">This can take up to a minute. The page hasn't frozen — please wait.</span>
+                      <span className="text-[11px] text-[#9CA3AF] pl-5">Please wait. If the request fails, you can retry this section without losing other sections.</span>
                     </div>
                   )}
+
+                  {draftError && !isGenerating && <div role="alert" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <p>{draftError}</p>
+                    <button onClick={() => onRetryDraft(section.id)} className="mt-2 rounded bg-blue-600 px-3 py-1 text-white">Retry AI draft</button>
+                  </div>}
 
                   {/* AI-Generated Draft Banner */}
                   {section.aiDraft && !hasContent && canEdit(section) && (
@@ -904,11 +934,10 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                         lineHeight: '1.6',
                         fontFamily: 'system-ui, sans-serif',
                         fontWeight: 400,
-                        whiteSpace: 'pre-wrap'
                       }}
-                    >
-                      {section.aiDraft}
-                    </div>
+                      data-ai-draft={section.id}
+                      dangerouslySetInnerHTML={{ __html: renderContent(section.aiDraft) }}
+                    />
                   )}
 
                   {/* Section Content */}
@@ -991,7 +1020,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                       {/* Edit button */}
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
                         <button
-                          disabled={isLocked}
+                          disabled={isLocked || isGenerating}
                           onClick={() => setEditingSection(section.id)}
                           style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: isLocked ? 'not-allowed' : 'pointer', color: isLocked ? '#9CA3AF' : '#374151', opacity: isLocked ? 0.6 : 1 }}
                         >Edit</button>
@@ -1009,7 +1038,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                             />
                           ) : (
                             <div className="text-[#9CA3AF] italic" style={{ fontSize: '14px', fontFamily: 'system-ui, sans-serif' }}>
-                              No content yet
+                              {isGenerating ? 'Waiting for this section’s AI draft…' : section.aiDraft ? 'Review and accept the AI draft above to use it as report text.' : draftError ? 'Draft unavailable. Use Retry AI draft above.' : 'No report text yet.'}
                             </div>
                           )}
                           {/* Attached files (read mode) */}
@@ -1239,41 +1268,13 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
               issues: sectionAiIssues[section.id] || [],
             },
           ]));
-          let missingSections = sections.filter((section) =>
-            !String(sectionSnapshot[section.id].content).trim(),
+          const missingSections = sections.filter((section) =>
+            !hasReportText(sectionSnapshot[section.id].content),
           );
 
-          // This was part of the original Report -> Review handoff: complete every
-          // missing section with the backend AI before navigating. Keep non-empty
-          // displayed content authoritative; only copy generated content into slots
-          // that are still empty in this local snapshot. The backend also persists each
-          // generated patch atomically, and the single snapshot save below makes the
-          // exact content handed to Review explicit and race-safe.
+          // Drafts are requested explicitly by expanding each section, never in bulk.
           if (missingSections.length > 0) {
-            const generationResponse = await fetch(`/api/projects/${projectId}/generate-report`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ onlyMissing: true }),
-            });
-            const generatedSections = await generationResponse.json().catch(() => null);
-            if (!generationResponse.ok || !Array.isArray(generatedSections)) {
-              throw new Error(generatedSections?.message || 'Could not generate the missing report sections.');
-            }
-
-            const generatedContentById = new Map<string, string>(
-              generatedSections.map((section: any) => [section.id, String(section.content || '')]),
-            );
-            for (const section of missingSections) {
-              const generatedContent = generatedContentById.get(section.id)?.trim() || '';
-              if (generatedContent) sectionSnapshot[section.id].content = generatedContent;
-            }
-
-            missingSections = sections.filter((section) =>
-              !String(sectionSnapshot[section.id].content).trim(),
-            );
-            if (missingSections.length > 0) {
-              throw new Error(`AI generation did not complete these report sections: ${missingSections.map(section => section.title).join(', ')}.`);
-            }
+            throw new Error(`Expand and load these report sections before entering review: ${missingSections.map(section => section.title).join(', ')}.`);
           }
 
           const saveResponse = await fetch(`/api/projects/${projectId}/report/sections`, {

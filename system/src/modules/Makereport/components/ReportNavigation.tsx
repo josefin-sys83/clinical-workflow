@@ -1,5 +1,5 @@
 import { ReportSection } from '../types';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Lock, Loader2 } from 'lucide-react';
 
 interface SectionDef {
   id: string;
@@ -13,6 +13,9 @@ interface ReportNavigationProps {
   onSectionChange: (sectionId: string) => void;
   getSectionStatus: (section: ReportSection) => 'complete' | 'in-progress' | 'empty';
   apiSectionDefs?: SectionDef[];
+  getSectionLockReason: (sectionId: string) => string | undefined;
+  generatingSectionId: string | null;
+  draftErrors: Record<string, string>;
 }
 
 function getMarketBadge(sectionId: string): { label: string; className: string } | null {
@@ -31,6 +34,9 @@ export function ReportNavigation({
   onSectionChange,
   getSectionStatus,
   apiSectionDefs,
+  getSectionLockReason,
+  generatingSectionId,
+  draftErrors,
 }: ReportNavigationProps) {
   // Use API section order when available; fall back to sections array order
   const orderedIds = apiSectionDefs && apiSectionDefs.length > 0
@@ -52,16 +58,22 @@ export function ReportNavigation({
           const isActive = section.id === currentSection;
           const isComplete = getSectionStatus(section) === 'complete';
           const badge = getMarketBadge(section.id);
+          const lockReason = getSectionLockReason(section.id);
+          const loading = generatingSectionId === section.id;
 
           return (
-            <div
+            <button
               key={section.id}
+              type="button"
+              disabled={!!lockReason}
+              title={lockReason || `Open ${section.title}`}
+              data-report-nav={section.id}
               onClick={() => onSectionChange(section.id)}
-              className={`py-2 px-3 cursor-pointer flex items-center gap-3 rounded transition-colors ${
+              className={`w-full text-left py-2 px-3 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 flex items-center gap-3 rounded transition-colors ${
                 isActive ? 'bg-slate-100' : 'hover:bg-slate-50'
               }`}
             >
-              {isComplete ? (
+              {lockReason ? <Lock className="w-4 h-4 flex-shrink-0 text-slate-400" /> : loading ? <Loader2 className="w-4 h-4 flex-shrink-0 text-blue-600 animate-spin" /> : isComplete ? (
                 <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-[#2563EB]" />
               ) : (
                 <AlertCircle className="w-4 h-4 flex-shrink-0 text-[#F97316]" />
@@ -70,6 +82,9 @@ export function ReportNavigation({
                 <div className={`text-sm ${isActive ? 'font-semibold text-slate-900' : 'font-normal text-slate-600'}`}>
                   {section.title}
                 </div>
+                {(lockReason || loading || draftErrors[section.id]) && <div className="mt-1 text-xs text-slate-500">
+                  {lockReason || (loading ? 'Loading AI draft…' : 'Draft failed — retry in section')}
+                </div>}
                 {badge && (
                   <span
                     className={`inline-block mt-0.5 px-1.5 py-px rounded text-[10px] font-medium leading-tight ${badge.className}`}
@@ -78,7 +93,7 @@ export function ReportNavigation({
                   </span>
                 )}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>

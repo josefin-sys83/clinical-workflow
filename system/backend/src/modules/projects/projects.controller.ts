@@ -19,6 +19,14 @@ import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { SYNOPSIS_UPLOAD_OPTIONS, getSafeDownloadHeaders } from '../../common/upload-security';
 import { getMissingProtocolAttachmentIssues } from './protocol-attachment-reference';
 
+function requireGeneratedText(value: unknown, title: string): string {
+  const content = sanitizeSectionHtml(typeof value === 'string' ? value : '').trim();
+  if (!content.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;|&#xA0;/gi, ' ').trim()) {
+    throw new InternalServerErrorException(`AI returned no text for "${title}". Please retry generation.`);
+  }
+  return content;
+}
+
 // The PDF steps (protocol-pdf/report-pdf) only ever reach the workflow's 'signed' state
 // through advanceWorkflowStep() — nothing in the UI ever calls the document-artifact
 // finalize endpoint that's the only other code path to 'final' (see documents.controller.ts).
@@ -689,12 +697,14 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     } finally {
       this.generationProgress.clear(progressKey);
     }
-    if (!protocol) return null;
+    if (!Array.isArray(protocol?.sections) || protocol.sections.length !== PROTOCOL_SECTION_TITLES.length) {
+      throw new InternalServerErrorException('AI returned an incomplete protocol. Please retry generation.');
+    }
 
     // Sanitize AI-generated section content before the relational save so a
     // prompt-injected or hallucinated HTML response cannot reach rendered content.
     protocol.sections = (protocol.sections || []).map((s: any) =>
-      s && typeof s.content === 'string' ? { ...s, content: sanitizeSectionHtml(s.content) } : s
+      ({ ...s, content: requireGeneratedText(s?.content, s?.title || 'Protocol section') })
     );
     if (!Array.isArray(protocol.amendments)) protocol.amendments = [];
 
@@ -1050,6 +1060,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const protocolSections = project?.data?.protocol?.sections || [];
     const existingReport = project?.report || {};
     const existingSections: Record<string, any> = existingReport.sections || {};
+    if ((project?.data?.protocol?.amendments || []).some((a: any) => a.status !== 'finalized' && a.status !== 'rejected')) {
+      throw new ForbiddenException('Finalize or reject pending protocol amendments before generating the report.');
+    }
 
     // Resolve targetMarkets from multiple sources
     const inferredFromRequirements: string[] = (scope?.requirements || [])
@@ -1105,16 +1118,15 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     // relying on ProjectsService.update()'s storage-side sanitization alone would leave
     // the immediate response unsanitized.
     const sectionsToGenerate = body.onlyMissing
-      ? sectionDefs.filter((section) => !String(existingSections[section.id]?.content || '').trim())
+      ? sectionDefs.filter((section) => !String(existingSections[section.id]?.content || existingSections[section.id]?.aiDraft || '').trim())
       : sectionDefs;
     const generatedContents = new Map<string, string>();
-    for (const s of sectionsToGenerate) {
+    await this.ai.mapInBatches(sectionsToGenerate, 3, async s => {
       const content = await this.ai.generateReportSection(
         s.title, s.number, protocolSections, enrichedSynopsis, enrichedScope, projectData, roles, []
       );
-      generatedContents.set(s.id, sanitizeSectionHtml(content).trim());
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+      generatedContents.set(s.id, requireGeneratedText(content, s.title));
+    });
 
     const generatedSectionPatches = Object.fromEntries(
       sectionDefs.map(s => [s.id, { title: s.title, number: s.number, order: s.number, ...(generatedContents.has(s.id) ? { content: generatedContents.get(s.id), aiDraft: null } : {}) }]),
@@ -1138,13 +1150,14 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
           generatedAt: new Date().toISOString(),
         },
       }],
+      body.onlyMissing === true,
     );
 
     return sectionDefs.map((s) => ({
       id: s.id,
       title: s.title,
       number: s.number,
-      content: String(persistedSections[s.id]?.content || ''),
+      content: String(persistedSections[s.id]?.content || persistedSections[s.id]?.aiDraft || ''),
     }));
   }
 
@@ -1213,7 +1226,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
     // Sanitized immediately for the same reason as generateReport(): this value is
     // both stored and returned directly in the HTTP response.
-    const trimmedContent = sanitizeSectionHtml(content.trim());
+    const trimmedContent = requireGeneratedText(content, body.sectionTitle);
 
     await this.projects.updateReportSections(
       projectId,

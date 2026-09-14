@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
-import { ReportSection, DataAsset, UploadedFile, User, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus, CompletenessElement } from '../types';
+import { ReportSection, DataAsset, UploadedFile, User, ProtocolSection, ProtocolDeviation, ProtocolAmendment, ReportCompletenessStatus, CompletenessElement, SectionComment } from '../types';
 import { ReportNavigation } from '../components/ReportNavigation';
 import { WorkflowProgressIndicator } from '../components/WorkflowProgressIndicator';
 import { ReportContent } from '../components/ReportContent';
@@ -12,7 +12,6 @@ import { ProtocolAmendmentModal } from '../components/ProtocolAmendmentModal';
 import { ProtocolAmendmentsList } from '../components/ProtocolAmendmentsList';
 import { AmendmentModal } from '../../Makeprotokoll/components/AmendmentModal';
 
-import { initialReportSections, mockProtocolSections, mockUsers, mockCompletenessStatus } from '../data/mockData';
 import { validateReportContent } from '../services/validationService';
 import { generateAssetNarrative } from '../services/narrativeService';
 import { InsertedAsset } from '../types';
@@ -21,6 +20,8 @@ import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
+import { generateReportSectionDraft, hasReportText } from '@/shared/api/reports';
+import { apiErrorMessage } from '@/shared/api/http';
 
 function userFromRole(rawRoles: any[], roleTitle: string): User {
   const role = rawRoles.find((r: any) => r.title === roleTitle);
@@ -40,32 +41,47 @@ export function ReportWorkspace() {
   const { user: sessionUser } = useCurrentUser();
   const [apiSectionDefs, setApiSectionDefs] = useState<Array<{ id: string; title: string; number: number }>>([]);
   const [targetMarkets, setTargetMarkets] = useState<string[]>([]);
+  const [protocolSections, setProtocolSections] = useState<ProtocolSection[]>([]);
 
   // Starts empty (not the mock scaffold) so no fabricated section content, owner,
   // or reviewer names are ever shown, even briefly, before the real fetch resolves.
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generatingSectionId, setGeneratingSectionId] = useState<string | null>(null);
+  const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+  const [reportSigned, setReportSigned] = useState(false);
+  const generationInFlight = useRef<string | null>(null);
+  const activeProject = useRef(projectId);
+  useEffect(() => {
+    activeProject.current = projectId;
+    return () => { activeProject.current = undefined; };
+  }, [projectId]);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [dataAssets, setDataAssets] = useState<DataAsset[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [currentSection, setCurrentSection] = useState<string>('');
   const [scrollTrigger, setScrollTrigger] = useState(0);
 
   const navigateToSection = (sectionId: string) => {
+    if (getSectionLockReason(sectionId)) return;
     setCurrentSection(sectionId);
     setScrollTrigger(n => n + 1);
+    setExpandedSections(prev => ({ ...prev, [sectionId]: true }));
+    void loadSectionDraft(sectionId);
   };
   const [showDeviations, setShowDeviations] = useState(false);
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
   const [showAmendmentsList, setShowAmendmentsList] = useState(false);
   const [amendments, setAmendments] = useState<ProtocolAmendment[]>([]);
-  const [completenessStatus, setCompletenessStatus] = useState<ReportCompletenessStatus>(mockCompletenessStatus);
+  const [completenessStatus, setCompletenessStatus] = useState<ReportCompletenessStatus>({ elements: [] });
   const [sectionAiIssues, setSectionAiIssues] = useState<Record<string, any[]>>({});
   const [analysisVersion, setAnalysisVersion] = useState(0);
   const [savedWontFixIssues, setSavedWontFixIssues] = useState<Record<string, string[]>>({});
   const [wontFixCrossConsistencyIds, setWontFixCrossConsistencyIds] = useState<string[]>([]);
 
-  // Protocol amendments fetched from the backend (distinct from the local `amendments`
-  // mock state above, which tracks a separate UI-only amendment flow).
+  // Protocol amendments fetched from the backend.
   const [protocolAmendments, setProtocolAmendments] = useState<any[]>([]);
   const [protocolSectionsForAmendment, setProtocolSectionsForAmendment] = useState<{ id: string; title: string }[]>([]);
   const [crossConsistencyIssues, setCrossConsistencyIssues] = useState<any[]>([]);
@@ -102,10 +118,25 @@ export function ReportWorkspace() {
 
   useEffect(() => {
     if (!projectId) return;
+    let cancelled = false;
+    setSectionsLoading(true);
+    setGenerationError(null);
+    setGeneratingSectionId(null);
+    generationInFlight.current = null;
+    setDraftErrors({});
+    setExpandedSections({});
     Promise.all([
-      fetch(apiBase + '/api/projects/' + projectId).then(r => r.json()),
+      fetch(apiBase + '/api/projects/' + projectId).then(r => {
+        if (!r.ok) throw new Error('Could not load the report. Please retry.');
+        return r.json();
+      }),
       fetch(apiBase + '/api/projects/' + projectId + '/report-sections').then(r => r.json()).catch(() => null),
-    ]).then(([p, sectionMeta]) => {
+      fetch(apiBase + '/api/projects/' + projectId + '/amendments').then(r => {
+        if (!r.ok) throw new Error('Could not check pending amendments. Please retry.');
+        return r.json();
+      }),
+    ]).then(async ([p, sectionMeta, pendingAmendments]) => {
+      if (cancelled) return;
       setProjectData({
         ...(p.data?.projectData || {}),
         projectName: p.name,
@@ -129,10 +160,12 @@ export function ReportWorkspace() {
       // Store API section defs and target markets for sidebar badges
       const apiDefs: Array<{ id: string; title: string; number: number }> =
         sectionMeta?.sections || p.report?.sectionDefs || [];
+      if (!apiDefs.length) throw new Error('Could not load report section definitions. Please retry.');
       if (apiDefs.length > 0) setApiSectionDefs(apiDefs);
       setTargetMarkets(sectionMeta?.targetMarkets || p.targetMarkets || []);
 
       if (p.data?.protocol?.sections) {
+        setProtocolSections(p.data.protocol.sections);
         setProtocolSectionsForAmendment(p.data.protocol.sections.map((s: any) => ({ id: s.id, title: s.title })));
       }
 
@@ -186,33 +219,16 @@ export function ReportWorkspace() {
       if (Object.keys(issuesMap).length > 0) setSectionAiIssues(issuesMap);
 
       // Determine the ordered section list to render
-      const templateList = apiDefs.length > 0 ? apiDefs : initialReportSections.map(s => ({ id: s.id, title: s.title, number: s.order }));
+      const templateList = apiDefs;
       const templateIds = new Set(templateList.map(t => t.id));
 
       const roles = { contentOwner: [owner], reviewer: [reviewer], requiredApprover: [approver] };
 
       const buildSection = (def: { id: string; title: string; number: number }): ReportSection => {
-        const scaffold = initialReportSections.find(s => s.id === def.id);
         const saved = savedSections && !Array.isArray(savedSections)
           ? (savedSections as Record<string, any>)[def.id]
           : null;
-        // Use scaffold only when it corresponds to this section (title match guards against repurposed IDs)
-        if (scaffold && scaffold.title === def.title) {
-          // Scaffold's own state/approvals/completenessElements are demo placeholder
-          // values, never real per-project data — a fresh section always starts as
-          // draft with no approvals and no completeness evidence, until `saved`
-          // (real persisted data) overrides them.
-          return {
-            ...scaffold,
-            state: 'draft',
-            completenessElements: [],
-            ...(saved ?? {}),
-            title: def.title,
-            order: def.number,
-            roles,
-          };
-        }
-        // Dynamic section with no scaffold — build minimal object
+        // Build every section from authoritative metadata and saved relational state.
         return {
           id: def.id,
           helperText: '',
@@ -247,15 +263,13 @@ export function ReportWorkspace() {
               // Full section array already in DB — filter to templateList IDs to drop stale/repurposed sections
               .filter((section: ReportSection) => templateIds.has(section.id))
               .map((section: ReportSection) => {
-                const scaffold = initialReportSections.find((s: any) => s.id === section.id);
                 return {
-                  ...(scaffold ?? {}),
                   ...section,
                   roles,
                   comments: section.comments ?? [],
                   insertedAssets: section.insertedAssets ?? [],
                   validationFindings: section.validationFindings ?? [],
-                  completenessElements: section.completenessElements?.length ? section.completenessElements : (scaffold?.completenessElements ?? []),
+                  completenessElements: section.completenessElements ?? [],
                   guidance: section.guidance ?? getGuidanceForSection(section.id),
                 };
               })
@@ -263,13 +277,60 @@ export function ReportWorkspace() {
 
       setSections(finalSections);
       setCurrentSection(prev => prev || finalSections[0]?.id || '');
+      setReportSigned((p.signatures || []).some((s: any) => String(s.role).startsWith('report-')));
+      setProtocolAmendments(pendingAmendments);
       setSectionsLoading(false);
 
       if (!hasCachedCrossConsistency) runCrossConsistencyCheck();
-    }).catch(() => {
+    }).catch(error => {
+      if (cancelled) return;
+      setGenerationError(apiErrorMessage(error, error instanceof Error ? error.message : 'Report generation failed. Please retry.'));
       setSectionsLoading(false);
     });
-  }, [projectId]);
+    return () => { cancelled = true; };
+  }, [projectId, loadAttempt]);
+
+  const getSectionLockReason = (sectionId: string): string | undefined => {
+    const index = sections.findIndex(s => s.id === sectionId);
+    const previous = sections.slice(0, index).find(s => !hasReportText(s.content) && !hasReportText(s.aiDraft));
+    return previous ? `Load Section ${previous.order}: ${previous.title} first.` : undefined;
+  };
+
+  const loadSectionDraft = async (sectionId: string) => {
+    const section = sections.find(s => s.id === sectionId);
+    if (!projectId || !section || getSectionLockReason(sectionId) || generationInFlight.current
+      || hasReportText(section.content) || hasReportText(section.aiDraft)) return;
+    if (reportSigned || isReportBlocked || section.state === 'approved' || section.state === 'locked') {
+      setDraftErrors(prev => ({ ...prev, [sectionId]: 'Draft generation is unavailable while the report is signed, the section is locked, or a protocol amendment is pending.' }));
+      return;
+    }
+    generationInFlight.current = sectionId;
+    setGeneratingSectionId(sectionId);
+    setDraftErrors(prev => ({ ...prev, [sectionId]: '' }));
+    try {
+      const result = await generateReportSectionDraft(projectId, section);
+      if (activeProject.current !== projectId) return;
+      setSections(prev => prev.map(s => s.id === sectionId && !hasReportText(s.content) && !hasReportText(s.aiDraft)
+        ? { ...s, aiDraft: result.content, aiDraftGenerated: true } : s));
+    } catch (error) {
+      if (activeProject.current !== projectId) return;
+      setDraftErrors(prev => ({ ...prev, [sectionId]: apiErrorMessage(error, error instanceof Error ? error.message : 'Draft generation failed. Please retry.') }));
+    } finally {
+      if (activeProject.current === projectId) {
+        generationInFlight.current = null;
+        setGeneratingSectionId(null);
+      }
+    }
+  };
+
+  const toggleSection = (sectionId: string) => {
+    if (getSectionLockReason(sectionId)) return;
+    if (expandedSections[sectionId]) {
+      setExpandedSections(prev => ({ ...prev, [sectionId]: false }));
+    } else {
+      navigateToSection(sectionId);
+    }
+  };
 
   // Re-run AI analysis on all sections when the Shell Refresh button is clicked —
   // also re-runs the cross-consistency check, since that's the explicit user action
@@ -329,35 +390,7 @@ export function ReportWorkspace() {
     }
   };
 
-  // Mock protocol deviations
-  const [deviations, setDeviations] = useState<ProtocolDeviation[]>([
-    {
-      id: 'dev-1',
-      deviationType: 'major',
-      protocolSection: 'Section 6.2 - Follow-up Schedule',
-      protocolRequirement: '6-month follow-up visit required for all subjects',
-      actualImplementation: '4-month follow-up conducted due to site availability constraints',
-      rationale: 'Primary endpoint data collection completed at 3 months. Extended follow-up period reduced to 4 months to accommodate site scheduling constraints while maintaining data integrity.',
-      impactAssessment: 'No impact on primary endpoint analysis. Secondary safety endpoints unaffected as critical safety data collected within first 90 days per protocol. Statistical power maintained at 95% confidence level.',
-      reportedBy: mockUsers[0],
-      reportedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-      status: 'pending-review',
-    },
-    {
-      id: 'dev-2',
-      deviationType: 'minor',
-      protocolSection: 'Section 7.4 - Blood Sample Volume',
-      protocolRequirement: '10ml blood sample per visit',
-      actualImplementation: '8ml blood sample collected in 3 cases',
-      rationale: 'Subjects with difficult venous access. Reduced volume deemed sufficient for all planned assays per laboratory protocol.',
-      impactAssessment: 'Minimal impact. All required biomarker assays successfully performed. No effect on study conclusions or statistical analysis.',
-      reportedBy: mockUsers[1],
-      reportedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-      reviewedBy: mockUsers[2],
-      reviewedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      status: 'approved',
-    },
-  ]);
+  const [deviations, setDeviations] = useState<ProtocolDeviation[]>([]);
 
   // Match on the real logged-in user's email so ownership checks (e.g. "My issues")
   // reflect who is actually signed in, not just whoever the project happens to
@@ -373,45 +406,6 @@ export function ReportWorkspace() {
     return userFromRole(rawRoles, 'Medical Writer');
   }, [sessionUser, rawRoles]);
 
-  const [generatingSectionId, setGeneratingSectionId] = useState<string | null>(null);
-  // Guards against duplicate concurrent generation requests for the same section
-  // (e.g. React StrictMode's double-invoked effect in dev).
-  const aiDraftRequestedRef = useRef<Set<string>>(new Set());
-
-  // Auto-generate an AI draft (real backend AI call) when a section is opened
-  // for the first time and has no content yet.
-  useEffect(() => {
-    const section = sections.find(s => s.id === currentSection);
-    if (!section || section.aiDraft || section.aiDraftGenerated || section.content || section.userEdited) return;
-    if (aiDraftRequestedRef.current.has(section.id)) return;
-    aiDraftRequestedRef.current.add(section.id);
-
-    setGeneratingSectionId(section.id);
-    fetch(apiBase + '/api/projects/' + projectId + '/generate-report-section', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sectionId: section.id, sectionTitle: section.title, sectionNumber: section.order }),
-    })
-      .then(async r => {
-        const body = await r.json().catch(() => null);
-        if (!r.ok) throw new Error(body?.message || `AI draft generation failed (HTTP ${r.status})`);
-        return body as { sectionId: string; content: string };
-      })
-      .then(result => {
-        if (!result?.content) return;
-        setSections(prev => prev.map(s =>
-          s.id === section.id ? { ...s, aiDraft: result.content, aiDraftGenerated: true } : s
-        ));
-      })
-      .catch(err => {
-        console.error('AI draft generation failed', err);
-        setSections(prev => prev.map(s => s.id === section.id ? { ...s, aiDraftGenerated: true } : s));
-      })
-      .finally(() => {
-        setGeneratingSectionId(current => (current === section.id ? null : current));
-      });
-  }, [currentSection, sections, projectId]);
-
   const handleSectionUpdate = (sectionId: string, content: string) => {
     const section = sections.find(s => s.id === sectionId);
     if (!section) return;
@@ -422,7 +416,7 @@ export function ReportWorkspace() {
     // Run validation
     const validationFindings = validateReportContent(
       updatedSection,
-      mockProtocolSections,
+      protocolSections,
       dataAssets,
       uploadedFiles,
       sections
@@ -540,7 +534,7 @@ export function ReportWorkspace() {
     };
     const validationFindings = validateReportContent(
       updatedSection,
-      mockProtocolSections,
+      protocolSections,
       dataAssets,
       uploadedFiles,
       sections
@@ -575,7 +569,7 @@ export function ReportWorkspace() {
     };
     const validationFindings = validateReportContent(
       updatedSection,
-      mockProtocolSections,
+      protocolSections,
       dataAssets,
       uploadedFiles,
       sections
@@ -804,9 +798,6 @@ export function ReportWorkspace() {
 
     const samdNote = isSaMD ? ' IMDRF SaMD N41 and IEC 62304 apply.' : '';
 
-    const scaffold = initialReportSections.find(s => s.id === sectionId);
-    if (scaffold?.guidance) return scaffold.guidance;
-
     if (sectionId === 'section-eu-compliance') {
       return {
         requiredElements: {
@@ -829,16 +820,21 @@ export function ReportWorkspace() {
         referencedDocuments: [{ name: '21 CFR Part 812', version: 'Current', date: '' }],
       };
     }
-    return scaffold?.guidance ?? { requiredElements: { reference: marketNote + samdNote, items: [], mustAlignWith: '' }, commonPitfalls: [], referencedDocuments: [] };
+    return { requiredElements: { reference: marketNote + samdNote, items: [], mustAlignWith: '' }, commonPitfalls: [], referencedDocuments: [] };
   };
 
-  if (sectionsLoading) {
+  if (sectionsLoading || generationError) {
     return (
       <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
         <MilestoneBanner projectId={projectId!} currentStepId="report-make" />
         <div className="flex-1 flex items-center justify-center gap-3 text-slate-500">
-          <div className="w-6 h-6 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin" />
-          <span className="text-sm">Loading report…</span>
+          {generationError ? <div role="alert" className="max-w-lg p-6 text-center">
+            <p>{generationError}</p>
+            <button className="mt-4 rounded bg-blue-600 px-4 py-2 text-white" onClick={() => setLoadAttempt(n => n + 1)}>Retry loading report</button>
+          </div> : <>
+            <div className="w-6 h-6 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin" />
+            <span className="text-sm">Loading report…</span>
+          </>}
         </div>
       </div>
     );
@@ -852,7 +848,10 @@ export function ReportWorkspace() {
         <ReportNavigation
           sections={sections}
           currentSection={currentSection}
-          onSectionChange={setCurrentSection}
+          onSectionChange={navigateToSection}
+          getSectionLockReason={getSectionLockReason}
+          generatingSectionId={generatingSectionId}
+          draftErrors={draftErrors}
           getSectionStatus={getSectionStatus}
           apiSectionDefs={apiSectionDefs}
         />
@@ -900,6 +899,11 @@ export function ReportWorkspace() {
             onAcceptAIDraft={handleAcceptAIDraft}
             onDismissAIDraft={handleDismissAIDraft}
             generatingSectionId={generatingSectionId}
+            expandedSections={expandedSections}
+            onToggleSection={toggleSection}
+            getSectionLockReason={getSectionLockReason}
+            draftErrors={draftErrors}
+            onRetryDraft={loadSectionDraft}
             onInsertAsset={handleInsertAsset}
             onRemoveAsset={handleRemoveAsset}
             onAcceptNarrative={handleAcceptNarrative}

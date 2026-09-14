@@ -32,9 +32,6 @@ export function ProjectRoles({ roles }: ProjectRolesProps) {
           <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-lg shadow-lg border border-neutral-200 z-50">
             <div className="p-4 border-b border-neutral-200">
               <h3 className="font-medium text-neutral-900">Project Team</h3>
-              <p className="text-sm text-neutral-500 mt-1">
-                CIP-2024-MED-0847 CARDIA-SUPPORT-2026
-              </p>
             </div>
 
             <div className="p-4 space-y-3">

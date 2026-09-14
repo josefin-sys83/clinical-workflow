@@ -25,28 +25,6 @@ export function ScopeAndIntendedUsePage() {
     { id: '3', label: 'Scope & Intended Use', status: 'active' }
   ];
 
-  // Audit Trail Entries
-  const auditEntries: AuditEntry[] = [
-    {
-      id: '1',
-      timestamp: new Date(Date.now() - 1000 * 60 * 10),
-      user: 'Dr. Sarah Chen',
-      action: 'Scope & Intended Use page accessed',
-      category: 'access',
-      details: 'User navigated to Scope & Intended Use step after completing Synopsis',
-      impact: 'low'
-    },
-    {
-      id: '2',
-      timestamp: new Date(Date.now() - 1000 * 60 * 8),
-      user: 'System',
-      action: 'Gate validation passed',
-      category: 'system',
-      details: 'Synopsis completion verified. User granted access to Scope & Intended Use section.',
-      impact: 'medium'
-    }
-  ];
-
   return (
     <div className="min-h-screen bg-slate-50 flex">
       {/* Left Sidebar - Step Navigation */}
