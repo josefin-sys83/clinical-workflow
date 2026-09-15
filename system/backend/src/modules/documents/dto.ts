@@ -42,10 +42,3 @@ export class UpdateAddendumDto {
   @MaxLength(500)
   changeReason?: string;
 }
-
-export class UploadProtocolAttachmentDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  description?: string;
-}

@@ -124,7 +124,7 @@ export class WorkflowService {
     // queries: two concurrent transitions on the same step could both read the same
     // stale `current`, so both would log a "transition from X" even though only one of
     // them was really starting from X — a lost-update race identical in shape to the
-    // one fixed in ProjectsService.updateProtocolAtomic(). SELECT ... FOR UPDATE takes
+    // one fixed in ProtocolsService.updateAtomic(). SELECT ... FOR UPDATE takes
     // a row lock for the transaction, so a second concurrent call blocks until the first
     // commits and then reads its already-updated state, serializing transitions on the
     // same (project_id, step_id) without changing the transition logic above.
