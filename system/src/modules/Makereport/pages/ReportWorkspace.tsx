@@ -48,16 +48,11 @@ export function ReportWorkspace() {
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
   const [generationError, setGenerationError] = useState<string | null>(null);
-  const [generatingSectionId, setGeneratingSectionId] = useState<string | null>(null);
+  const [generatingSectionIds, setGeneratingSectionIds] = useState<string[]>([]);
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [reportSigned, setReportSigned] = useState(false);
-  const generationInFlight = useRef<string | null>(null);
-  const activeProject = useRef(projectId);
-  useEffect(() => {
-    activeProject.current = projectId;
-    return () => { activeProject.current = undefined; };
-  }, [projectId]);
+  const generationRun = useRef({ active: false, ready: false, running: new Set<string>(), attempted: new Set<string>() });
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [dataAssets, setDataAssets] = useState<DataAsset[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -69,7 +64,6 @@ export function ReportWorkspace() {
     setCurrentSection(sectionId);
     setScrollTrigger(n => n + 1);
     setExpandedSections(prev => ({ ...prev, [sectionId]: true }));
-    void loadSectionDraft(sectionId);
   };
   const [showDeviations, setShowDeviations] = useState(false);
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
@@ -119,10 +113,11 @@ export function ReportWorkspace() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
+    const run = { active: true, ready: false, running: new Set<string>(), attempted: new Set<string>() };
+    generationRun.current = run;
     setSectionsLoading(true);
     setGenerationError(null);
-    setGeneratingSectionId(null);
-    generationInFlight.current = null;
+    setGeneratingSectionIds([]);
     setDraftErrors({});
     setExpandedSections({});
     Promise.all([
@@ -275,6 +270,7 @@ export function ReportWorkspace() {
               })
           : templateList.map(buildSection);
 
+      run.ready = true;
       setSections(finalSections);
       setCurrentSection(prev => prev || finalSections[0]?.id || '');
       setReportSigned((p.signatures || []).some((s: any) => String(s.role).startsWith('report-')));
@@ -287,7 +283,7 @@ export function ReportWorkspace() {
       setGenerationError(apiErrorMessage(error, error instanceof Error ? error.message : 'Report generation failed. Please retry.'));
       setSectionsLoading(false);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; run.active = false; };
   }, [projectId, loadAttempt]);
 
   const getSectionLockReason = (sectionId: string): string | undefined => {
@@ -298,28 +294,28 @@ export function ReportWorkspace() {
 
   const loadSectionDraft = async (sectionId: string) => {
     const section = sections.find(s => s.id === sectionId);
-    if (!projectId || !section || getSectionLockReason(sectionId) || generationInFlight.current
+    const run = generationRun.current;
+    if (!projectId || !section || !run.active || !run.ready || run.running.size > 0 || run.attempted.has(sectionId)
       || hasReportText(section.content) || hasReportText(section.aiDraft)) return;
     if (reportSigned || isReportBlocked || section.state === 'approved' || section.state === 'locked') {
       setDraftErrors(prev => ({ ...prev, [sectionId]: 'Draft generation is unavailable while the report is signed, the section is locked, or a protocol amendment is pending.' }));
       return;
     }
-    generationInFlight.current = sectionId;
-    setGeneratingSectionId(sectionId);
+    run.attempted.add(sectionId);
+    run.running.add(sectionId);
+    setGeneratingSectionIds([...run.running]);
     setDraftErrors(prev => ({ ...prev, [sectionId]: '' }));
     try {
       const result = await generateReportSectionDraft(projectId, section);
-      if (activeProject.current !== projectId) return;
+      if (!run.active) return;
       setSections(prev => prev.map(s => s.id === sectionId && !hasReportText(s.content) && !hasReportText(s.aiDraft)
         ? { ...s, aiDraft: result.content, aiDraftGenerated: true } : s));
     } catch (error) {
-      if (activeProject.current !== projectId) return;
+      if (!run.active) return;
       setDraftErrors(prev => ({ ...prev, [sectionId]: apiErrorMessage(error, error instanceof Error ? error.message : 'Draft generation failed. Please retry.') }));
     } finally {
-      if (activeProject.current === projectId) {
-        generationInFlight.current = null;
-        setGeneratingSectionId(null);
-      }
+      run.running.delete(sectionId);
+      if (run.active) setGeneratingSectionIds([...run.running]);
     }
   };
 
@@ -330,6 +326,22 @@ export function ReportWorkspace() {
     } else {
       navigateToSection(sectionId);
     }
+  };
+
+  // Generate the next missing draft after the current request finishes, regardless of expansion.
+  useEffect(() => {
+    const run = generationRun.current;
+    if (sectionsLoading || generationError || reportSigned || isReportBlocked || !run.ready || !run.active || run.running.size) return;
+    const nextSection = sections.find(section => !hasReportText(section.content) && !hasReportText(section.aiDraft)
+      && !run.attempted.has(section.id) && !draftErrors[section.id]
+      && section.state !== 'approved' && section.state !== 'locked');
+    if (nextSection) void loadSectionDraft(nextSection.id);
+  }, [sections, sectionsLoading, generationError, reportSigned, isReportBlocked, generatingSectionIds, draftErrors]);
+
+  const retrySectionDraft = (sectionId: string) => {
+    if (generationRun.current.running.has(sectionId)) return;
+    generationRun.current.attempted.delete(sectionId);
+    setDraftErrors(prev => ({ ...prev, [sectionId]: '' }));
   };
 
   // Re-run AI analysis on all sections when the Shell Refresh button is clicked —
@@ -850,7 +862,7 @@ export function ReportWorkspace() {
           currentSection={currentSection}
           onSectionChange={navigateToSection}
           getSectionLockReason={getSectionLockReason}
-          generatingSectionId={generatingSectionId}
+          generatingSectionIds={generatingSectionIds}
           draftErrors={draftErrors}
           getSectionStatus={getSectionStatus}
           apiSectionDefs={apiSectionDefs}
@@ -898,12 +910,12 @@ export function ReportWorkspace() {
             onAddComment={handleAddComment}
             onAcceptAIDraft={handleAcceptAIDraft}
             onDismissAIDraft={handleDismissAIDraft}
-            generatingSectionId={generatingSectionId}
+            generatingSectionIds={generatingSectionIds}
             expandedSections={expandedSections}
             onToggleSection={toggleSection}
             getSectionLockReason={getSectionLockReason}
             draftErrors={draftErrors}
-            onRetryDraft={loadSectionDraft}
+            onRetryDraft={retrySectionDraft}
             onInsertAsset={handleInsertAsset}
             onRemoveAsset={handleRemoveAsset}
             onAcceptNarrative={handleAcceptNarrative}

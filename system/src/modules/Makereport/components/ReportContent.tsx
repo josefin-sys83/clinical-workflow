@@ -102,8 +102,8 @@ interface ReportContentProps {
   isReportBlocked?: boolean;
   onInitiateAmendment?: () => void;
   scrollTrigger?: number;
-  /** Id of the section currently awaiting an AI-generated draft from the backend. */
-  generatingSectionId?: string | null;
+  /** Section IDs with a draft request in progress. */
+  generatingSectionIds: string[];
   expandedSections: Record<string, boolean>;
   onToggleSection: (sectionId: string) => void;
   getSectionLockReason: (sectionId: string) => string | undefined;
@@ -144,7 +144,7 @@ export function ReportContent({
   isReportBlocked,
   onInitiateAmendment,
   scrollTrigger,
-  generatingSectionId,
+  generatingSectionIds,
   expandedSections,
   onToggleSection,
   getSectionLockReason,
@@ -525,7 +525,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             Report Sections
           </h2>
           <p className="text-[#6B7280]" style={{ fontSize: '13px', fontWeight: 400, fontFamily: 'system-ui, sans-serif' }}>
-            Expand a section to load its AI draft. Later sections unlock once all earlier sections have text. Saved text is not regenerated.
+            Drafts load automatically one section at a time, even when collapsed. Saved text is not regenerated.
           </p>
         </div>
 
@@ -569,7 +569,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             const completenessText = totalElements > 0 ? `${verifiedElements}/${totalElements}` : (hasContent ? '1/1' : '0/1');
             const lockReason = getSectionLockReason(section.id);
             const isExpanded = !!expandedSections[section.id] && !lockReason;
-            const isGenerating = generatingSectionId === section.id;
+            const isGenerating = generatingSectionIds.includes(section.id);
             const draftError = draftErrors[section.id];
 
             return (
@@ -653,10 +653,10 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
                   <p className={`mb-2 text-xs ${draftError ? 'text-red-700' : 'text-slate-500'}`} aria-live="polite">
                     {lockReason || (isGenerating ? 'Loading AI draft… Later sections remain locked until this finishes.'
-                      : draftError ? 'AI draft failed to load. Expand this section to retry.'
+                      : draftError ? 'AI draft failed to load. Open this section and select Retry AI draft.'
                       : hasContent ? 'Saved text loaded.'
                       : hasReportText(section.aiDraft) ? 'AI draft loaded — ready to review.'
-                      : 'Expand to generate this section’s AI draft.')}
+                      : 'Waiting for this section’s turn to load.')}
                   </p>
 
                   {/* Second Row: Owner, Review Cycle, Deadline, Comments */}
@@ -1272,9 +1272,9 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             !hasReportText(sectionSnapshot[section.id].content),
           );
 
-          // Drafts are requested explicitly by expanding each section, never in bulk.
+          // Background draft generation must finish before handing the report to review.
           if (missingSections.length > 0) {
-            throw new Error(`Expand and load these report sections before entering review: ${missingSections.map(section => section.title).join(', ')}.`);
+            throw new Error(`Wait for these report sections to load, or retry their failed drafts before entering review: ${missingSections.map(section => section.title).join(', ')}.`);
           }
 
           const saveResponse = await fetch(`/api/projects/${projectId}/report/sections`, {

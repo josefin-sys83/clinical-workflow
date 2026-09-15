@@ -14,7 +14,7 @@ interface ReportNavigationProps {
   getSectionStatus: (section: ReportSection) => 'complete' | 'in-progress' | 'empty';
   apiSectionDefs?: SectionDef[];
   getSectionLockReason: (sectionId: string) => string | undefined;
-  generatingSectionId: string | null;
+  generatingSectionIds: string[];
   draftErrors: Record<string, string>;
 }
 
@@ -35,7 +35,7 @@ export function ReportNavigation({
   getSectionStatus,
   apiSectionDefs,
   getSectionLockReason,
-  generatingSectionId,
+  generatingSectionIds,
   draftErrors,
 }: ReportNavigationProps) {
   // Use API section order when available; fall back to sections array order
@@ -59,7 +59,7 @@ export function ReportNavigation({
           const isComplete = getSectionStatus(section) === 'complete';
           const badge = getMarketBadge(section.id);
           const lockReason = getSectionLockReason(section.id);
-          const loading = generatingSectionId === section.id;
+          const loading = generatingSectionIds.includes(section.id);
 
           return (
             <button

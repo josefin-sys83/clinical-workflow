@@ -33,8 +33,16 @@ const project = { id: 'fixture', name: 'Storage regression', targetMarkets: ['Ca
   data: {}, report: { sections: saved, sectionDefs: definitions, crossConsistencyChecked: true, crossConsistencyIssues: [] },
   roles: ['Medical Writer', 'Protocol Lead', 'Clinical Affairs VP'].map(title => ({ title, assignedTo: [user] })) };
 let generationCalls = 0;
-let failGeneration = true;
-let emptyGeneration = true;
+let activeGenerations = 0;
+let peakGenerations = 0;
+const pending = new Map();
+const started = [];
+const releaseDraft = (id, mode = 'success') => {
+  const finish = pending.get(id);
+  if (!finish) throw new Error(`No pending generation for ${id}`);
+  pending.delete(id);
+  finish(mode);
+};
 window.fetch = async (input, init = {}) => {
   const url = String(input);
   const body = init.body ? JSON.parse(init.body) : {};
@@ -44,16 +52,14 @@ window.fetch = async (input, init = {}) => {
     throw new Error('Unexpected bulk generation');
   } else if (url.endsWith('/generate-report-section')) {
     generationCalls++;
+    started.push(body.sectionId);
     if (saved[body.sectionId]?.content?.trim()) throw new Error('Regenerated saved text');
-    await new Promise(resolve => setTimeout(resolve, 100));
-    if (failGeneration) {
-      failGeneration = false;
-      return new Response(JSON.stringify({ message: 'AI request timed out' }), { status: 504 });
-    }
-    if (body.sectionId === 'section-3' && emptyGeneration) {
-      emptyGeneration = false;
-      return new Response(JSON.stringify({ sectionId: body.sectionId, content: '' }), { status: 200 });
-    }
+    activeGenerations++;
+    peakGenerations = Math.max(peakGenerations, activeGenerations);
+    const mode = await new Promise(resolve => pending.set(body.sectionId, resolve));
+    activeGenerations--;
+    if (mode === 'timeout') return new Response(JSON.stringify({ message: 'AI request timed out' }), { status: 504 });
+    if (mode === 'empty') return new Response(JSON.stringify({ sectionId: body.sectionId, content: '' }), { status: 200 });
     const content = `<h3>Generated ${body.sectionId} text</h3><p><strong>Formatted draft</strong></p><img src="invalid:" onerror="window.unsafeDraft = true">`;
     saved[body.sectionId] = { ...saved[body.sectionId], content };
     payload = { sectionId: body.sectionId, content };
@@ -92,39 +98,43 @@ const toggle = id => card(id)?.querySelector('button[aria-expanded]');
 const nav = id => document.querySelector(`[data-report-nav="${id}"]`);
 try {
   mount(ReportWorkspace);
-  await waitFor(() => card('section-2'));
-  assert(generationCalls === 0, 'Page entry generated drafts without expansion');
-  assert(toggle('section-2').getAttribute('aria-expanded') === 'false', 'Missing section starts expanded');
-  assert(toggle('section-3').disabled && nav('section-3').disabled, 'Later section not locked');
-  toggle('section-3').click();
-  nav('section-3').click();
-  toggle('section-2').click();
-  await waitFor(() => card('section-2').querySelector('[role="status"]'));
+  await waitFor(() => generationCalls === 1);
+  assert(started.join(',') === 'section-2', 'Did not start with the first missing section');
+  assert(toggle('section-2').getAttribute('aria-expanded') === 'false', 'Generation expanded a collapsed section');
+  assert(toggle('section-3').disabled && nav('section-3').disabled, 'Existing navigation locks changed');
   nav('section-2').click();
   nav('section-2').click();
-  assert(toggle('section-3').disabled, 'Later section unlocked while draft loading');
-  await waitFor(() => contains('AI request timed out'));
-  assert(generationCalls === 1, 'Repeated navigation duplicated generation');
-  assert(toggle('section-3').disabled, 'Failed draft unlocked later section');
-  [...card('section-2').querySelectorAll('button')].find(b => b.textContent === 'Retry AI draft').click();
-  await waitFor(() => contains('Generated section-2 text'));
-  assert(generationCalls === 2, 'Retry did not request only the failed section');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert(generationCalls === 1, 'Expansion started an extra request');
+  releaseDraft('section-2');
+  await waitFor(() => contains('Generated section-2 text') && pending.has('section-3'));
   const preview = document.querySelector('[data-ai-draft="section-2"]');
   assert(preview.querySelector('h3') && preview.querySelector('strong'), 'Draft HTML was not formatted');
-  assert(!preview.textContent.includes('<h3>'), 'Raw HTML tags leaked into draft UI');
   assert(!preview.querySelector('[onerror]') && !window.unsafeDraft, 'Draft HTML was not sanitized');
-  await waitFor(() => !toggle('section-3').disabled);
-  assert(!contains('Generated section-3 text'), 'Next section generated without expansion');
-  for (let i = 3; i <= 9; i++) {
-    const id = `section-${i}`;
-    (i % 2 ? nav(id) : toggle(id)).click();
-    if (i === 3) {
-      await waitFor(() => contains('AI returned no text'));
-      assert(toggle('section-4').disabled, 'Empty response unlocked next section');
-      [...card(id).querySelectorAll('button')].find(b => b.textContent === 'Retry AI draft').click();
-    }
+  assert(toggle('section-3').getAttribute('aria-expanded') === 'false', 'Next draft required expansion');
+  nav('section-3').click();
+  releaseDraft('section-3', 'timeout');
+  await waitFor(() => contains('AI request timed out') && pending.has('section-4'));
+  for (let number = 4; number <= 9; number++) {
+    const id = `section-${number}`;
+    await waitFor(() => pending.has(id));
+    assert(toggle(id).getAttribute('aria-expanded') === 'false', 'Later draft required expansion');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert(generationCalls === number - 1 && activeGenerations === 1, 'Started another section before the current request finished');
+    releaseDraft(id, number === 5 ? 'empty' : 'success');
+  }
+  assert(started.join(',') === 'section-2,section-3,section-4,section-5,section-6,section-7,section-8,section-9', 'Incorrect generation order');
+  await waitFor(() => activeGenerations === 0 && !nav('section-9').textContent.includes('Loading'));
+  assert(saved['section-9'].content && toggle('section-9').getAttribute('aria-expanded') === 'false', 'Later sections required expansion to generate');
+  for (const id of ['section-3', 'section-5']) {
+    nav(id).click();
+    await waitFor(() => card(id).querySelector('[role="alert"]'));
+    [...card(id).querySelectorAll('button')].find(b => b.textContent === 'Retry AI draft').click();
+    await waitFor(() => pending.has(id));
+    releaseDraft(id);
     await waitFor(() => contains(`Generated ${id} text`));
   }
+  assert(generationCalls === 10 && peakGenerations === 1, 'Unexpected retries or concurrency');
   const completedCalls = generationCalls;
   assert(saved['section-1'].content === '<p>Saved executive text</p>', 'Generation overwrote saved text');
   for (let reload = 0; reload < 3; reload++) {
@@ -161,7 +171,7 @@ try {
   mount(ClinicalInvestigationReport);
   await waitFor(() => contains('Edited executive text') && contains('Saved custom text'));
   assert(errors.length === 0, errors.join('; '));
-  document.getElementById('result').textContent = 'PASS: expansion/sidebar generation, sequential locks, StrictMode, timeout/empty retry, sanitized HTML, saved content, reloads, evidence, edit/save, review and PDF';
+  document.getElementById('result').textContent = 'PASS: one section at a time, automatic collapsed drafts, existing locks, individual retries, saved text, reloads, edit/save, review and PDF';
 } catch (error) {
   document.getElementById('result').textContent = `FAIL: ${error.message}`;
 }
