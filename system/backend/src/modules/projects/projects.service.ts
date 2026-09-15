@@ -444,8 +444,9 @@ export class ProjectsService {
     sectionPatches: Record<string, Record<string, any>>,
     actor?: AuditActor,
     auditEvents: ProjectAuditEvent[] = [],
+    onlyMissingContent = false,
   ): Promise<Record<string, any>> {
-    return this.reports.updateSections(id, sectionPatches, actor ?? { name: 'System' }, auditEvents);
+    return this.reports.updateSections(id, sectionPatches, actor ?? { name: 'System' }, auditEvents, onlyMissingContent);
   }
 
   async completeSynopsis(

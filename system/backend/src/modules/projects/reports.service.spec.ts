@@ -46,6 +46,17 @@ describe('relational reports', () => {
     expect(query).not.toHaveBeenCalledWith('COMMIT');
   });
 
+  it('preserves content saved while bulk AI generation was running', async () => {
+    jest.spyOn(service, 'getByProject').mockResolvedValue({ sections: {} });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('select content, ai_draft')) return { rows: [{ content: '<p>New author edit</p>' }] };
+      if (sql.startsWith('select id from projects') || sql.startsWith('insert into')) return { rows: [{ id: 'row' }] };
+      return { rows: [] };
+    });
+    await service.updateSections('project', { safety: { content: '<p>AI result</p>' } }, actor, [], true);
+    expect(query.mock.calls.some(([sql]) => sql.startsWith('update report_section set'))).toBe(false);
+  });
+
   it('checks the report lock inside the write transaction', async () => {
     query.mockImplementation(async (sql: string) => ({ rows: sql.includes('workflow_step_state') || sql.startsWith('select id from projects') ? [{ id: 'locked' }] : [] }));
     await expect(service.updateSections('project', { safety: { content: 'Edited' } }, actor)).rejects.toThrow(ForbiddenException);

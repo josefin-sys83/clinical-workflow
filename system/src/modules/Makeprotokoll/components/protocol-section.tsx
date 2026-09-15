@@ -1287,7 +1287,7 @@ function ProtocolSectionComponent(
         onClose={() => setAuditTrailOpen(false)}
         sectionNumber={section.number}
         sectionTitle={section.title}
-        entries={getSectionAuditTrail(section.id)}
+        entries={[]}
       />
 
       {/* Comments Modal */}

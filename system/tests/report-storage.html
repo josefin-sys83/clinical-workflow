@@ -10,14 +10,16 @@ import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import { ReportWorkspace } from '/src/modules/Makereport/pages/ReportWorkspace.tsx';
 import ReviewPage from '/src/modules/Reportreview/app/pages/ReviewPage.tsx';
 import { ClinicalInvestigationReport } from '/src/modules/Pdfreport/components/ClinicalInvestigationReport.tsx';
-import { initialReportSections } from '/src/modules/Makereport/data/mockData.ts';
 
 const errors = [];
 window.addEventListener('error', event => errors.push(event.message));
 window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
 
-const definitions = initialReportSections.map(s => ({ id: s.id, title: s.title, number: s.order }));
-definitions.push({ id: 'section-custom', title: 'Custom section', number: 11 });
+const definitions = ['Executive Summary', 'Introduction and Background', 'Objectives and Endpoints',
+  'Clinical Investigation Design', 'Statistical Methods', 'Subject Disposition and Baseline',
+  'Clinical Performance Results', 'Safety Analysis', 'Conclusions and Benefit-Risk Assessment']
+  .map((title, i) => ({ id: `section-${i + 1}`, title, number: i + 1 }));
+definitions.push({ id: 'section-custom', title: 'Custom section', number: 10 });
 const saved = {
   'section-1': { content: '<p>Saved executive text</p>', state: 'draft' },
   'section-3': { content: '', userEdited: true, state: 'draft' },
@@ -30,12 +32,32 @@ const user = { id: 'writer', email: 'writer@example.test', name: 'Writer' };
 const project = { id: 'fixture', name: 'Storage regression', targetMarkets: ['Canada'],
   data: {}, report: { sections: saved, sectionDefs: definitions, crossConsistencyChecked: true, crossConsistencyIssues: [] },
   roles: ['Medical Writer', 'Protocol Lead', 'Clinical Affairs VP'].map(title => ({ title, assignedTo: [user] })) };
+let generationCalls = 0;
+let failGeneration = true;
+let emptyGeneration = true;
 window.fetch = async (input, init = {}) => {
   const url = String(input);
   const body = init.body ? JSON.parse(init.body) : {};
   if (body.data?.report) throw new Error('Legacy report JSON write');
   let payload;
-  if (url.endsWith('/report/sections')) {
+  if (url.endsWith('/generate-report')) {
+    throw new Error('Unexpected bulk generation');
+  } else if (url.endsWith('/generate-report-section')) {
+    generationCalls++;
+    if (saved[body.sectionId]?.content?.trim()) throw new Error('Regenerated saved text');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    if (failGeneration) {
+      failGeneration = false;
+      return new Response(JSON.stringify({ message: 'AI request timed out' }), { status: 504 });
+    }
+    if (body.sectionId === 'section-3' && emptyGeneration) {
+      emptyGeneration = false;
+      return new Response(JSON.stringify({ sectionId: body.sectionId, content: '' }), { status: 200 });
+    }
+    const content = `<h3>Generated ${body.sectionId} text</h3><p><strong>Formatted draft</strong></p><img src="invalid:" onerror="window.unsafeDraft = true">`;
+    saved[body.sectionId] = { ...saved[body.sectionId], content };
+    payload = { sectionId: body.sectionId, content };
+  } else if (url.endsWith('/report/sections')) {
     for (const [id, patch] of Object.entries(body.sections)) saved[id] = { ...saved[id], ...patch };
     payload = saved;
   } else if (url.endsWith('/report-sections')) payload = { sections: definitions, targetMarkets: ['Canada'] };
@@ -43,7 +65,6 @@ window.fetch = async (input, init = {}) => {
   else if (url.endsWith('/analyze-report-section')) payload = { issues: [], requiredElements: [] };
   else if (url.endsWith('/milestones')) payload = { milestones: [], warnings: [] };
   else if (url.endsWith('/amendments')) payload = [];
-  else if (url.endsWith('/generate-report-section')) throw new Error('Unexpected draft regeneration');
   else payload = {};
   return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
@@ -53,9 +74,9 @@ let root;
 function mount(Component) {
   root?.unmount();
   root = createRoot(document.getElementById('root'));
-  root.render(el(CurrentUserProvider, { user, status: 'ready' },
+  root.render(el(React.StrictMode, null, el(CurrentUserProvider, { user, status: 'ready' },
     el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
-      el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(Component) })))));
+      el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(Component) }))))));
 }
 const waitFor = async (predicate) => {
   for (let i = 0; i < 100; i++) {
@@ -66,13 +87,55 @@ const waitFor = async (predicate) => {
 };
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const contains = text => document.getElementById('root').textContent.includes(text);
+const card = id => document.querySelector(`[data-report-section="${id}"]`);
+const toggle = id => card(id)?.querySelector('button[aria-expanded]');
+const nav = id => document.querySelector(`[data-report-nav="${id}"]`);
 try {
+  mount(ReportWorkspace);
+  await waitFor(() => card('section-2'));
+  assert(generationCalls === 0, 'Page entry generated drafts without expansion');
+  assert(toggle('section-2').getAttribute('aria-expanded') === 'false', 'Missing section starts expanded');
+  assert(toggle('section-3').disabled && nav('section-3').disabled, 'Later section not locked');
+  toggle('section-3').click();
+  nav('section-3').click();
+  toggle('section-2').click();
+  await waitFor(() => card('section-2').querySelector('[role="status"]'));
+  nav('section-2').click();
+  nav('section-2').click();
+  assert(toggle('section-3').disabled, 'Later section unlocked while draft loading');
+  await waitFor(() => contains('AI request timed out'));
+  assert(generationCalls === 1, 'Repeated navigation duplicated generation');
+  assert(toggle('section-3').disabled, 'Failed draft unlocked later section');
+  [...card('section-2').querySelectorAll('button')].find(b => b.textContent === 'Retry AI draft').click();
+  await waitFor(() => contains('Generated section-2 text'));
+  assert(generationCalls === 2, 'Retry did not request only the failed section');
+  const preview = document.querySelector('[data-ai-draft="section-2"]');
+  assert(preview.querySelector('h3') && preview.querySelector('strong'), 'Draft HTML was not formatted');
+  assert(!preview.textContent.includes('<h3>'), 'Raw HTML tags leaked into draft UI');
+  assert(!preview.querySelector('[onerror]') && !window.unsafeDraft, 'Draft HTML was not sanitized');
+  await waitFor(() => !toggle('section-3').disabled);
+  assert(!contains('Generated section-3 text'), 'Next section generated without expansion');
+  for (let i = 3; i <= 9; i++) {
+    const id = `section-${i}`;
+    (i % 2 ? nav(id) : toggle(id)).click();
+    if (i === 3) {
+      await waitFor(() => contains('AI returned no text'));
+      assert(toggle('section-4').disabled, 'Empty response unlocked next section');
+      [...card(id).querySelectorAll('button')].find(b => b.textContent === 'Retry AI draft').click();
+    }
+    await waitFor(() => contains(`Generated ${id} text`));
+  }
+  const completedCalls = generationCalls;
+  assert(saved['section-1'].content === '<p>Saved executive text</p>', 'Generation overwrote saved text');
   for (let reload = 0; reload < 3; reload++) {
     mount(ReportWorkspace);
+    await waitFor(() => card('section-custom'));
+    for (const def of definitions) toggle(def.id).click();
     await waitFor(() => contains('Saved executive text') && contains('Saved custom text'));
-    assert(contains('Regulatory and Clinical Context'), 'Missing content did not retain the previous authoring fallback');
-    assert(contains('No content yet'), 'Explicitly cleared content was replaced');
-    const completeness = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Completeness Status'));
+    assert(contains('Generated section-2 text') && contains('Generated section-3 text'), 'Missing/empty sections were not generated');
+    assert(!contains('Regulatory and Clinical Context'), 'Mock report text leaked into authoring');
+    assert(generationCalls === completedCalls, 'Reload regenerated saved content');
+    const completeness = [...card('section-custom').querySelectorAll('button')].find(b => b.textContent.includes('Completeness Status'));
     assert(completeness, 'Dynamic section lost saved completeness evidence');
     completeness.click();
     await waitFor(() => contains('Persisted evidence'));
@@ -90,12 +153,15 @@ try {
   [...document.querySelectorAll('button')].find(b => b.textContent === 'Confirm').click();
   await waitFor(() => saved['section-1'].content.includes('Edited executive text'));
   mount(ReportWorkspace);
+  await waitFor(() => card('section-1'));
+  toggle('section-1').click();
   await waitFor(() => contains('Edited executive text'));
   mount(ReviewPage);
   await waitFor(() => contains('Edited executive text') && contains('Saved custom text'));
   mount(ClinicalInvestigationReport);
   await waitFor(() => contains('Edited executive text') && contains('Saved custom text'));
-  document.getElementById('result').textContent = 'PASS: make reloads, missing/empty content, dynamic evidence, edit/save, review and PDF reads';
+  assert(errors.length === 0, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: expansion/sidebar generation, sequential locks, StrictMode, timeout/empty retry, sanitized HTML, saved content, reloads, evidence, edit/save, review and PDF';
 } catch (error) {
   document.getElementById('result').textContent = `FAIL: ${error.message}`;
 }

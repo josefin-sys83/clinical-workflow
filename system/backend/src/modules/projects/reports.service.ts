@@ -280,6 +280,7 @@ export class ReportsService {
     patches: Record<string, any>,
     actor: AuditActor,
     auditEvents: Omit<RecordAuditEvent, 'projectId' | 'actor'>[] = [],
+    onlyMissingContent = false,
   ): Promise<Record<string, any>> {
     if (!patches || Array.isArray(patches) || typeof patches !== 'object')
       throw new BadRequestException('sections must be an object');
@@ -289,6 +290,12 @@ export class ReportsService {
         this.validateSectionPatch(key, patch);
         const definition = definitions.find((definition) => definition.id === key);
         const sectionId = await this.ensureSection(reportId, key, definition, actor, client);
+        // The owning project is locked by write(). Preserve text saved by another
+        // author or generation request while the AI was running.
+        if (onlyMissingContent) {
+          const current = await client.query('select content, ai_draft from report_section where id=$1', [sectionId]);
+          if (String(current.rows[0]?.content || current.rows[0]?.ai_draft || '').trim()) continue;
+        }
         await this.updateSectionFields(sectionId, patch, actor, client);
         await this.updateSectionCollections(projectId, sectionId, key, patch, actor, client);
       }
