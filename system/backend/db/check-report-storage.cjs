@@ -50,7 +50,7 @@ async function main() {
       release() {},
     };
     require('../dist/db/pg').getPool = () => ({ ...db, connect: async () => db });
-    const { ReportsService } = require('../dist/modules/projects/reports.service');
+    const { ReportsService } = require('../dist/modules/reports/reports.service');
     const service = new ReportsService({ record: async () => {} });
     let report = await service.getByProject(projectId);
     assert.deepEqual(Object.keys(report.sections), ['section-1', 'section-2', 'section-3', 'section-4']);

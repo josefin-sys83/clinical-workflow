@@ -10,8 +10,8 @@ import { AdminService } from "../admin/admin.service";
 import { sanitizeIncomingProjectData } from "../../common/sanitize-section-html";
 import { AuditService } from "../audit/audit.service";
 import type { AuditActor, RecordAuditEvent } from "../audit/audit.service";
-import { ProtocolsService } from "./protocols.service";
-import { ReportsService } from "./reports.service";
+import { ProtocolsService } from "../protocols/protocols.service";
+import { ReportsService } from "../reports/reports.service";
 
 export type ProjectAuditEvent = Omit<RecordAuditEvent, "projectId" | "actor">;
 
@@ -182,26 +182,6 @@ export class ProjectsService {
         assignedTo,
       })),
     };
-  }
-
-  async listProtocolAttachmentsForAnalysis(projectId: string): Promise<Array<{
-    appendixNumber: number;
-    filename: string;
-    description: string | null;
-  }>> {
-    const { rows } = await getPool().query(
-      `select appendix_number, filename, description
-       from protocol_attachment pa
-       join protocol pr on pr.id = pa.protocol_id
-       where pr.project_id = $1
-       order by appendix_number asc`,
-      [projectId],
-    );
-    return rows.map((row) => ({
-      appendixNumber: Number(row.appendix_number),
-      filename: String(row.filename),
-      description: row.description ?? null,
-    }));
   }
 
   private async generateProjectNumber(client: PoolClient): Promise<string> {
@@ -438,15 +418,6 @@ export class ProjectsService {
     } finally {
       client.release();
     }
-  }
-  async updateReportSections(
-    id: string,
-    sectionPatches: Record<string, Record<string, any>>,
-    actor?: AuditActor,
-    auditEvents: ProjectAuditEvent[] = [],
-    onlyMissingContent = false,
-  ): Promise<Record<string, any>> {
-    return this.reports.updateSections(id, sectionPatches, actor ?? { name: 'System' }, auditEvents, onlyMissingContent);
   }
 
   async completeSynopsis(
@@ -937,86 +908,6 @@ export class ProjectsService {
       client.release();
     }
   }
-
-  async forceProtocolDraft(
-    projectId: string,
-    sectionTitles: readonly string[],
-    actor: AuditActor,
-  ): Promise<any> {
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      const { rows } = await client.query(
-        `select id from projects where id = $1 for update`,
-        [projectId],
-      );
-      if (!rows[0]) throw new NotFoundException("Project not found");
-
-      const existing = await this.protocols.getByProject(projectId, client);
-      if (existing?.sections?.length) {
-        await client.query("ROLLBACK");
-        return {
-          ...existing,
-          bypassed: false,
-          message: "Protocol sections already exist",
-        };
-      }
-
-      const now = new Date().toISOString();
-      const draft = {
-        ...(existing || {}),
-        protocolId: existing?.protocolId || `CIP-DEV-${new Date().getFullYear()}-${projectId.slice(0, 8).toUpperCase()}`,
-        version: existing?.version || "1.0",
-        status: "draft",
-        amendments: existing?.amendments || [],
-        sections: sectionTitles.map((title, index) => ({
-          id: String(index + 1),
-          number: String(index + 1),
-          title,
-          content: "Development draft — replace this placeholder with protocol content.",
-          status: "draft",
-          approvalStatus: "draft",
-          locked: false,
-          aiGenerated: false,
-          issues: [],
-          requiredElements: [],
-          comments: [],
-          createdAt: now,
-          updatedAt: now,
-        })),
-      };
-
-      await this.protocols.save(projectId, draft, actor, client);
-      const created = await this.protocols.getByProject(projectId, client);
-      await this.audit.record({
-        projectId,
-        stepId: "protocol-make",
-        type: "workflow.bypass",
-        message: "Created editable protocol draft sections without AI using the admin bypass",
-        actor,
-        entityType: "protocol",
-        entityId: projectId,
-        entityLabel: "Protocol development draft",
-        metadata: {
-          bypassedAi: true,
-          sectionCount: sectionTitles.length,
-          workflowStateChanged: false,
-        },
-      }, client);
-      await client.query("COMMIT");
-
-      return {
-        ...created,
-        bypassed: true,
-        message: "Protocol development draft created without AI",
-      };
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
   async getRequirements(
     risk: string,
     deviceCategory: string,
@@ -1170,130 +1061,6 @@ export class ProjectsService {
     }
   }
 
-  // Read-modify-write helpers like createAmendment() must mutate the current protocol
-  // while the owning project is locked. The protocol is relational now; this method
-  // preserves the existing callback API while storing the result in normalized tables.
-  async updateProtocolAtomic(
-    id: string,
-    mutate: (protocol: any, data: any) => any,
-    actor?: AuditActor,
-    auditEvent?: ProjectAuditEvent | (() => ProjectAuditEvent),
-  ): Promise<Project> {
-    const now = new Date().toISOString();
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      const { rows } = await client.query(
-        `select data from projects where id=$1 for update`,
-        [id],
-      );
-      if (!rows[0]) {
-        throw new NotFoundException("Project not found");
-      }
-      const existingData = rows[0].data || {};
-      const protocol = await this.protocols.getByProject(id, client) || {};
-      const newProtocol = mutate(protocol, existingData);
-      await this.protocols.save(id, newProtocol, actor, client);
-      await client.query(
-        `update projects set data=data-'protocol', updated_at=$2 where id=$1`,
-        [id, now],
-      );
-      const resolvedAuditEvent = typeof auditEvent === "function" ? auditEvent() : auditEvent;
-      await this.audit.record({
-        projectId: id,
-        type: "protocol.updated",
-        message: "Updated protocol data",
-        entityType: "protocol",
-        entityId: id,
-        entityLabel: "Protocol",
-        metadata: {},
-        ...resolvedAuditEvent,
-        actor: actor ?? { name: "System" },
-      }, client);
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-    return this.get(id);
-  }
-
-  async updateProtocolSection(
-    projectId: string,
-    sectionId: string,
-    values: {
-      content: string;
-      previousContent?: string;
-      reason?: string;
-      approvalStatus?: string;
-      approvedBy?: string;
-      approvedAt?: string;
-    },
-    actor?: AuditActor,
-  ): Promise<{ ok: true; updatedAt: string }> {
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      const project = await client.query(
-        `select id from projects where id = $1 for update`,
-        [projectId],
-      );
-      if (!project.rows[0]) throw new NotFoundException("Project not found");
-
-      const result = await this.protocols.updateSectionContent(
-        projectId,
-        sectionId,
-        values,
-        actor,
-        client,
-      );
-      await client.query(
-        `update projects set updated_at = $2, data = data - 'protocol' where id = $1`,
-        [projectId, result.updatedAt],
-      );
-
-      const previousContent = values.previousContent || "";
-      const hasTable = (text: string) => /^\|.+\|/m.test(text);
-      const hasImage = (text: string) => /!\[.*?\]\(.*?\)/.test(text);
-      const structuralNotes: string[] = [];
-      if (!hasTable(previousContent) && hasTable(result.content)) structuralNotes.push("Table added");
-      if (hasTable(previousContent) && !hasTable(result.content)) structuralNotes.push("Table removed");
-      if (!hasImage(previousContent) && hasImage(result.content)) structuralNotes.push("Image added");
-      if (hasImage(previousContent) && !hasImage(result.content)) structuralNotes.push("Image removed");
-      const suffix = structuralNotes.length ? ` (${structuralNotes.join(", ")})` : "";
-
-      await this.audit.record({
-        projectId,
-        stepId: "protocol-make",
-        type: "section.content.updated",
-        message: `Section "${result.title}" content updated${suffix}`,
-        entityType: "protocol_section",
-        entityId: sectionId,
-        entityLabel: result.title,
-        actor: actor ?? { name: "System" },
-        metadata: {
-          sectionId,
-          sectionTitle: result.title,
-          updatedAt: result.updatedAt,
-          editedBy: actor?.name ?? "Unknown user",
-          reason: values.reason || "",
-          previousContent,
-          newContent: result.content,
-        },
-      }, client);
-
-      await client.query("COMMIT");
-      return { ok: true, updatedAt: result.updatedAt };
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
   // Both document domains store immutable relational signatures.
   async updateSignaturesAtomic(
     id: string,
@@ -1355,8 +1122,7 @@ export class ProjectsService {
   // instead of data.signatures. A concurrent write to any other part of `data` (e.g. a
   // PATCH saving unrelated section content) landing between this method's read and its
   // write would have its change silently discarded once this method's write lands. Now
-  // uses the same `for update`-locked read-modify-write as updateProtocolAtomic()/
-  // updateSignaturesAtomic() above.
+  // uses the same `for update`-locked read-modify-write as updateSignaturesAtomic().
   async saveSynopsisFile(
     projectId: string,
     fileName: string,
