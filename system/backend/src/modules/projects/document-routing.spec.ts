@@ -14,6 +14,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
+import { ResultsController } from '../results/results.controller';
+import { ResultsService } from '../results/results.service';
 
 function routes(controller: any) {
   return Object.getOwnPropertyNames(controller.prototype).flatMap(name => {
@@ -89,6 +91,8 @@ describe('project document routing', () => {
     try {
       expect(module.get(ProtocolsController)).toBeInstanceOf(ProtocolsController);
       expect(module.get(ReportsController)).toBeInstanceOf(ReportsController);
+      expect(module.get(ResultsController)).toBeInstanceOf(ResultsController);
+      expect(module.get(ResultsService)).toBeInstanceOf(ResultsService);
       expect(module.get(ProtocolsService)).toBeInstanceOf(ProtocolsService);
       expect(module.get(ReportsService)).toBeInstanceOf(ReportsService);
       expect(module.get(ProtocolAttachmentsService)).toBeInstanceOf(ProtocolAttachmentsService);
