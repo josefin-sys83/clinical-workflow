@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, NotFoundException } from '@nestjs/common';
 import { getPool } from '../../db/pg';
+import { isUUID } from 'class-validator';
 
 // Applied at the controller level on every controller keyed by :projectId (projects,
 // workflow, audit, documents) so a project can only be read/written/transitioned by a
@@ -35,6 +36,8 @@ export class ProjectAccessGuard implements CanActivate {
     // it through unchecked (see the limitation above). Do not add project-scoped logic to
     // a route that hits this branch without also updating this guard.
     if (!projectId) return true; // route isn't scoped to a single project (e.g. list/create)
+    // Guards execute before parameter pipes. Avoid sending malformed UUIDs to SQL.
+    if (!isUUID(projectId)) throw new NotFoundException('Project not found');
 
     const user = req.user as { companyId?: string; isSuperadmin?: boolean } | undefined;
     if (user?.isSuperadmin) return true;

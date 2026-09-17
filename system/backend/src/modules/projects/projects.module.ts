@@ -13,13 +13,15 @@ import { ProtocolAttachmentsService } from '../protocols/protocol-attachments.se
 import { ProtocolsController } from '../protocols/protocols.controller';
 import { ReportsController } from '../reports/reports.controller';
 import { DocumentWorkflowService } from './document-workflow.service';
+import { ResultsController } from '../results/results.controller';
+import { ResultsService } from '../results/results.service';
 
 // Compose the project and document domains here so their controllers can share
 // project context without circular module dependencies.
 @Module({
   imports: [AiModule, AuditModule, WorkflowModule, AdminModule],
-  controllers: [ProjectsController, ProtocolsController, ReportsController],
-  providers: [ProjectsService, ProtocolsService, ReportsService, MilestoneService, DocumentWorkflowService, ProtocolAttachmentsService],
+  controllers: [ProjectsController, ProtocolsController, ReportsController, ResultsController],
+  providers: [ProjectsService, ProtocolsService, ReportsService, MilestoneService, DocumentWorkflowService, ProtocolAttachmentsService, ResultsService],
   exports: [ProjectsService, ProtocolsService, ReportsService],
 })
 export class ProjectsModule {}

@@ -45,6 +45,9 @@ Most endpoints require a Bearer token. Signing endpoints require `admin` or `app
 
 ## Documents (artifacts)
 
+Results CRUD, decisions, permissions and migration details are documented in
+[Results API](src/modules/results/README.md).
+
 - Finalize export: `POST /api/projects/:projectId/documents/:docType/finalize`
 - Download: `GET /api/projects/:projectId/documents/artifacts/:artifactId`
 - Verify hash: `GET /api/projects/:projectId/documents/artifacts/:artifactId/verify`
