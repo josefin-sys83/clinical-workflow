@@ -57,6 +57,21 @@ export const PROTOCOL_UPLOAD_ALLOWED_MIME_TYPES = [
   'text/plain',
 ];
 
+// Result intake has its own allowlist; reference attachments use their own route.
+export const RESULTS_UPLOAD_ALLOWED_EXTENSIONS = ['.csv', '.tsv', '.xlsx', '.pdf', '.docx', '.txt', '.png', '.jpg', '.jpeg'];
+export const RESULTS_UPLOAD_ALLOWED_MIME_TYPES = [
+  'image/png', 'image/jpeg',
+  'text/csv', 'text/tab-separated-values', 'text/plain', 'application/octet-stream',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+];
+export const RESULTS_UPLOAD_OPTIONS = {
+  fileFilter: createDocumentFileFilter(RESULTS_UPLOAD_ALLOWED_EXTENSIONS, RESULTS_UPLOAD_ALLOWED_MIME_TYPES),
+  limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
+};
+
 export const SYNOPSIS_UPLOAD_OPTIONS = {
   fileFilter: createDocumentFileFilter(SYNOPSIS_UPLOAD_ALLOWED_EXTENSIONS, SYNOPSIS_UPLOAD_ALLOWED_MIME_TYPES),
   limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },

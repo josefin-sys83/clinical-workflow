@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { validateFigureContent } from './figure-image';
 import { getPool } from '../../db/pg';
 import { AuditActor, AuditService } from '../audit/audit.service';
 import {
@@ -13,7 +14,13 @@ import {
   ListResultsDto,
   ResultDecisionDto,
   UpdateResultDto,
+  SupportingDocumentDto,
+  AssignResultSectionDto,
 } from './dto';
+import {
+  getReportSectionDefinitions,
+  resolveReportMarkets,
+} from '../reports/report-section-definitions';
 
 const FIELDS: Record<string, string> = {
   title: 'title',
@@ -60,6 +67,158 @@ function response(row: any) {
 export class ResultsService {
   constructor(private readonly audit: AuditService) {}
 
+  async workspace(projectId: string) {
+    const [results, documents, sections, locked] = await Promise.all([
+      this.list(projectId),
+      getPool().query(
+        `select id,type,filename,mime_type as "mimeType",
+        octet_length(bytes)::int as "sizeBytes",description,uploaded_by_name as "uploaderName",
+        uploaded_at as "uploadedAt" from supporting_document where project_id=$1 order by uploaded_at,id`,
+        [projectId],
+      ),
+      getPool().query(
+        `select s.id,s.title from report_section s join report r on r.id=s.report_id
+        where r.project_id=$1 order by s.position,s.id`,
+        [projectId],
+      ),
+      getPool().query(
+        `select 1 from workflow_step_state where project_id=$1 and step_id='report-pdf' and state in ('signed','final')
+        union all select 1 from report_signature s join report r on r.id=s.report_id where r.project_id=$1`,
+        [projectId],
+      ),
+    ]);
+    return {
+      results,
+      supportingDocuments: documents.rows,
+      sections: sections.rows,
+      locked: locked.rows.length > 0,
+    };
+  }
+
+  async uploadSupportingDocument(
+    projectId: string,
+    body: SupportingDocumentDto,
+    file: { originalname: string; mimetype: string; buffer: Buffer },
+    actor: AuditActor,
+  ) {
+    if (!file?.buffer?.length)
+      throw new BadRequestException('Choose a non-empty file');
+    const filename = file.originalname.split(/[\\/]/).pop()!;
+    if (!filename.trim() || filename.length > 1000 || filename.includes('\0'))
+      throw new BadRequestException('Invalid filename');
+    return this.write(projectId, actor, async (client) => {
+      const { rows } = await client.query(
+        `insert into supporting_document
+        (project_id,type,filename,mime_type,bytes,description,uploaded_by_user_id,uploaded_by_name,uploaded_by_email)
+        select $1,$2,$3,$4,$5,$6,id,name,email from users where id=$7 returning id`,
+        [
+          projectId,
+          body.type,
+          filename,
+          file.mimetype || 'application/octet-stream',
+          file.buffer,
+          body.description ?? null,
+          actor.userId,
+        ],
+      );
+      await this.audit.record(
+        {
+          projectId,
+          stepId: 'study-results',
+          type: 'supporting-document.added',
+          entityType: 'supporting_document',
+          entityId: rows[0].id,
+          entityLabel: filename,
+          message: `Added ${body.type.toUpperCase()}: ${filename}`,
+          actor,
+          metadata: { type: body.type, sizeBytes: file.buffer.length },
+        },
+        client,
+      );
+      return { id: rows[0].id };
+    });
+  }
+
+  async downloadSupportingDocument(projectId: string, id: string) {
+    const { rows } = await getPool().query(
+      'select filename,bytes from supporting_document where id=$1 and project_id=$2',
+      [id, projectId],
+    );
+    if (!rows[0]) throw new NotFoundException('Supporting document not found');
+    return rows[0];
+  }
+
+  async removeSupportingDocument(
+    projectId: string,
+    id: string,
+    actor: AuditActor,
+  ) {
+    await this.write(projectId, actor, async (client) => {
+      const { rows } = await client.query(
+        'select filename from supporting_document where id=$1 and project_id=$2 for update',
+        [id, projectId],
+      );
+      if (!rows[0])
+        throw new NotFoundException('Supporting document not found');
+      const referenced = await client.query(
+        'select 1 from result_object where source_document_id=$1',
+        [id],
+      );
+      if (referenced.rows.length)
+        throw new ConflictException(
+          'This document is referenced by a result and must be retained',
+        );
+      await client.query(
+        'delete from supporting_document where id=$1 and project_id=$2',
+        [id, projectId],
+      );
+      await this.audit.record(
+        {
+          projectId,
+          stepId: 'study-results',
+          type: 'supporting-document.deleted',
+          entityType: 'supporting_document',
+          entityId: id,
+          entityLabel: rows[0].filename,
+          message: `Removed supporting document: ${rows[0].filename}`,
+          actor,
+        },
+        client,
+      );
+    });
+  }
+
+  // Empty sections provide stable relational destinations before report authoring.
+  // Existing authored sections are never overwritten.
+  private async ensureSections(
+    client: PoolClient,
+    projectId: string,
+    reportId: string,
+  ) {
+    const { rows } = await client.query(
+      `select p.data->'scope' as scope,
+      array(select m.code from project_markets pm join markets m on m.id=pm.market_id
+        where pm.project_id=p.id order by m.code) as markets from projects p where p.id=$1`,
+      [projectId],
+    );
+    const definitions = getReportSectionDefinitions(
+      resolveReportMarkets(rows[0]?.markets ?? [], rows[0]?.scope),
+    );
+    for (const section of definitions) {
+      await client.query(
+        `insert into report_section(report_id,section_key,section_number,position,title)
+        values($1,$2,$3,$4,$5) on conflict(report_id,section_key) do nothing`,
+        [
+          reportId,
+          section.id,
+          String(section.number),
+          section.number,
+          section.title,
+        ],
+      );
+    }
+  }
+
   async list(projectId: string, filters: ListResultsDto = {}) {
     const values: unknown[] = [projectId];
     const clauses = ['project_id=$1'];
@@ -89,6 +248,7 @@ export class ResultsService {
         [projectId, actor.userId],
       );
       const reportId = reports[0].id;
+      await this.ensureSections(client, projectId, reportId);
       const data = this.fields(body);
       const state = {
         status: 'draft',
@@ -184,6 +344,51 @@ export class ResultsService {
     });
   }
 
+  async assignSection(
+    projectId: string,
+    id: string,
+    body: AssignResultSectionDto,
+    actor: AuditActor,
+  ) {
+    return this.write(projectId, actor, async (client) => {
+      const previous = await this.find(client, projectId, id);
+      this.checkVersion(previous, body.expectedVersion);
+      const sectionId = body.reportSectionId;
+      await this.validateReferences(client, projectId, previous.report_id, {
+        report_section_id: sectionId,
+      });
+      if (sectionId === previous.report_section_id) return response(previous);
+      const placement =
+        previous.status === 'accepted'
+          ? sectionId
+            ? previous.placement === 'both'
+              ? 'both'
+              : 'main'
+            : 'unplaced'
+          : previous.placement;
+      this.validatePlacement({
+        ...previous,
+        report_section_id: sectionId,
+        placement,
+      });
+      const { rows } = await client.query(
+        `update result_object set report_section_id=$3,section_origin='human',placement=$4,
+         version=version+1,updated_at=now(),updated_by_user_id=$5
+         where id=$1 and project_id=$2 returning *`,
+        [id, projectId, sectionId, placement, actor.userId],
+      );
+      await this.record(client, projectId, actor, 'section-updated', rows[0], {
+        previousSectionId: previous.report_section_id,
+        reportSectionId: sectionId,
+        previousPlacement: previous.placement,
+        placement,
+        previousVersion: previous.version,
+        version: rows[0].version,
+      });
+      return response(rows[0]);
+    });
+  }
+
   async decide(
     projectId: string,
     id: string,
@@ -268,7 +473,10 @@ export class ResultsService {
       if (value !== undefined) data[column] = value;
     }
     // JSON keys can contain null bytes too; the shared DTO validator checks values.
-    if (body.content) this.validateJsonKeys(body.content);
+    if (body.content) {
+      this.validateJsonKeys(body.content);
+      validateFigureContent(body.content);
+    }
     return data;
   }
 
@@ -355,7 +563,7 @@ export class ResultsService {
     await this.audit.record(
       {
         projectId,
-        stepId: action === 'decision' ? 'report-review' : 'report-make',
+        stepId: 'study-results',
         type: `result.${action}`,
         entityType: 'result',
         entityId: row.id,

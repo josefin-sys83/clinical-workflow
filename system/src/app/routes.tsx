@@ -24,6 +24,12 @@ import AddendumPage from './pages/Addendum';
 import { AmendmentFormPage } from '@/modules/Amendmentform/pages/AmendmentFormPage';
 import { WorkflowStepGuard } from '@/shared/auth/WorkflowStepGuard';
 import { AuditTrailPage } from './pages/AuditTrailPage';
+import StudyResultsPage from '@/modules/StudyResults/StudyResultsPage';
+
+function StudyResultsKeyed() {
+  const { projectId } = useParams();
+  return <StudyResultsPage key={projectId} />;
+}
 
 function NotFound() {
   return (
@@ -91,6 +97,7 @@ export const router = createBrowserRouter([
       { path: 'projects/:projectId/workflow/protocol/review', element: <ProtocolReview /> },
       { path: 'projects/:projectId/workflow/protocol/pdf', element: <PdfProtocol /> },
       { path: 'projects/:projectId/workflow/protocol/amendment', element: <AmendmentFormPage /> },
+      { path: 'projects/:projectId/workflow/results', element: <StudyResultsKeyed /> },
       { path: 'projects/:projectId/workflow/report/make', element: <MakeReport /> },
       { path: 'projects/:projectId/workflow/report/review', element: <WorkflowStepGuard stepId="report-review"><ReportReview /></WorkflowStepGuard> },
       { path: 'projects/:projectId/workflow/report/pdf', element: <WorkflowStepGuard stepId="report-pdf"><PdfReport /></WorkflowStepGuard> },

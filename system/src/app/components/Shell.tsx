@@ -50,6 +50,8 @@ function shouldLockStep(args: {
   }, 0);
 
   if (index <= maxDoneIndex + 1) return false;
+  // Results are an ongoing workspace, not a completion gate for report authoring.
+  if (args.stepId === 'report-make' && index - 1 <= maxDoneIndex + 1) return false;
   return true;
 }
 
@@ -63,6 +65,7 @@ const STEP_ICONS: Record<string, React.ReactNode> = {
   'protocol-review': <Eye         className="w-4 h-4 flex-shrink-0" />,
   'protocol-pdf':  <FileCheck     className="w-4 h-4 flex-shrink-0" />,
   'report-make':   <FileText      className="w-4 h-4 flex-shrink-0" />,
+  'study-results': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
   'report-review': <Search        className="w-4 h-4 flex-shrink-0" />,
   'report-pdf':    <BarChart2     className="w-4 h-4 flex-shrink-0" />,
 };
@@ -72,6 +75,7 @@ const DOMAIN_LABELS: Partial<Record<string, string>> = {
   'project-setup':  'Project',
   'protocol-make':  'Protocol',
   'report-make':    'Report',
+  'study-results':  'Study Results',
 };
 
 export function Shell() {
@@ -253,6 +257,7 @@ export function Shell() {
               if (current?.id === 'report-make') {
                 window.dispatchEvent(new CustomEvent('report:refresh-analysis'));
               }
+              if (current?.id === 'study-results') window.dispatchEvent(new CustomEvent('results:refresh'));
             }}
             title="Refresh workflow status"
           >

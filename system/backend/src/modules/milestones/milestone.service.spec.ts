@@ -18,7 +18,7 @@ describe('MilestoneService advisory warnings', () => {
     expect(result.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'anchor_order' }),
     ]));
-    expect(result.milestones).toHaveLength(8);
+    expect(result.milestones).toHaveLength(9);
   });
 
   it('warns immediately when calculated intermediate deadlines are in the past', () => {
@@ -108,6 +108,14 @@ describe('MilestoneService advisory warnings', () => {
     expect(result.milestones.find(m => m.stepId === 'report-make')).toEqual(
       expect.objectContaining({ deadline: '2027-10-08', anchorLabel: 'Regulatory Submission' }),
     );
+    expect(result.milestones.find(m => m.stepId === 'study-results')).toEqual(
+      expect.objectContaining({
+        stepName: 'Study Results',
+        responsibleRole: 'Statistician',
+        deadline: '2027-10-01',
+        anchorLabel: 'Regulatory Submission',
+      }),
+    );
   });
 
   it('never places a report milestone before First Patient In', () => {
@@ -118,7 +126,9 @@ describe('MilestoneService advisory warnings', () => {
       regulatorySubmissionTarget: '2027-12-31',
     }), {}, now);
 
-    const reportMilestones = result.milestones.filter(m => m.stepId.startsWith('report-'));
+    const reportMilestones = result.milestones.filter(m =>
+      m.stepId === 'study-results' || m.stepId.startsWith('report-'),
+    );
     expect(reportMilestones.every(m => m.deadline !== null && m.deadline >= fpi)).toBe(true);
   });
 
@@ -130,6 +140,19 @@ describe('MilestoneService advisory warnings', () => {
 
     expect(result.milestones.find(m => m.stepId === 'report-make')).toEqual(
       expect.objectContaining({ deadline: '2027-10-08', anchorLabel: 'Regulatory Submission' }),
+    );
+    expect(result.milestones.find(m => m.stepId === 'study-results')).toEqual(
+      expect.objectContaining({ deadline: '2027-10-01', anchorLabel: 'Regulatory Submission' }),
+    );
+  });
+
+  it('uses the Study Results workflow state when calculating completion', () => {
+    const result = service.computeMilestones(project({
+      regulatorySubmissionTarget: '2027-12-31',
+    }), { 'study-results': 'approved' }, now);
+
+    expect(result.milestones.find(m => m.stepId === 'study-results')).toEqual(
+      expect.objectContaining({ status: 'complete' }),
     );
   });
 

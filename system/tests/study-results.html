@@ -1,0 +1,236 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Study Results browser checks</title><style>*, *::before, *::after { animation: none !important; transition: none !important; }</style></head><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import StudyResultsPage from '/src/modules/StudyResults/StudyResultsPage.tsx';
+import { summarizeResults } from '/src/modules/StudyResults/model.ts';
+import '/src/styles/index.css';
+
+const failures = [];
+window.addEventListener('error', event => failures.push(event.message));
+window.addEventListener('unhandledrejection', event => failures.push(String(event.reason)));
+const state = { results: [], supportingDocuments: [], sections: [], locked: false };
+const calls = [];
+let conflict = false;
+let sectionFailure = false;
+const figureDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN2kAAAAASUVORK5CYII=';
+const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+window.fetch = async (url, init = {}) => {
+  const path = String(url), method = init.method || 'GET'; calls.push([method, path]);
+  if (path.endsWith('/milestones')) return response({ complexity: 'low', complexityLabel: 'Low', complexityPoints: 0, warnings: [], milestones: [{ stepId: 'study-results', stepName: 'Study Results', responsibleRole: 'Statistician', responsibleName: 'Statistician', deadline: '2026-09-25', daysUntil: 6, status: 'urgent', anchorLabel: 'Regulatory Submission', anchorDate: '2027-01-01' }] });
+  if (path.endsWith('/workspace')) return response(state);
+  if (path.endsWith('/audit')) return response([]);
+  if (path.endsWith('/parse-table')) return response({ headers: ['Group', 'N'], rows: [['Treatment', '42']] }, 201);
+  if (path.endsWith('/preview')) {
+    const filename = init.body.get('file').name;
+    if (filename === 'broken.xlsx') return response({ message: 'This file could not be read. Try exporting it again or paste the table.' }, 400);
+    const range = row => ({ filename, rowStart: row, rowEnd: row, columnStart: 1, columnEnd: 2 });
+    return response({ drafts: [{ title: 'Imported safety data', type: 'table', content: {
+      headers: ['Event', 'N'], rows: [['Headache', '12'], ['Nausea', '2'], ['Pain', '1']],
+      provenance: { header: [range(1)], rows: [[range(2)], [range(3)], [range(4)]] },
+    }, sourceFilename: filename, sourceLocation: 'rows 1–4, columns 1–2' }], issues: ['Sheet Notes, rows 1–1: needs a header and at least one data row.'] }, 201);
+  }
+  if (path.endsWith('/supporting-documents') && method === 'POST') {
+    const file = init.body.get('file');
+    state.supportingDocuments.push({ id: 'support-1', type: init.body.get('type'), filename: file.name, description: '', sizeBytes: file.size, uploaderName: 'Real author', uploadedAt: new Date().toISOString() });
+    return response({ id: 'support-1' }, 201);
+  }
+  if (path.endsWith('/results') && method === 'POST') {
+    const body = JSON.parse(init.body);
+    const item = { ...body, id: `result-${state.results.length + 1}`, status: 'draft', version: 1, placement: 'unplaced', reportNumber: state.results.length + 1,
+      titleOrigin: 'human', descriptionOrigin: 'human', sectionOrigin: 'human', lastDecision: null };
+    state.results.push(item); state.sections = [{ id: 'section-1', title: 'Safety Analysis' }];
+    return response(item, 201);
+  }
+  if (path.endsWith('/decisions')) {
+    const body = JSON.parse(init.body);
+    const item = state.results.find(item => path.includes(`/${item.id}/`));
+    if (conflict) { conflict = false; item.version++; return response({ message: 'This result has changed. Reload it before saving.' }, 409); }
+    if (body.expectedVersion !== item.version) throw new Error('Stale expected version');
+    item.status = { accept: 'accepted', appendix: 'in-appendix', reject: 'rejected' }[body.decision];
+    item.placement = body.decision === 'appendix' ? 'appendix' : body.decision === 'accept' && item.reportSectionId ? (body.placement || 'main') : 'unplaced'; item.version++;
+    item.lastDecision = { decision: body.decision, reason: body.reason, userId: 'user-1', decidedAt: new Date().toISOString() };
+    return response(item);
+  }
+  if (path.endsWith('/section') && method === 'PATCH') {
+    const body = JSON.parse(init.body);
+    const item = state.results.find(item => path.includes(`/${item.id}/`));
+    if (sectionFailure) { sectionFailure = false; return response({ message: 'Section could not be saved' }, 500); }
+    if (body.expectedVersion !== item.version) return response({ message: 'This result has changed. Reload it before saving.' }, 409);
+    item.reportSectionId = body.reportSectionId;
+    item.sectionOrigin = 'human'; item.version++;
+    if (item.status === 'accepted') item.placement = body.reportSectionId ? 'main' : 'unplaced';
+    return response(item);
+  }
+  throw new Error(`Unexpected API request ${method} ${path}`);
+};
+const root = createRoot(document.getElementById('root'));
+const render = (key, roles = ['admin']) => root.render(React.createElement(MemoryRouter, { initialEntries: ['/projects/fixture/workflow/results'], key },
+  React.createElement(CurrentUserProvider, { user: { id: 'user-1', name: 'Author', email: 'a@example.test', roles }, status: 'ready' },
+    React.createElement(Routes, null, React.createElement(Route, { path: '/projects/:projectId/workflow/results', element: React.createElement(StudyResultsPage) })))));
+const wait = async (check, message) => { for (let i = 0; i < 250; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error(message); };
+const button = text => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === text);
+const setInput = (element, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, value); element.dispatchEvent(new Event('input', { bubbles: true })); };
+const setSelect = (element, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(element, value); element.dispatchEvent(new Event('change', { bubbles: true })); };
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const liveRegionIncludes = text => [...document.querySelectorAll('[aria-live="polite"]')]
+  .some(element => element.textContent.includes(text));
+const checkCounts = (expected) => {
+  const counts = [...document.querySelectorAll('[aria-live="polite"]')]
+    .map(element => element.textContent)
+    .find(text => text?.includes('Accepted'));
+  for (const [status, n] of Object.entries(expected)) assert(counts?.includes(`${n}${status}`), `Incorrect count ${status}: ${counts}`);
+};
+try {
+  assert(summarizeResults([]).percent === 0, 'Empty progress must be zero');
+  const mixed = summarizeResults([{ status: 'accepted', placement: 'both' }, { status: 'draft' }, { status: 'in-appendix' }, { status: 'rejected' }]);
+  assert(mixed.total === 4 && mixed.reviewed === 3 && mixed.percent === 75 && Object.values(mixed.counts).every(n => n === 1), 'Counts overlap or exclude a status');
+  render('first');
+  await wait(() => document.body.textContent.includes('No results yet'), 'Empty state missing');
+  assert(document.body.textContent.includes('Study Results must be completed by 2026-09-25'), 'Study Results milestone banner missing');
+  checkCounts({ 'Accepted': 0, 'Needing review': 0, 'In appendix': 0, 'Rejected': 0 });
+  const sapInput = [...document.querySelectorAll('input[type=file]')][0];
+  const transfer = new DataTransfer(); transfer.items.add(new File(['reference'], 'sap.txt', { type: 'text/plain' }));
+  sapInput.files = transfer.files; sapInput.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(() => document.body.textContent.includes('sap.txt'), 'SAP upload missing');
+  assert(state.results.length === 0, 'Attachment became a result');
+  assert(!calls.some(([, path]) => path.endsWith('/preview')), 'Supporting upload reached result parser');
+  button('Build manually').click();
+  await wait(() => document.querySelector('form'), 'Manual builder missing');
+  const form = document.querySelector('form');
+  setInput(form.querySelector('input'), 'Adverse events by treatment arm');
+  setInput(form.querySelector('[aria-label="Row 1 column 1"]'), 'Headache');
+  setInput(form.querySelector('[aria-label="Row 1 column 2"]'), '12');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await wait(() => state.results.length === 1 && button('Accept'), 'Manual save failed');
+  checkCounts({ 'Needing review': 1, 'Accepted': 0 });
+  button('Accept').click();
+  await wait(() => liveRegionIncludes('1Accepted'), 'Accept count did not update');
+  checkCounts({ 'Needing review': 0, 'Accepted': 1 });
+  await wait(() => button('Adverse events by treatment arm'), 'Final decision did not return to list');
+  button('Adverse events by treatment arm').click();
+  await wait(() => button('Appendix'), 'Cannot reopen reviewed result');
+  button('Appendix').click();
+  await wait(() => liveRegionIncludes('1In appendix'), 'Appendix count did not update');
+  await wait(() => button('Adverse events by treatment arm'), 'Appendix did not return to list');
+  button('Adverse events by treatment arm').click();
+  await wait(() => button('Reject'), 'Cannot reopen appendix result');
+  button('Reject').click();
+  await wait(() => liveRegionIncludes('1Rejected'), 'Rejected count did not update');
+  await wait(() => document.querySelector('#all-results'), 'Reject did not return to list');
+  assert(document.querySelector('#all-results tbody').textContent.includes('Adverse events'), 'Rejected result disappeared');
+  assert(document.querySelector('#all-results tbody').textContent.includes('Rejected'), 'Rejected badge missing');
+  button('Adverse events by treatment arm').click();
+  await wait(() => button('Accept'), 'Cannot reopen rejected result');
+  conflict = true; button('Accept').click();
+  await wait(() => document.querySelector('[role=alert]')?.textContent.includes('Reload'), 'Conflict not shown');
+  checkCounts({ 'Rejected': 1, 'Accepted': 0 });
+  state.locked = true; button('Refresh results').click();
+  await wait(() => document.body.textContent.includes('changes are locked'), 'Signed state missing');
+  assert(!button('Accept') && button('Build manually').disabled, 'Signed controls still editable');
+  state.locked = false; render('reviewer', ['reviewer']);
+  await wait(() => button('Accept'), 'Reviewer cannot decide');
+  assert(button('Build manually').disabled, 'Reviewer can author');
+  render('author', ['author']);
+  await wait(() => button('Paste table') && !button('Paste table').disabled, 'Author cannot add results');
+  assert(!button('Accept'), 'Author can record review decisions');
+  button('Paste table').click();
+  await wait(() => document.querySelector('form textarea'), 'Paste form missing');
+  const pasteForm = document.querySelector('form');
+  setInput(pasteForm.querySelector('input'), 'Pasted population');
+  assert(!pasteForm.querySelector('select').disabled, 'Pasted result type cannot be changed');
+  setSelect(pasteForm.querySelector('select'), 'figure');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(pasteForm.querySelector('textarea'), 'Group\tN\nTreatment\t42');
+  pasteForm.querySelector('textarea').dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  pasteForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await wait(() => state.results.length === 2 && !document.querySelector('form'), 'Pasted result not saved');
+  assert(state.results[1].type === 'figure', 'Selected pasted result type was not saved');
+  const resultFiles = document.querySelector('[aria-label="Upload result files"]');
+  const csvTransfer = new DataTransfer(); csvTransfer.items.add(new File(['Event,N\nHeadache,12'], 'safety.csv', { type: 'text/csv' }));
+  resultFiles.files = csvTransfer.files; resultFiles.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(() => document.querySelector('form')?.textContent.includes('Review imported result'), 'Upload preview missing');
+  assert(state.results.length === 2, 'Preview was saved without review');
+  assert(button('Enter missing result manually'), 'Manual fallback for a failed region missing');
+  setInput(document.querySelector('form input'), 'Edited import title');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  button('Split detection').click();
+  await wait(() => document.querySelectorAll('[aria-label="Import preview"] form').length === 2, 'Split did not create two drafts');
+  assert(state.results.length === 2, 'Splitting persisted results');
+  assert(document.querySelector('[aria-label="Import preview"] form input').value.includes('Edited import title'), 'Split lost title edits');
+  const boxes = document.querySelectorAll('[aria-label="Import preview"] input[type=checkbox]');
+  boxes[0].click(); boxes[2].click();
+  await wait(() => !button('Merge selected detections').disabled, 'Cannot select split drafts for merge');
+  button('Merge selected detections').click();
+  await wait(() => document.querySelectorAll('[aria-label="Import preview"] form').length === 1, 'Merge did not combine drafts');
+  assert(state.results.length === 2, 'Merging persisted results');
+  document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await wait(() => state.results.length === 3 && !document.querySelector('form'), 'Imported draft not saved');
+  assert(state.results[2].content.rows.length === 3, 'Merge lost data rows');
+  assert(state.results[2].content.provenance.rows.length === 3, 'Saved result lost original source ranges');
+  assert(state.results[2].sourceLocation.includes('rows 1–4'), 'Merged source summary is wrong');
+  const broken = new DataTransfer(); broken.items.add(new File(['bad'], 'broken.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  resultFiles.files = broken.files; resultFiles.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(() => document.body.textContent.includes('could not be read'), 'Unparseable file error missing');
+  button('Refresh results').click();
+  await wait(() => !button('Refresh results').disabled, 'Refresh stuck');
+  assert(document.body.textContent.includes('could not be read'), 'Refresh hid import failure');
+  assert(!document.body.textContent.includes('drafts imported.'), 'Failed import showed success notice');
+  button('Enter missing result manually').click();
+  await wait(() => document.querySelector('form')?.textContent.includes('Build a result'), 'Manual fallback did not open builder');
+  button('Cancel').click();
+  state.results.forEach(item => { item.status = 'draft'; item.placement = 'unplaced'; });
+  state.results[0].description = 'Existing description from the source';
+  state.results[0].descriptionOrigin = 'ai';
+  state.results[1].content = { image: { dataUrl: figureDataUrl, alt: 'ECG figure' } };
+  render('review-flow', ['reviewer']);
+  await wait(() => document.querySelector('[aria-label="Result review"]')?.textContent.includes('Item 1 of 3'), 'Review card missing');
+  assert(!document.querySelector('#all-results'), 'List should be a secondary view');
+  assert(!document.querySelector('#review-report-section').disabled, 'Reviewer cannot correct section');
+  button('View full size').click();
+  await wait(() => document.querySelector('[role="dialog"] table'), 'Full-size table missing');
+  assert(!document.querySelector('[role="dialog"] .max-h-96'), 'Full-size content still height-limited');
+  button('Close').click();
+  await wait(() => !document.querySelector('[role="dialog"]'), 'Cannot close full-size view');
+  sectionFailure = true;
+  setSelect(document.querySelector('#review-report-section'), 'section-1');
+  await wait(() => document.body.textContent.includes('Section could not be saved'), 'Section error missing');
+  assert(document.querySelector('#review-report-section').value === '', 'Failed section selection was displayed as saved');
+  setSelect(document.querySelector('#review-report-section'), 'section-1');
+  await wait(() => document.querySelector('#review-report-section').value === 'section-1', 'Inline section did not persist');
+  assert(state.results[0].description === 'Existing description from the source' && state.results[0].descriptionOrigin === 'ai', 'Section edit changed description or provenance');
+  button('Accept').click();
+  await wait(() => document.querySelector('[aria-label="Result review"]')?.textContent.includes('Item 2 of 3'), 'Accept did not advance');
+  assert(state.results[0].reportSectionId === 'section-1' && state.results[0].placement === 'main', 'Accept used wrong section');
+  await wait(() => document.querySelector('[aria-label="Result review"] img')?.complete && document.querySelector('[aria-label="Result review"] img')?.naturalWidth > 0, 'Figure did not render');
+  button('View full size').click();
+  await wait(() => document.querySelector('[role="dialog"] img'), 'Full-size figure missing');
+  document.querySelector('[role="dialog"] input[type="checkbox"]').click();
+  await wait(() => document.querySelector('[role="dialog"] img').classList.contains('max-w-none'), 'Original-size figure view missing');
+  button('Close').click();
+  await wait(() => !document.querySelector('[role="dialog"]'), 'Cannot close figure viewer');
+  document.querySelector('[aria-label="Previous result"]').click();
+  await wait(() => document.querySelector('[aria-label="Result review"]')?.textContent.includes('Item 1 of 3'), 'Previous navigation failed');
+  document.querySelector('[aria-label="Next result"]').click();
+  await wait(() => document.querySelector('[aria-label="Result review"]')?.textContent.includes('Item 2 of 3'), 'Next navigation failed');
+  conflict = true; button('Appendix').click();
+  await wait(() => document.querySelector('[role="alert"]')?.textContent.includes('Reload'), 'Conflict missing during sequential review');
+  assert(document.querySelector('[aria-label="Result review"]').textContent.includes('Item 2 of 3'), 'Conflict advanced review');
+  button('Appendix').click();
+  await wait(() => document.querySelector('[aria-label="Result review"]')?.textContent.includes('Item 3 of 3'), 'Appendix did not advance');
+  button('Reject').click();
+  await wait(() => document.querySelector('#all-results') && !document.querySelector('[aria-label="Result review"]'), 'Final decision did not return to list');
+  checkCounts({ 'Accepted': 1, 'In appendix': 1, 'Rejected': 1, 'Needing review': 0 });
+  assert(document.activeElement.id === 'all-results', 'End-of-review keyboard focus did not move to list');
+  button('Review results again').click();
+  await wait(() => button('View all 3 as a list'), 'Cannot restart review');
+  button('View all 3 as a list').click();
+  await wait(() => document.querySelector('#all-results'), 'Flat list link failed');
+  assert(failures.length === 0, failures.join('\n'));
+  document.getElementById('result').textContent = 'PASS: intake, split/merge, decisions, inline sections, description preservation, full-size table/figure, sequential review, conflicts, final list, locks, and permissions';
+} catch (error) { document.getElementById('result').textContent = `FAIL: ${error.message}\n${failures.join('\n')}`; }
+</script></body></html>

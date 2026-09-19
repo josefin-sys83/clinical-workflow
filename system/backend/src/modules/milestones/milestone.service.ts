@@ -37,6 +37,7 @@ export class MilestoneService {
     'protocol-make':   { name: 'Protocol Make',    role: 'Medical Writer' },
     'protocol-review': { name: 'Protocol Review',  role: 'Protocol Lead' },
     'protocol-pdf':    { name: 'Protocol PDF',     role: 'Principal Investigator' },
+    'study-results':   { name: 'Study Results',    role: 'Statistician' },
     'report-make':     { name: 'Report Make',      role: 'Medical Writer' },
     'report-review':   { name: 'Report Review',    role: 'Protocol Lead' },
     'report-pdf':      { name: 'Report PDF',       role: 'Principal Investigator' },
@@ -47,24 +48,28 @@ export class MilestoneService {
       'synopsis': 2, 'scope': 1, 'protocol-make': 6,
       'protocol-review': 1, 'protocol-pdf': 1,
       'ethics-review': 8,
+      'study-results': 1,
       'report-make': 10, 'report-review': 1, 'report-pdf': 1,
     },
     medium: {
       'synopsis': 3, 'scope': 1, 'protocol-make': 10,
       'protocol-review': 2, 'protocol-pdf': 1,
       'ethics-review': 10,
+      'study-results': 2,
       'report-make': 16, 'report-review': 2, 'report-pdf': 1,
     },
     high: {
       'synopsis': 4, 'scope': 2, 'protocol-make': 14,
       'protocol-review': 2, 'protocol-pdf': 1,
       'ethics-review': 12,
+      'study-results': 3,
       'report-make': 20, 'report-review': 2, 'report-pdf': 1,
     },
     very_high: {
       'synopsis': 5, 'scope': 2, 'protocol-make': 20,
       'protocol-review': 3, 'protocol-pdf': 2,
       'ethics-review': 16,
+      'study-results': 4,
       'report-make': 28, 'report-review': 3, 'report-pdf': 2,
     },
   };
@@ -221,9 +226,11 @@ export class MilestoneService {
       deadlines['report-review'] = clampToFirstPatientIn(d);
       d = this.subtractWeeks(d, leadTimes['report-make']);
       deadlines['report-make'] = clampToFirstPatientIn(d);
+      d = this.subtractWeeks(d, leadTimes['study-results']);
+      deadlines['study-results'] = clampToFirstPatientIn(d);
     }
 
-    const stepOrder = ['synopsis', 'scope', 'protocol-make', 'protocol-review', 'protocol-pdf', 'report-make', 'report-review', 'report-pdf'];
+    const stepOrder = ['synopsis', 'scope', 'protocol-make', 'protocol-review', 'protocol-pdf', 'study-results', 'report-make', 'report-review', 'report-pdf'];
 
     const milestones: MilestoneStatus[] = stepOrder.map(stepId => {
       const meta = this.STEP_META[stepId];

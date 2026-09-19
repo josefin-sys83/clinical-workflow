@@ -307,7 +307,7 @@ export function ProtocolDocument() {
   };
 
   const handleProceedToCIR = () => {
-    if (isProtocolApproved) navigate(`/projects/${projectId}/workflow/report/make`);
+    if (isProtocolApproved) navigate(`/projects/${projectId}/workflow/results`);
   };
 
   const handleReturnToReview = () => {
@@ -691,7 +691,7 @@ export function ProtocolDocument() {
                       disabled={!isProtocolApproved}
                       style={{ cursor: isProtocolApproved ? 'pointer' : 'not-allowed', background: isProtocolApproved ? '#4f46e5' : '#e5e7eb', color: isProtocolApproved ? '#fff' : '#9ca3af', border: 'none', borderRadius: '6px', padding: '14px 28px', fontSize: '14px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'inherit' }}
                     >
-                      Proceed to Clinical Investigation Report
+                      Proceed to Study Results
                     </button>
                   )}
                 </div>

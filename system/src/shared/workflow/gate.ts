@@ -13,6 +13,7 @@ export const WORKFLOW_STEP_ORDER: WorkflowStepId[] = [
   'protocol-make',
   'protocol-review',
   'protocol-pdf',
+  'study-results',
   'report-make',
   'report-review',
   'report-pdf',
@@ -23,6 +24,12 @@ const DONE_STATES = new Set(['approved', 'signed', 'final']);
 export function isStepUnlocked(stepId: WorkflowStepId, steps: WorkflowSnapshot['steps'] | undefined): boolean {
   const index = WORKFLOW_STEP_ORDER.indexOf(stepId);
   if (index <= 0) return true; // project-setup (or anything unrecognized) is always reachable
+  // Study Results is a soft gate: report authoring needs the signed protocol, but
+  // does not require Study Results itself to be completed.
+  if (stepId === 'report-make') {
+    const protocolState = steps?.['protocol-pdf']?.state;
+    return !!protocolState && DONE_STATES.has(protocolState);
+  }
   const previousStep = WORKFLOW_STEP_ORDER[index - 1];
   const state = steps?.[previousStep]?.state;
   return !!state && DONE_STATES.has(state);
@@ -47,6 +54,7 @@ export function stepPath(stepId: WorkflowStepId, projectId: string): string {
     case 'protocol-make': return `/projects/${projectId}/workflow/protocol/make`;
     case 'protocol-review': return `/projects/${projectId}/workflow/protocol/review`;
     case 'protocol-pdf': return `/projects/${projectId}/workflow/protocol/pdf`;
+    case 'study-results': return `/projects/${projectId}/workflow/results`;
     case 'report-make': return `/projects/${projectId}/workflow/report/make`;
     case 'report-review': return `/projects/${projectId}/workflow/report/review`;
     case 'report-pdf': return `/projects/${projectId}/workflow/report/pdf`;

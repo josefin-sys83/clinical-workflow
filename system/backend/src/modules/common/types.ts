@@ -6,6 +6,7 @@ export type WorkflowStepId =
   | 'protocol-make'
   | 'protocol-review'
   | 'protocol-pdf'
+  | 'study-results'
   | 'report-make'
   | 'report-review'
   | 'report-pdf';
