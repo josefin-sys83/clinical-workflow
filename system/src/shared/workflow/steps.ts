@@ -16,6 +16,8 @@ export const WORKFLOW_STEPS: WorkflowStepDefinition[] = [
   { id: 'protocol-review', label: 'Protocol Review', path: 'protocol/review', domain: 'protocol' },
   { id: 'protocol-pdf', label: 'PDF Protocol', path: 'protocol/pdf', domain: 'protocol' },
 
+  { id: 'study-results', label: 'Study Results', path: 'results', domain: 'report' },
+
   { id: 'report-make', label: 'Make Report', path: 'report/make', domain: 'report' },
   { id: 'report-review', label: 'Report Review', path: 'report/review', domain: 'report' },
   { id: 'report-pdf', label: 'PDF Report', path: 'report/pdf', domain: 'report' },

@@ -11,6 +11,7 @@ export function WorkflowProgressIndicator({ currentStep}: WorkflowProgressIndica
     { id: 'protocol-authoring', label: 'Protocol authoring' },
     { id: 'protocol-review', label: 'Protocol review' },
     { id: 'protocol-approval', label: 'Protocol approval' },
+    { id: 'study-results', label: 'Study results' },
     { id: 'report-authoring', label: 'Report authoring' },
     { id: 'report-review', label: 'Report review' },
     { id: 'report-approval', label: 'Report approval' },

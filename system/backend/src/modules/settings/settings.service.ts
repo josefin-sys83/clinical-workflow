@@ -7,6 +7,7 @@ import { AuditService, type AuditActor } from '../audit/audit.service';
 const STEP_ORDER = [
   'project-setup', 'synopsis', 'scope',
   'protocol-make', 'protocol-review', 'protocol-pdf',
+  'study-results',
   'report-make', 'report-review', 'report-pdf',
 ];
 const DONE = new Set(['approved', 'signed', 'finalized', 'final']);

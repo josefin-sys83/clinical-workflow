@@ -92,7 +92,7 @@ export function ProjectView() {
               unlocks the next once its requirements are met.
             </p>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 mb-5">
-              {['Setup', 'Synopsis', 'Scope', 'Protocol', 'Report'].map((label, i, arr) => (
+              {['Setup', 'Synopsis', 'Scope', 'Protocol', 'Study Results', 'Report'].map((label, i, arr) => (
                 <span key={label} className="flex items-center gap-2">
                   <span className="px-2 py-1 bg-gray-100 rounded">{label}</span>
                   {i < arr.length - 1 && <span aria-hidden="true">→</span>}

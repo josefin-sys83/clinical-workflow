@@ -10,7 +10,7 @@ interface ProjectCardProps {
 
 
 const PROTOCOL_STEPS = ['synopsis', 'scope', 'protocol-make', 'protocol-review', 'protocol-pdf'];
-const REPORT_STEPS = ['report-make', 'report-review', 'report-pdf'];
+const REPORT_STEPS = ['study-results', 'report-make', 'report-review', 'report-pdf'];
 
 function MilestoneTimeline({ projectId }: { projectId: string }) {
   const { milestones, loading } = useMilestones(projectId);

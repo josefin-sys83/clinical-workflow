@@ -55,6 +55,7 @@ const STEP_LABELS: Record<string, string> = {
   'protocol-make':   'Make Protocol',
   'protocol-review': 'Protocol Review',
   'protocol-pdf':    'Protocol PDF',
+  'study-results':   'Study Results',
   'report-make':     'Make Report',
   'report-review':   'Report Review',
   'report-pdf':      'Report PDF',

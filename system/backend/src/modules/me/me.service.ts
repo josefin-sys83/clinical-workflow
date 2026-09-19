@@ -27,6 +27,7 @@ const ROLE_STEP_ACTIONS: Record<string, Record<string, ActionDef>> = {
   },
   'Statistician': {
     'protocol-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Protocol', description: 'Protocol requires your statistical review' },
+    'study-results': { action: 'Input needed', actionType: 'input', document: 'Study Results', description: 'Study results require entry and review' },
     'report-review': { action: 'Review', actionType: 'review', document: 'Clinical Investigation Report', description: 'Report requires your statistical review' },
   },
   'Regulatory Affairs': {
@@ -53,6 +54,7 @@ const STEP_PATHS: Record<string, string> = {
   'protocol-make': 'protocol/make',
   'protocol-review': 'protocol/review',
   'protocol-pdf': 'protocol/pdf',
+  'study-results': 'results',
   'report-make': 'report/make',
   'report-review': 'report/review',
   'report-pdf': 'report/pdf',
