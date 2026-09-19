@@ -136,11 +136,23 @@ export class ResultDecisionDto {
 
   @ApiPropertyOptional({
     enum: ['main', 'both'],
-    description: 'For accept only; defaults to main when a section is assigned, otherwise unplaced.',
+    description:
+      'For accept only; defaults to main when a section is assigned, otherwise unplaced.',
   })
   @ValidateIf((_o, v) => v !== undefined)
   @IsIn(['main', 'both'])
   placement?: 'main' | 'both';
+}
+
+// Reviewers may correct placement without gaining permission to edit evidence.
+export class AssignResultSectionDto {
+  @IsInt()
+  @Min(1)
+  expectedVersion!: number;
+
+  @ValidateIf((_o, value) => value !== null)
+  @IsUUID()
+  reportSectionId!: string | null;
 }
 
 export class ListResultsDto {
@@ -163,4 +175,22 @@ export class ListResultsDto {
   @IsOptional()
   @IsIn(['main', 'appendix'])
   view?: 'main' | 'appendix';
+}
+
+export class SupportingDocumentDto {
+  @IsIn(['sap', 'tfl'])
+  type!: 'sap' | 'tfl';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  @NoNullBytes()
+  description?: string;
+}
+
+export class ParseTableDto {
+  @IsString()
+  @MaxLength(2000000)
+  @NoNullBytes()
+  text!: string;
 }
