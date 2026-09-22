@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate, useParams, useBlocker } from 'react-router-dom';
 import { Lock, CheckCircle2, Circle, Info, X, UserPlus, History, AlertCircle } from 'lucide-react';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
-import { AuditLog } from '../components/AuditLog';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { LockedStateContainer } from '../components/LockedStateContainer';
 import { PersonAutocomplete } from '../components/PersonAutocomplete';
@@ -14,7 +13,6 @@ import { getMandatoryStandards } from '@/shared/workflow/mandatoryStandards';
 import { INTENDED_USE_OPTIONS, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { theme } from '@/app/theme';
 import type { MilestoneWarning } from '@/shared/hooks/useMilestones';
-import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 
 interface Role {
   title: string;
@@ -40,17 +38,6 @@ interface ProjectData {
   ethicsSubmissionTarget: string;
   firstPatientInTarget: string;
   regulatorySubmissionTarget: string;
-}
-
-interface AuditLogEntry {
-  id: string;
-  domain: 'Project' | 'Role' | 'Scope' | 'Requirement' | 'Content' | 'Review' | 'Approval';
-  timestamp: string;
-  action: string;
-  userBy: string;
-  userEmail: string;
-  details?: string;
-  newValue?: string;
 }
 
 interface Market {
@@ -84,9 +71,6 @@ export function ProjectSetupPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
   const isNew = projectId === 'new' || !projectId;
-  const { user: sessionUser } = useCurrentUser();
-  const currentUser = sessionUser?.name || sessionUser?.email || 'Authenticated user';
-  const currentUserEmail = sessionUser?.email || '';
 
   const [projectNumber, setProjectNumber] = useState<string>('');
   const [projectData, setProjectData] = useState<ProjectData>({
@@ -113,20 +97,13 @@ export function ProjectSetupPage() {
   const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [hoveredRole, setHoveredRole] = useState<number | null>(null);
   const [tooltipField, setTooltipField] = useState<string | null>(null);
-  const [auditTrail, setAuditTrail] = useState<AuditLogEntry[]>([]);
-  const [isAuditTrailOpen, setIsAuditTrailOpen] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [timelineWarnings, setTimelineWarnings] = useState<MilestoneWarning[]>([]);
   const [estimatedComplexity, setEstimatedComplexity] = useState<{ label: string; points: number }>({ label: 'Low', points: 0 });
   const [synopsisForComplexity, setSynopsisForComplexity] = useState<Record<string, any>>({});
-  const previousProjectDataRef = useRef<ProjectData>(projectData);
-  const previousRolesRef = useRef<Role[]>(roles);
-  const isInitialMount = useRef(true);
-  // Snapshot of the last-saved-to-server state, used purely to detect unsaved edits (see
-  // the unsaved-changes navigation guard below) — distinct from previousProjectDataRef/
-  // previousRolesRef above, which track the previous *local* value for audit-log diffing.
+  // Snapshot of the last saved state for the unsaved changes navigation guard.
   const [savedSnapshot, setSavedSnapshot] = useState<{ projectData: ProjectData; roles: Role[] } | null>(null);
   const isDirty = savedSnapshot !== null && (
     JSON.stringify(projectData) !== JSON.stringify(savedSnapshot.projectData) ||
@@ -183,27 +160,6 @@ export function ProjectSetupPage() {
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) => isDirty && currentLocation.pathname !== nextLocation.pathname
   );
-
-  const logAudit = (entry: Omit<AuditLogEntry, 'id' | 'timestamp' | 'userBy' | 'userEmail'>) => {
-    const now = new Date();
-    const formattedTimestamp = `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    setAuditTrail(prev => [...prev, { ...entry, id: `audit-${Date.now()}`, timestamp: formattedTimestamp, userBy: currentUser, userEmail: currentUserEmail }]);
-  };
-
-  useEffect(() => {
-    logAudit({ domain: 'Project', action: `Project ${projectId} created and Project Setup initiated`, details: 'New clinical investigation protocol created' });
-    isInitialMount.current = false;
-  }, []);
-
-  useEffect(() => {
-    if (isInitialMount.current) return;
-    previousProjectDataRef.current = projectData;
-  }, [projectData]);
-
-  useEffect(() => {
-    if (isInitialMount.current) return;
-    previousRolesRef.current = roles;
-  }, [roles]);
 
   useEffect(() => {
     const intendedUseComplete = projectData.intendedUse !== '' && (
@@ -364,19 +320,6 @@ export function ProjectSetupPage() {
     }));
   };
 
-  const handleExportAuditTrail = () => {
-    const exportData = { projectId, exportDate: new Date().toISOString(), entries: auditTrail };
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `audit-trail-${projectId}-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   const identityComplete = projectData.projectName.trim() !== '' && projectData.sponsor.trim() !== '' && projectData.deviceName.trim() !== '' && projectData.risk !== '' && projectData.targetMarkets.length > 0;
   const projectManagerAssigned = roles[0].status === 'assigned';
   const allRolesAssigned = roles.every(role => role.status === 'assigned');
@@ -451,7 +394,6 @@ export function ProjectSetupPage() {
       if (current < 2) localStorage.setItem(`maxStep_${projectId}`, '2');
       navigate(`/projects/${projectId}/workflow/synopsis`);
 
-      logAudit({ domain: 'Approval', action: 'Project Setup completed successfully', details: 'All requirements met. Unlocking Synopsis phase.' });
 
     } catch (e: any) {
       console.error('Failed to save project', e);
@@ -876,7 +818,6 @@ export function ProjectSetupPage() {
         </div>{/* end protocolFinalized overlay */}
       </main>
 
-      <AuditLog entries={auditTrail} onExport={handleExportAuditTrail} isOpen={isAuditTrailOpen} onToggle={() => setIsAuditTrailOpen(!isAuditTrailOpen)} />
 
       {blocker.state === 'blocked' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

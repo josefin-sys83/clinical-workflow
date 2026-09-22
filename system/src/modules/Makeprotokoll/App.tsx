@@ -36,7 +36,6 @@ export default function App() {
   const [showReviewConfirmation, setShowReviewConfirmation] = useState<boolean>(false);
   const [issueFilter, setIssueFilter] = useState<'my-issues' | 'all-issues'>('my-issues');
   const { user: sessionUser } = useCurrentUser();
-  const [showAuditLog, setShowAuditLog] = useState<boolean>(false);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mainContentRef = useRef<HTMLDivElement | null>(null);
 

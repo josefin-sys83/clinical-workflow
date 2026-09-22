@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Lock, MessageSquare, History, ChevronUp } from 'lucide-react';
 import { SectionGuidanceBlock } from './section-guidance-block';
 import { ProtocolTextEditor } from './protocol-text-editor';
-import { AuditHistoryModal } from './audit-history-modal';
+import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { SectionCommentsPanel } from './section-comments-panel';
 import { UnlockAmendmentModal } from './unlock-amendment-modal';
 import { ConflictResolutionPanel } from './conflict-resolution-panel';
@@ -639,36 +639,7 @@ export function ProtocolSection({ section, reviewMode, onToggle, onResolveConfli
         </div>
       )}
 
-      {/* Audit History Modal */}
-      {showAuditHistory && (
-        <AuditHistoryModal
-          sectionNumber={section.number}
-          sectionTitle={section.title}
-          entries={[
-            {
-              id: 'a1',
-              timestamp: 'Feb 5, 2026 at 09:23 CET',
-              action: 'Section created from approved Synopsis',
-              actionType: 'edit',
-              user: section.ownerName,
-              userRole: section.owner,
-              details: `Initial protocol content generated from Synopsis`,
-              versionId: '4.0.1'
-            },
-            {
-              id: 'a2',
-              timestamp: 'Feb 4, 2026 at 14:15 CET',
-              action: 'AI consistency check completed',
-              actionType: 'ai_check',
-              user: 'System',
-              userRole: 'Automated Process',
-              details: 'Verified alignment with Synopsis',
-              versionId: '4.0.1'
-            }
-          ]}
-          onClose={() => setShowAuditHistory(false)}
-        />
-      )}
+      <AuditTrailModal open={showAuditHistory} onOpenChange={setShowAuditHistory} />
 
       {/* Section Comments Panel */}
       {showComments && (

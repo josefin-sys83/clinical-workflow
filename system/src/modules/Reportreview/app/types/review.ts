@@ -66,14 +66,3 @@ export interface AIFinding {
   description: string;
   dismissed: boolean;
 }
-
-export interface AuditEntry {
-  id: string;
-  domain: 'Project' | 'Role' | 'Scope' | 'Requirement' | 'Content' | 'Review' | 'Approval';
-  timestamp: string; // Format: MM/DD/YYYY HH:MM
-  action: string; // Primary action description
-  userBy: string; // Full name
-  userEmail: string;
-  details?: string; // Optional details line
-  newValue?: string; // Optional "New:" value line
-}

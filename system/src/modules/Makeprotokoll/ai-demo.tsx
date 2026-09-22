@@ -156,12 +156,12 @@ export default function AIAssistedProtocolDemo() {
 
   const handleAcceptSuggestion = (id: string) => {
     console.log('Accepted suggestion:', id);
-    alert(`Suggestion "${id}" accepted. In production, this would:\n1. Log the action to audit trail\n2. Insert suggested text at cursor or marked location\n3. Mark as "user-edited" (AI marker removed)\n4. Create a new version entry`);
+    alert(`Suggestion "${id}" accepted. In production, this would:\nInsert suggested text at cursor or marked location and mark as user-edited`);
   };
 
   const handleDismissSuggestion = (id: string) => {
     console.log('Dismissed suggestion:', id);
-    alert(`Suggestion "${id}" dismissed. In production, this would:\n1. Log dismissal to audit trail\n2. Remove suggestion from active list\n3. Record user decision for future reference`);
+    alert(`Suggestion "${id}" dismissed. In production, this would:\nRemove suggestion from active list`);
   };
 
   return (
@@ -312,33 +312,6 @@ export default function AIAssistedProtocolDemo() {
                 </ul>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Audit Trail */}
-        <div className="bg-white border border-slate-200 rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-slate-900 mb-4">
-            6. Complete Audit Trail
-          </h2>
-          <p className="text-sm text-slate-600 mb-4">
-            All AI and human actions are fully logged for inspection readiness.
-          </p>
-          <div className="space-y-2 text-xs font-mono bg-slate-900 text-gray-400 p-4 rounded">
-            <div>[2026-02-07 10:15:42 CET] AI_SYSTEM: Draft generated for Section 4.5</div>
-            <div className="ml-4">└─ Sources: Synopsis v1.2, Intended Use v1.0, ISO 14155:2020</div>
-            <div className="ml-4">└─ Model: Protocol-AI-v2.3.1</div>
-            <div className="ml-4">└─ Status: Awaiting human review</div>
-            <div>[2026-02-07 10:30:18 CET] AI_SYSTEM: Consistency check completed</div>
-            <div className="ml-4">└─ Issue raised: Blocker #REF-4.5-001 (Sample size feasibility)</div>
-            <div>[2026-02-07 11:15:33 CET] USER: Dr. Marcus Rivera edited content</div>
-            <div className="ml-4">└─ Field: Inclusion Criteria</div>
-            <div className="ml-4">└─ Change: Added Heart Team consensus requirement</div>
-            <div className="ml-4">└─ AI marker removed (human ownership transferred)</div>
-            <div>[2026-02-07 11:16:05 CET] AI_SYSTEM: Suggestion generated</div>
-            <div className="ml-4">└─ Suggestion #S-4.5-003: Add criterion justifications</div>
-            <div>[2026-02-07 11:20:22 CET] USER: Dr. Marcus Rivera accepted suggestion</div>
-            <div className="ml-4">└─ Suggestion #S-4.5-003 applied (user-modified)</div>
-            <div className="ml-4">└─ Audit: User responsible for final content</div>
           </div>
         </div>
 

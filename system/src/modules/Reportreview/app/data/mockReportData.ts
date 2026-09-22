@@ -1,4 +1,4 @@
-import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding, AuditEntry } from '../types/review';
+import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
 
 export const projectRoles = [
   { role: 'Project Manager', name: 'Dr. Sarah Chen' },
@@ -346,62 +346,5 @@ export const aiFindings: AIFinding[] = [
     type: 'conflict',
     description: 'Post-market surveillance mentioned but no protocol reference number provided',
     dismissed: false,
-  },
-];
-
-export const auditTrail: AuditEntry[] = [
-  {
-    id: 'audit-1',
-    domain: 'Review',
-    timestamp: '02/22/2026 08:45',
-    action: 'Risk accepted for Statistical Methodology blocker',
-    userBy: 'Dr. Sarah Chen',
-    userEmail: 'sarah.chen@medtech.com',
-    details: 'Missing confidence intervals in Table 2 primary analysis',
-  },
-  {
-    id: 'audit-2',
-    domain: 'Review',
-    timestamp: '02/21/2026 15:30',
-    action: 'Comment added to Section 4: Efficacy Results',
-    userBy: 'Dr. Emily Rodriguez',
-    userEmail: 'emily.rodriguez@medtech.com',
-    details: 'Please verify the statistical analysis methodology for subgroup analyses',
-  },
-  {
-    id: 'audit-3',
-    domain: 'Review',
-    timestamp: '02/21/2026 14:15',
-    action: 'Reply added to comment on Section 2',
-    userBy: 'Dr. James Chen',
-    userEmail: 'james.chen@medtech.com',
-    details: 'Confirmed with biostatistics team - approach is appropriate per SAP v1.2',
-  },
-  {
-    id: 'audit-4',
-    domain: 'Review',
-    timestamp: '02/21/2026 11:20',
-    action: 'Comment added to Section 2: Study Design & Methodology',
-    userBy: 'Dr. Sarah Mitchell',
-    userEmail: 'sarah.mitchell@medtech.com',
-    details: 'Randomization stratification needs clarification - which factors were used?',
-  },
-  {
-    id: 'audit-5',
-    domain: 'Review',
-    timestamp: '02/21/2026 09:45',
-    action: 'Risk accepted for Missing Data warning',
-    userBy: 'Dr. James Chen',
-    userEmail: 'james.chen@medtech.com',
-    details: 'Incomplete adverse event documentation in Section 5',
-  },
-  {
-    id: 'audit-6',
-    domain: 'Review',
-    timestamp: '02/20/2026 16:30',
-    action: 'Comment added to Section 3: Study Population & Demographics',
-    userBy: 'Dr. Emily Rodriguez',
-    userEmail: 'emily.rodriguez@medtech.com',
-    details: 'Demographics table looks good - baseline characteristics well balanced',
   },
 ];

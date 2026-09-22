@@ -52,14 +52,6 @@ export function eTMFPackagePanel({ protocolName, versionId, lastActivity }: eTMF
       lastUpdated: 'Feb 8, 2026 at 14:20 CET'
     },
     {
-      id: 'audit-summary',
-      name: 'Audit Trail Summary',
-      description: 'Complete audit trail of all protocol edits and reviews',
-      status: 'Ready',
-      category: 'Quality & Approvals',
-      lastUpdated: 'Feb 8, 2026 at 14:22 CET'
-    },
-    {
       id: 'deviation-log',
       name: 'Justified Deviations Log',
       description: 'Log of all justified deviations from Synopsis with rationale',
