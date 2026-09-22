@@ -1,4 +1,4 @@
-import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding, AuditEntry } from '../types/review';
+import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
 
 export const reportSections: ReportSection[] = [
   {
@@ -354,62 +354,5 @@ export const aiFindings: AIFinding[] = [
     type: 'conflict',
     description: 'Post-market surveillance mentioned but no protocol reference number provided',
     dismissed: false,
-  },
-];
-
-export const auditTrail: AuditEntry[] = [
-  {
-    id: 'audit-1',
-    domain: 'Review',
-    timestamp: new Date('2026-02-14T11:00:00'),
-    action: 'Added comment to Section 5',
-    userBy: 'Dr. James Chen',
-    userEmail: 'james.chen@medtech.com',
-    details: 'Safety Analysis - adverse event classification looks comprehensive',
-  },
-  {
-    id: 'audit-2',
-    domain: 'Review',
-    timestamp: new Date('2026-02-14T10:30:00'),
-    action: 'Replied to comment in Section 2',
-    userBy: 'Dr. Sarah Mitchell',
-    userEmail: 'sarah.mitchell@medtech.com',
-    details: 'Study Design & Methodology - SAP version reference needed',
-  },
-  {
-    id: 'audit-3',
-    domain: 'Review',
-    timestamp: new Date('2026-02-13T10:15:00'),
-    action: 'Added comment to Section 3',
-    userBy: 'Dr. James Chen',
-    userEmail: 'james.chen@medtech.com',
-    details: 'Study Population & Demographics - requested clarification on dropout analysis',
-  },
-  {
-    id: 'audit-4',
-    domain: 'Approval',
-    timestamp: new Date('2026-02-13T09:45:00'),
-    action: 'Accepted blocker risk',
-    userBy: 'Dr. James Chen',
-    userEmail: 'james.chen@medtech.com',
-    details: 'Missing confidence intervals for secondary endpoint analysis',
-  },
-  {
-    id: 'audit-5',
-    domain: 'Review',
-    timestamp: new Date('2026-02-13T09:20:00'),
-    action: 'Added comment to Section 3',
-    userBy: 'Dr. Emily Rodriguez',
-    userEmail: 'emily.rodriguez@medtech.com',
-    details: 'Study Population & Demographics - demographics table is clear',
-  },
-  {
-    id: 'audit-6',
-    domain: 'Review',
-    timestamp: new Date('2026-02-12T15:30:00'),
-    action: 'Replied to comment in Section 4',
-    userBy: 'Dr. Sarah Mitchell',
-    userEmail: 'sarah.mitchell@medtech.com',
-    details: 'Agreed on need for additional endpoint clarification',
   },
 ];

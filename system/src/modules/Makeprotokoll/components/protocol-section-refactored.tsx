@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban } from 'lucide-react';
-import { AuditTrailModal } from './audit-trail-modal';
+import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { InlineIssueMarker } from './inline-issue-marker';
 
 interface ProtocolIssue {
@@ -437,14 +437,7 @@ export const ProtocolSectionRefactored = React.forwardRef<HTMLDivElement, Protoc
         )}
       </div>
       
-      {/* Audit Trail Modal */}
-      <AuditTrailModal
-        isOpen={auditTrailOpen}
-        onClose={() => setAuditTrailOpen(false)}
-        sectionNumber={section.number}
-        sectionTitle={section.title}
-        entries={[]}
-      />
+      <AuditTrailModal open={auditTrailOpen} onOpenChange={setAuditTrailOpen} />
     </div>
   );
 });

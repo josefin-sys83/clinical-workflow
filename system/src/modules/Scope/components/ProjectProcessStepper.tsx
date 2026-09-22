@@ -1,6 +1,5 @@
 import { ChevronRight } from "lucide-react";
 import { cn } from "./ui/utils";
-import { AuditTrail, AuditEntry } from "./AuditTrail";
 
 type StepId =
   | "project-setup"
@@ -16,8 +15,6 @@ type StepState = "completed" | "current" | "upcoming" | "locked";
 interface ProjectProcessStepperProps {
   currentStepId: StepId;
   onStepClick?: (stepId: StepId) => void;
-  auditEntries?: AuditEntry[];
-  auditTitle?: string;
 }
 
 /**
@@ -36,8 +33,6 @@ interface ProjectProcessStepperProps {
 export function ProjectProcessStepper({
   currentStepId,
   onStepClick,
-  auditEntries = [],
-  auditTitle,
 }: ProjectProcessStepperProps) {
   // Static step definitions - NEVER CHANGE
   const STEPS: Array<{ id: StepId; label: string }> = [
@@ -136,12 +131,6 @@ export function ProjectProcessStepper({
             })}
           </div>
 
-          {/* Audit Trail - right side */}
-          {auditEntries.length > 0 && (
-            <div className="shrink-0">
-              <AuditTrail entries={auditEntries} title={auditTitle} />
-            </div>
-          )}
         </div>
       </div>
     </div>

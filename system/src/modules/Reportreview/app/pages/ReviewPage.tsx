@@ -5,7 +5,7 @@ import { ReviewHeader } from '../components/ReviewHeader';
 import { ReportContent } from '../components/ReportContent';
 import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
-import { AuditTrailModal } from '../components/AuditTrailModal';
+import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
@@ -31,7 +31,6 @@ export default function ReviewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [aiFindings, setAIFindings] = useState<any[]>([]);
   const [findings, setFindings] = useState<any[]>([]);
-  const [auditEntries, setAuditEntries] = useState<any[]>([]);
   const [approving, setApproving] = useState(false);
   const [showRequestChangesDialog, setShowRequestChangesDialog] = useState(false);
   const [requestChangesComment, setRequestChangesComment] = useState('');
@@ -162,19 +161,6 @@ export default function ReviewPage() {
             acceptedBy: currentReviewer.name,
             acceptedAt: new Date(),
           };
-
-          // Add audit trail entry
-          const now = new Date();
-          const auditEntry = {
-            id: `audit-${Date.now()}`,
-            domain: 'Review' as const,
-            timestamp: `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-            action: `${finding.severity === 'blocker' ? 'Blocker' : 'Warning'} risk accepted for ${finding.location}`,
-            userBy: currentReviewer.name,
-            userEmail: currentReviewer.email,
-            details: finding.description,
-          };
-          setAuditEntries((prev) => [auditEntry, ...prev]);
 
           return updatedFinding;
         }
@@ -326,11 +312,7 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      <AuditTrailModal
-        isOpen={showAuditTrail}
-        onClose={() => setShowAuditTrail(false)}
-        auditEntries={auditEntries}
-      />
+      <AuditTrailModal open={showAuditTrail} onOpenChange={setShowAuditTrail} />
 
       {showRequestChangesDialog && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>

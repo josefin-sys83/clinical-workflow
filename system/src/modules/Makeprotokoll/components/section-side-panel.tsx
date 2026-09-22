@@ -1,3 +1,4 @@
+import { AuditTrailButton } from '@/shared/components/AuditTrailButton';
 import React, { useState } from 'react';
 import { X, MessageSquare, AlertTriangle, Clock, CheckCircle, Edit, Lock, Unlock, User } from 'lucide-react';
 
@@ -18,15 +19,6 @@ interface Issue {
   title: string;
   description: string;
   location: string;
-}
-
-interface AuditEvent {
-  id: string;
-  timestamp: string;
-  user: string;
-  role: string;
-  action: string;
-  details?: string;
 }
 
 interface SectionSidePanelProps {
@@ -87,40 +79,7 @@ export function SectionSidePanel({ sectionTitle, sectionNumber, onClose }: Secti
     }
   ];
 
-  const auditEvents: AuditEvent[] = [
-    {
-      id: 'a1',
-      timestamp: 'Feb 4, 2026 at 09:23 CET',
-      user: 'Emma Rodriguez',
-      role: 'Medical Writer',
-      action: 'Edited content',
-      details: 'Updated primary objective definition'
-    },
-    {
-      id: 'a2',
-      timestamp: 'Feb 4, 2026 at 08:15 CET',
-      user: 'Dr. James Patterson',
-      role: 'Clinical Lead',
-      action: 'Added comment',
-      details: 'Requested clarification on endpoint definition'
-    },
-    {
-      id: 'a3',
-      timestamp: 'Feb 3, 2026 at 14:22 CET',
-      user: 'System (AI)',
-      role: 'Automated',
-      action: 'Generated initial draft',
-      details: 'AI pre-filled content based on Synopsis § 2.1 and Gate 3 Intended Use'
-    },
-    {
-      id: 'a4',
-      timestamp: 'Feb 3, 2026 at 14:20 CET',
-      user: 'Dr. Sarah Chen',
-      role: 'Project Manager',
-      action: 'Section created',
-      details: 'Initialized section structure'
-    }
-  ];
+
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -338,72 +297,9 @@ export function SectionSidePanel({ sectionTitle, sectionNumber, onClose }: Secti
           </div>
         )}
 
-        {/* Audit Tab */}
-        {activeTab === 'audit' && (
-          <div className="space-y-3">
-            <div className="mb-4">
-              <h3 className="text-sm font-semibold text-slate-900 mb-1">Audit Trail</h3>
-              <p className="text-xs text-slate-600">
-                Complete history of all actions on this section
-              </p>
-            </div>
-
-            <div className="relative">
-              {/* Timeline line */}
-              <div className="absolute left-[15px] top-2 bottom-2 w-px bg-slate-200" />
-
-              {/* Events */}
-              <div className="space-y-4">
-                {auditEvents.map((event, index) => (
-                  <div key={event.id} className="relative pl-9">
-                    {/* Timeline dot */}
-                    <div className="absolute left-0 top-1 w-[30px] h-[30px] bg-white border-2 border-slate-300 rounded-full flex items-center justify-center">
-                      {event.action.includes('Edit') && <Edit className="w-3.5 h-3.5 text-slate-600" />}
-                      {event.action.includes('comment') && <MessageSquare className="w-3.5 h-3.5 text-blue-600" />}
-                      {event.action.includes('Generated') && <div className="w-2 h-2 bg-blue-600 rounded-full" />}
-                      {event.action.includes('created') && <User className="w-3.5 h-3.5 text-indigo-600" />}
-                      {event.action.includes('Approved') && <CheckCircle className="w-3.5 h-3.5 text-blue-600" />}
-                      {event.action.includes('Locked') && <Lock className="w-3.5 h-3.5 text-slate-600" />}
-                      {event.action.includes('Unlocked') && <Unlock className="w-3.5 h-3.5 text-amber-600" />}
-                    </div>
-
-                    <div className="pb-4">
-                      <div className="text-xs text-slate-500 mb-1">
-                        {event.timestamp}
-                      </div>
-                      <div className="text-sm font-medium text-slate-900 mb-0.5">
-                        {event.action}
-                      </div>
-                      <div className="text-xs text-slate-600 mb-1">
-                        by <span className="font-medium">{event.user}</span> ({event.role})
-                      </div>
-                      {event.details && (
-                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                          {event.details}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        {activeTab === 'audit' && <AuditTrailButton />}
       </div>
 
-      {/* Footer */}
-      <div className="px-5 py-3 border-t border-slate-200 bg-slate-50">
-        <div className="text-xs text-slate-600 space-y-1">
-          <div className="flex justify-between">
-            <span>Last modified:</span>
-            <span className="font-medium text-slate-900">Feb 4, 2026 at 09:23 CET</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Modified by:</span>
-            <span className="font-medium text-slate-900">Emma Rodriguez (Medical Writer)</span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
