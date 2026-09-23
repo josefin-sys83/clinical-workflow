@@ -1,4 +1,4 @@
-import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -22,12 +22,15 @@ import { Roles } from '../auth/roles.decorator';
 import { PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
 import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
+import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
 @ApiTags('protocols')
 @Controller('/api/projects')
 export class ProtocolsController {
+  private readonly logger = new Logger(ProtocolsController.name);
+
   constructor(
     private readonly projects: ProjectsService,
     private readonly protocols: ProtocolsService,
@@ -73,28 +76,23 @@ export class ProtocolsController {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     await this.documentWorkflow.assertProtocolPrerequisites(projectId);
     const project = await this.projects.get(projectId);
-    // Project Setup stores the authoritative title in the relational/top-level `name`
-    // field and intentionally omits `projectName` from data.projectData. Enrich the AI
-    // input here so protocol generation does not fall back to "[Study Title]".
-    const projectData = {
-      ...(project?.data?.projectData || {}),
-      projectName: project.name,
-    };
+    const { aiProjectData, scope, intendedUse } = buildProjectGenerationContext(project);
     const roles = project.roles || [];
-    const scope = project?.data?.scope || {};
     const synopsisData = project?.data?.synopsis || {};
     const synopsisText = synopsisData.extractedText ||
       (synopsisData.readinessChecklist?.map((i: any) => i.reason).filter(Boolean).join(' ') ?? '');
-    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
-    const deviceCategory = project.deviceCategory || '';
-    const intendedUse = scope?.intendedUse || '';
+    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const deviceCategory = aiProjectData.deviceCategory;
 
     const progressKey = `protocol:${projectId}`;
     let protocol: any;
     try {
       this.generationProgress.start(progressKey, PROTOCOL_SECTION_TITLES.length);
+      this.logger.log(buildGenerationMetadataLog(
+        'protocol', projectId, aiProjectData, scope, roles,
+      ));
       protocol = await this.ai.generateProtocol(
-        projectData, roles, synopsisText, scope,
+        aiProjectData, roles, synopsisText, scope,
         (title) => this.generationProgress.increment(progressKey, title),
       );
     } catch (err) {
@@ -199,9 +197,9 @@ export class ProtocolsController {
   }
 
   private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined) {
-    const targetMarkets = project?.targetMarkets?.length > 0 ? project.targetMarkets : ['EU'];
-    const deviceCategory = project?.deviceCategory || '';
-    const intendedUse = project?.data?.scope?.intendedUse || '';
+    const { aiProjectData, intendedUse } = buildProjectGenerationContext(project);
+    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const deviceCategory = aiProjectData.deviceCategory;
 
     const protocol = project?.data?.protocol || {};
     const section = (protocol.sections || []).find((s: any) => s.title === sectionTitle || s.id === sectionId);

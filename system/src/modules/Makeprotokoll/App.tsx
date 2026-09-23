@@ -113,6 +113,35 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const protocolLoadInFlightRef = useRef<string | null>(null);
 
+  const generateProtocolFromSavedProject = React.useCallback(() => {
+    if (!projectId) return Promise.resolve();
+
+    setProtocolError(null);
+    setGeneratingProtocol(true);
+    return apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
+      .then(result => {
+        if (!result?.sections?.length) throw new Error('Protocol generation returned no sections');
+        setProtocol(result);
+        setExpandedSections(result.sections.map((section: any) => section.id));
+        setSectionAnalysisStatus({});
+        setSectionAnalysisError({});
+        result.sections.forEach((section: any) => {
+          if (section.content) analyzeSectionWithAI(section.title, section.content, section.id);
+        });
+        runSynopsisConsistencyCheck();
+      })
+      .catch((err: any) => {
+        console.error('Protocol generation failed', err);
+        setProtocolError(apiErrorMessage(
+          err,
+          err instanceof Error ? err.message : 'Protocol generation failed. Please try again.',
+        ));
+      })
+      .finally(() => {
+        setGeneratingProtocol(false);
+      });
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadOrGenerateProtocol = React.useCallback((generateIfMissing = !import.meta.env.DEV) => {
     if (!projectId) return;
     // Guards against duplicate concurrent generation runs (e.g. React StrictMode's
@@ -156,28 +185,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
             clearInFlight();
             return;
           }
-          setGeneratingProtocol(true);
-          apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
-            .then(result => {
-              if (!result?.sections?.length) throw new Error('Protocol generation returned no sections');
-              setProtocol(result);
-              setExpandedSections(result.sections.map((section: any) => section.id));
-              result.sections?.forEach((s: any) => {
-                if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
-              });
-              runSynopsisConsistencyCheck();
-            })
-            .catch((err: any) => {
-              console.error('Protocol generation failed', err);
-              setProtocolError(apiErrorMessage(
-                err,
-                err instanceof Error ? err.message : 'Protocol generation failed. Please try again.',
-              ));
-            })
-            .finally(() => {
-              setGeneratingProtocol(false);
-              clearInFlight();
-            });
+          void generateProtocolFromSavedProject().finally(clearInFlight);
         }
       })
       .catch((err: any) => {
@@ -186,7 +194,21 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         setCheckingProtocol(false);
         clearInFlight();
       });
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, generateProtocolFromSavedProject]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRegenerateProtocol = React.useCallback(() => {
+    if (!projectId || protocolLoadInFlightRef.current === projectId) return;
+    const confirmed = window.confirm(
+      'Regenerate this protocol from the latest saved project setup and scope? This replaces the current draft sections.',
+    );
+    if (!confirmed) return;
+
+    protocolLoadInFlightRef.current = projectId;
+    setCheckingProtocol(false);
+    void generateProtocolFromSavedProject().finally(() => {
+      if (protocolLoadInFlightRef.current === projectId) protocolLoadInFlightRef.current = null;
+    });
+  }, [projectId, generateProtocolFromSavedProject]);
 
   // Polls real backend progress ("3 of 9 sections done") while a protocol generation
   // run is in flight, so the spinner shown below can say something more useful than a
@@ -876,6 +898,18 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                 <div className="mb-6">
                   <div className="flex items-start justify-between gap-4 mb-1">
                     <h2 className="text-lg font-semibold text-slate-900">Protocol Sections</h2>
+                    {protocolSections.length > 0 &&
+                      !protocolFinalized &&
+                      snapshot?.steps?.['protocol-pdf']?.state !== 'signed' &&
+                      snapshot?.steps?.['protocol-pdf']?.state !== 'final' && (
+                      <button
+                        onClick={handleRegenerateProtocol}
+                        disabled={generatingProtocol || checkingProtocol}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 disabled:cursor-not-allowed text-white text-xs rounded transition-colors flex-shrink-0"
+                      >
+                        {generatingProtocol ? 'Regenerating…' : 'Regenerate Protocol'}
+                      </button>
+                    )}
                     {snapshot?.steps?.['protocol-pdf']?.state === 'final' && (
                       <button
                         onClick={() => setShowAmendmentModal(true)}

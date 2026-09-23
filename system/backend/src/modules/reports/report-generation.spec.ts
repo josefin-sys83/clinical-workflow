@@ -52,4 +52,60 @@ describe('report generation', () => {
     expect(reports.updateSections).not.toHaveBeenCalled();
   });
 
+  it('uses relational metadata and the intended use saved in scope', async () => {
+    projects.get.mockResolvedValue({
+      name: 'Canonical study', risk: 'IIa', deviceCategory: 'active', targetMarkets: ['EU'], roles: [],
+      data: {
+        projectData: { sponsor: 'Sponsor', deviceName: 'Device' },
+        scope: { intendedUse: 'diagnostic', requirements: [] },
+        protocol: { sections: [] },
+      },
+      report: { sections: {} },
+    });
+
+    await controller.generateReportSection(
+      'project',
+      { sectionId: 'section-2', sectionTitle: 'Introduction', sectionNumber: 2 },
+      { user: {} },
+    );
+
+    expect(ai.generateReportSection).toHaveBeenCalledWith(
+      'Introduction', 2, [], expect.any(Object),
+      { intendedUse: 'diagnostic', requirements: [], deviceCategory: 'active', targetMarkets: ['EU'] },
+      expect.objectContaining({
+        projectName: 'Canonical study', deviceName: 'Device',
+        deviceCategory: 'active', targetMarkets: ['EU'],
+      }),
+      [], [],
+    );
+  });
+
+  it('logs metadata before generating a report section', async () => {
+    projects.get.mockResolvedValue({
+      name: 'Study', deviceCategory: 'active', targetMarkets: ['EU'],
+      roles: [{ title: 'Project Manager', assignedTo: [{ name: 'Manager' }] }],
+      data: {
+        projectData: { sponsor: 'Sponsor', deviceName: 'Device' },
+        scope: { intendedUse: 'diagnostic' },
+        protocol: { sections: [] },
+      },
+      report: { sections: {} },
+    });
+    const log = jest.spyOn((controller as any).logger, 'log').mockImplementation(() => undefined);
+
+    await controller.generateReportSection(
+      'project',
+      { sectionId: 'section-2', sectionTitle: 'Introduction', sectionNumber: 2 },
+      { user: {} },
+    );
+
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'ai.generation_metadata',
+      generationPath: 'report-section',
+      projectData: expect.objectContaining({ sponsor: 'Sponsor', deviceName: 'Device' }),
+      effectiveIntendedUse: 'diagnostic',
+      projectManager: 'Manager',
+    }));
+  });
+
 });

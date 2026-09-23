@@ -1,11 +1,11 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
-import { aiAnalysisErrorMessage, apiErrorMessage } from '@/shared/api/http';
-import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
+import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
+import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeDerivedIntendedUse, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -307,6 +307,8 @@ export function Gate1() {
   // Prevent the autosave effect from writing the initial empty state before the
   // project's saved setup/scope values have finished loading.
   const [scopeLoaded, setScopeLoaded] = useState(false);
+  const scopeAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scopeSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // A workflow transition can take several requests. If the user leaves Scope while
   // it is in flight, its promise must not navigate from the now-unmounted page when it
@@ -522,26 +524,15 @@ Return ONLY a JSON array, no markdown:
           return category.toLowerCase();
         };
 
-        // Project Setup is authoritative. Legacy Scope values remain a fallback for
-        // projects saved before these fields were synchronized.
-        const savedCategory = normalizeDeviceCategory(s.deviceCategory);
         const setupCategory = normalizeDeviceCategory(project.deviceCategory);
-        const effectiveCategory = setupCategory || savedCategory;
-        if (effectiveCategory) setDeviceCategory(effectiveCategory);
+        if (setupCategory) setDeviceCategory(setupCategory);
         const savedIntendedUse = normalizeStoredIntendedUse(
           s.intendedUse,
           s.customIntendedUse,
         );
-        const setupIntendedUse = normalizeStoredIntendedUse(
-          project.data?.projectData?.intendedUse,
-          project.data?.projectData?.customIntendedUse,
-        );
-        const effectiveIntendedUse = setupIntendedUse.intendedUse
-          ? setupIntendedUse
-          : savedIntendedUse;
-        if (effectiveIntendedUse.intendedUse) {
-          setIntendedUse(effectiveIntendedUse.intendedUse);
-          setCustomIntendedUse(effectiveIntendedUse.customIntendedUse);
+        if (savedIntendedUse.intendedUse) {
+          setIntendedUse(savedIntendedUse.intendedUse);
+          setCustomIntendedUse(savedIntendedUse.customIntendedUse);
         }
         if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
         const savedRequirements: Requirement[] = Array.isArray(s.requirements) ? s.requirements : [];
@@ -564,14 +555,12 @@ Return ONLY a JSON array, no markdown:
           }
         }
         // Seed originals once so consequence diff is against the DB state
-        setOriginalDeviceCategory(effectiveCategory || null);
+        setOriginalDeviceCategory(setupCategory || null);
         setOriginalRequirements(s.requirements ?? []);
 
         // Auto-derive device category + intended use from synopsis when either is still missing.
-        // Note: a free-text intended use entered during project setup gets mapped to 'other-custom'
-        // above, which would otherwise permanently block this from ever running for those projects.
-        const hasCategory = Boolean(effectiveCategory);
-        const hasIntendedUse = Boolean(effectiveIntendedUse.intendedUse);
+        const hasCategory = Boolean(setupCategory);
+        const hasIntendedUse = Boolean(savedIntendedUse.intendedUse);
         const hasSynopsis = !!project.data?.synopsis?.extractedText;
         if ((!hasCategory || !hasIntendedUse) && hasSynopsis && !s.scopeConfirmed) {
           setGeneratingRequirements(true);
@@ -581,7 +570,7 @@ Return ONLY a JSON array, no markdown:
             console.log('[derive-scope] response:', derived);
             if (!hasCategory && derived.deviceCategory) setDeviceCategory(derived.deviceCategory);
             if (!hasIntendedUse && derived.intendedUse) {
-              const normalizedDerivedUse = normalizeStoredIntendedUse(derived.intendedUse);
+              const normalizedDerivedUse = normalizeDerivedIntendedUse(derived.intendedUse);
               setIntendedUse(normalizedDerivedUse.intendedUse);
               setCustomIntendedUse(normalizedDerivedUse.customIntendedUse);
             }
@@ -596,26 +585,52 @@ Return ONLY a JSON array, no markdown:
       });
   }, [projectId]);
 
-  // Spara scope-data till backend automatiskt
+  const persistScope = useCallback(() => {
+    if (!projectId) return Promise.reject(new Error('Project ID is required to save Scope.'));
+
+    const payload = {
+      deviceCategory,
+      data: {
+        scope: {
+          intendedUse,
+          customIntendedUse,
+          scopeConfirmed,
+          requirements,
+          requirementsAnalysisStatus,
+          requirementsAnalysisError,
+        },
+      },
+    };
+
+    // Serialize saves so an older autosave cannot commit after the final save.
+    const save = scopeSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => apiFetch(`/projects/${projectId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }))
+      .then(() => undefined);
+
+    scopeSaveQueueRef.current = save.catch(() => undefined);
+    return save;
+  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError]);
+
+  // Save Scope after a short idle period while the user is editing.
   useEffect(() => {
     if (isScopeLocked || !scopeLoaded) return;
-    const timer = setTimeout(() => {
-      fetch(`${apiBase}/api/projects/${projectId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // Keep Project Setup's authoritative values synchronized when the user
-          // adjusts them during Scope confirmation.
-          deviceCategory,
-          data: {
-            projectData: { intendedUse, customIntendedUse },
-            scope: { deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError }
-          }
-        })
-      }).catch(() => {});
+    scopeAutosaveTimerRef.current = setTimeout(() => {
+      scopeAutosaveTimerRef.current = null;
+      void persistScope().catch(error => {
+        console.error('Failed to autosave Scope', error);
+      });
     }, 1000);
-    return () => clearTimeout(timer);
-  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError, isScopeLocked, scopeLoaded]);
+    return () => {
+      if (scopeAutosaveTimerRef.current) {
+        clearTimeout(scopeAutosaveTimerRef.current);
+        scopeAutosaveTimerRef.current = null;
+      }
+    };
+  }, [isScopeLocked, scopeLoaded, persistScope]);
 
   // Section 2: Requirements (default values loaded from backend or set below)
   // requirements useState moved above
@@ -835,6 +850,12 @@ Return ONLY a JSON array, no markdown:
     setScopeSubmitError(null);
     setSubmittingScope(true);
     try {
+      if (scopeAutosaveTimerRef.current) {
+        clearTimeout(scopeAutosaveTimerRef.current);
+        scopeAutosaveTimerRef.current = null;
+      }
+      await persistScope();
+      if (!isMountedRef.current) return;
       await advanceWorkflowStep({ projectId, stepId: 'scope', to: 'approved' });
       if (!isMountedRef.current) return;
       await refreshWorkflowSnapshot();

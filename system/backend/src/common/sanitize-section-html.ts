@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import sanitizeHtml from 'sanitize-html';
 
 // Protocol/report section content is rendered client-side via dangerouslySetInnerHTML
@@ -48,13 +47,4 @@ export function sanitizeSectionHtml(input: string | null | undefined): string {
     allowedStyles: ALLOWED_STYLES,
     disallowedTagsMode: 'discard',
   });
-}
-
-// Generic project JSON cannot be used to bypass normalized report/signature APIs.
-export function sanitizeIncomingProjectData(data: any): any {
-  if (!data || typeof data !== 'object') return data;
-  if (Object.prototype.hasOwnProperty.call(data, 'report') || Object.prototype.hasOwnProperty.call(data, 'signatures')) {
-    throw new BadRequestException('Reports and signatures must use their dedicated endpoints');
-  }
-  return { ...data };
 }

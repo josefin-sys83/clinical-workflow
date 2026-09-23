@@ -197,8 +197,8 @@ export function ProjectSetupPage() {
         const pd = project.data?.projectData || {};
         setSynopsisForComplexity(project.data?.synopsis || {});
         const storedIntendedUse = normalizeStoredIntendedUse(
-          pd.intendedUse,
-          pd.customIntendedUse,
+          project.data?.scope?.intendedUse,
+          project.data?.scope?.customIntendedUse,
         );
 
         // relational fields come from their authoritative SQL columns/join tables.
@@ -344,6 +344,8 @@ export function ProjectSetupPage() {
         risk,
         deviceCategory,
         targetMarkets,
+        intendedUse,
+        customIntendedUse,
         ...jsonProjectData
       } = projectData;
       const setupPayload = {
@@ -356,7 +358,10 @@ export function ProjectSetupPage() {
           assignedTo: role.assignedTo,
         })),
         description: `Device: ${projectData.deviceName} | Sponsor: ${projectData.sponsor}`,
-        data: { projectData: jsonProjectData },
+        data: {
+          projectData: jsonProjectData,
+          scope: { intendedUse, customIntendedUse },
+        },
       };
 
       if (isNew) {
