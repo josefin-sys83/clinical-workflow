@@ -2,13 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { hasReportText } from '@/shared/api/reports';
-
-function highlightPlaceholders(html: string): string {
-  return html.replace(
-    /\[(RESULT|TABLE|DATE|CONFIRM):([^\]]+)\]/g,
-    '<mark style="background:#fed7aa;color:#9a3412;border-radius:3px;padding:1px 4px;font-size:0.85em;font-weight:500;">[<strong>$1</strong>:$2]</mark>'
-  );
-}
+import { highlightReviewHtml, stripReviewHighlights, type ReviewFinding } from '@/shared/editor/review-highlights';
 
 function stripCodeFences(content: string): string {
   return content.replace(/^```html\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '').trim();
@@ -28,10 +22,10 @@ function sanitizeForRender(html: string): string {
   });
 }
 
-function renderContent(content: string): string {
+function renderContent(content: string, findings: ReviewFinding[] = []): string {
   if (!content) return '';
   const cleaned = stripCodeFences(content);
-  if (/<[a-z][\s\S]*>/i.test(cleaned)) return sanitizeForRender(highlightPlaceholders(cleaned));
+  if (/<[a-z][\s\S]*>/i.test(cleaned)) return highlightReviewHtml(sanitizeForRender(cleaned), findings, true);
   // Legacy markdown fallback
   let h = cleaned
     .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -55,7 +49,7 @@ function renderContent(content: string): string {
   h = h.split('\n').map(line =>
     /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
   ).join('\n');
-  return sanitizeForRender(highlightPlaceholders(h));
+  return highlightReviewHtml(sanitizeForRender(h), findings, true);
 }
 import { ReportSection, DataAsset, User, ReportCompletenessStatus, CompletenessElement } from '../types';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
@@ -280,11 +274,12 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       const el = editorRefs.current.get(editingSection);
       const sec = sections.find(s => s.id === editingSection);
       if (el && sec) {
-        // Fix 19: this previously assigned sec.content to innerHTML directly, bypassing the
-        // sanitizeForRender() DOMPurify pass used everywhere else in this file — a stray
-        // <img onerror=...> or similar would execute the instant a user opened the section
-        // for editing. Sanitize here too, exactly as the read-mode render path already does.
-        el.innerHTML = sanitizeForRender(sec.content || '') || '<p><br></p>';
+        const suppressed = new Set(wontFixDescRef.current[sec.id] || []);
+        const findings = (sectionAiIssues[sec.id] || []).filter(issue =>
+          !suppressed.has(issue.description || issue.message || ''),
+        );
+        // Initialize once on entry; typing and toolbar updates keep the live DOM.
+        el.innerHTML = renderContent(sec.content || '', findings) || '<p><br></p>';
         el.focus();
       }
     }
@@ -936,7 +931,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                         fontWeight: 400,
                       }}
                       data-ai-draft={section.id}
-                      dangerouslySetInnerHTML={{ __html: renderContent(section.aiDraft) }}
+                      dangerouslySetInnerHTML={{ __html: renderContent(section.aiDraft, openAiIssues) }}
                     />
                   )}
 
@@ -1001,7 +996,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                           <button
                             onClick={() => {
                               const el = editorRefs.current.get(section.id);
-                              const newContent = el?.innerHTML || '';
+                              const newContent = stripReviewHighlights(el?.innerHTML || '');
                               setPendingSave({ sectionId: section.id, newContent, previousContent: section.content || '' });
                               setChangeReason('');
                               setShowReasonModal(true);
@@ -1034,7 +1029,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                           {hasContent ? (
                             <div
                               style={{ lineHeight: '1.7', fontSize: '0.9rem' }}
-                              dangerouslySetInnerHTML={{ __html: renderContent(section.content || '') }}
+                              dangerouslySetInnerHTML={{ __html: renderContent(section.content || '', openAiIssues) }}
                             />
                           ) : (
                             <div className="text-[#9CA3AF] italic" style={{ fontSize: '14px', fontFamily: 'system-ui, sans-serif' }}>

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
+import { highlightReviewHtml, stripReviewHighlights } from '@/shared/editor/review-highlights';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
@@ -30,6 +31,7 @@ interface ProtocolIssue {
   raisedDate: string;
   status: 'open' | 'potentially-resolved' | 'resolved';
   dueDate?: string;
+  textQuote?: string | null;
 }
 
 interface RequiredElement {
@@ -256,11 +258,9 @@ function ProtocolSectionComponent(
   // Populate editor HTML when entering edit mode
   useEffect(() => {
     if (isEditing && editorRef.current) {
-      // Fix 19: previously assigned section.content to innerHTML directly, bypassing the
-      // sanitizeForRender() DOMPurify pass used everywhere else in this file — a stray
-      // <img onerror=...> or similar would execute the instant a user opened the section
-      // for editing. Sanitize here too, exactly as the read-mode render path already does.
-      editorRef.current.innerHTML = sanitizeForRender(section.content || '') || '<p><br></p>';
+      // Use the same sanitized, annotated content as reading mode. Initialize only
+      // on entry so toolbar updates cannot replace the user's in-progress edits.
+      editorRef.current.innerHTML = renderContent(section.content || '') || '<p><br></p>';
       editorRef.current.focus();
     }
   }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -423,7 +423,7 @@ function ProtocolSectionComponent(
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    if (/<[a-z][\s\S]*>/i.test(content)) return sanitizeForRender(content);
+    if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), section.issues);
     // Legacy markdown fallback
     let h = content
       .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -447,7 +447,7 @@ function ProtocolSectionComponent(
     h = h.split('\n').map(line =>
       /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
     ).join('\n');
-    return sanitizeForRender(h);
+    return highlightReviewHtml(sanitizeForRender(h), section.issues);
   };
 
   return (
@@ -978,50 +978,17 @@ function ProtocolSectionComponent(
                     </div>
                   );
                 }
-                const issues = section.issues || [];
-                const quotes = issues.filter((iss: any) => iss.textQuote);
                 const editButton = (
                   <div key="edit-button" style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
                     <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
                   </div>
                 );
-                if (quotes.length === 0) return (
+                return (
                   <div>
                     {editButton}
                     <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
                   </div>
                 );
-                // Quotes path: render markdown in plain text segments, highlight quoted spans
-                const quoteParts: React.ReactNode[] = [editButton];
-                console.log('quotes path - section content first 300:', (section.content || '').substring(0, 300));
-                let remaining = section.content || '';
-                quotes.forEach((iss: any) => {
-                  const idx = remaining.indexOf(iss.textQuote);
-                  if (idx === -1) return;
-                  if (idx > 0) quoteParts.push(
-                    <span key={`pre-${iss.id}`} dangerouslySetInnerHTML={{__html: renderContent(remaining.slice(0, idx))}} />
-                  );
-                  quoteParts.push(
-                    <span
-                      key={iss.id}
-                      id={'quote-' + iss.id}
-                      style={{
-                        backgroundColor: iss.severity === 'blocker' ? '#fee2e2' : '#fef9c3',
-                        borderBottom: iss.severity === 'blocker' ? '2px solid #ef4444' : '2px solid #f59e0b',
-                        cursor: 'pointer',
-                        borderRadius: '2px',
-                        padding: '0 2px'
-                      }}
-                      title={iss.description}
-                    >{iss.textQuote}</span>
-                  );
-                  remaining = remaining.slice(idx + iss.textQuote.length);
-                });
-                if (remaining) quoteParts.push(
-                  <span key="post" dangerouslySetInnerHTML={{__html: renderContent(remaining)}} />
-                );
-                console.log('quotes path rendering, quoteParts count:', quoteParts.length);
-                return <div style={{lineHeight: '1.7', fontSize: '0.9rem'}}>{quoteParts}</div>;
               })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
             </ProtocolTextSeparator>
 
@@ -1122,7 +1089,7 @@ function ProtocolSectionComponent(
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
                   const prevContent = section.content || '';
-                  const newContent = editorRef.current?.innerHTML || '';
+                  const newContent = stripReviewHighlights(editorRef.current?.innerHTML || '');
                   const reason = changeReason.trim();
                   // Close the modal and editing state immediately for responsive UX
                   setIsSaving(true);
