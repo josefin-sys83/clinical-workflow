@@ -54,6 +54,17 @@ export default function App() {
   const [checkingProtocol, setCheckingProtocol] = React.useState(false);
   const [generationProgress, setGenerationProgress] = React.useState<{ completed: number; total: number; currentLabel: string | null } | null>(null);
   const [protocolError, setProtocolError] = React.useState<string | null>(null);
+  const [failedProtocolOperation, setFailedProtocolOperation] = useState<'load' | 'generate'>('load');
+  const pendingProtocolWork = useRef(new Set<Promise<unknown>>());
+  const generationRequested = useRef(false);
+  const protocolEpoch = useRef(0);
+  const trackProtocolWork = <T,>(work: () => Promise<T>): Promise<T> => {
+    const promise = work();
+    pendingProtocolWork.current.add(promise);
+    const remove = () => { pendingProtocolWork.current.delete(promise); };
+    void promise.then(remove, remove);
+    return promise;
+  };
 const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
   const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
   const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
@@ -84,6 +95,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const runSynopsisConsistencyCheck = async () => {
     if (!projectId) return;
+    const epoch = protocolEpoch.current;
     setSynopsisConsistencyStatus('running');
     setSynopsisConsistencyError(null);
     try {
@@ -93,9 +105,11 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
       const data = await res.json();
       if (!data || !Array.isArray(data.issues)) throw new Error(aiAnalysisErrorMessage(502));
+      if (epoch !== protocolEpoch.current) return;
       setSynopsisConsistencyIssues(data.issues || []);
       setSynopsisConsistencyStatus('succeeded');
     } catch (e) {
+      if (epoch !== protocolEpoch.current) return;
       console.error('Synopsis consistency check failed', e);
       setSynopsisConsistencyStatus('failed');
       setSynopsisConsistencyError(e instanceof Error ? e.message : aiAnalysisErrorMessage(0));
@@ -113,11 +127,18 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const protocolLoadInFlightRef = useRef<string | null>(null);
 
-  const generateProtocolFromSavedProject = React.useCallback(() => {
+  const generateProtocolFromSavedProject = React.useCallback(async () => {
     if (!projectId) return Promise.resolve();
 
     setProtocolError(null);
     setGeneratingProtocol(true);
+    generationRequested.current = true;
+    // Each tracked analysis includes its persistence; finish old work before replacement.
+    while (pendingProtocolWork.current.size) {
+      await Promise.allSettled([...pendingProtocolWork.current]);
+    }
+    protocolEpoch.current += 1;
+    setFailedProtocolOperation('generate');
     return apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
       .then(result => {
         if (!result?.sections?.length) throw new Error('Protocol generation returned no sections');
@@ -125,8 +146,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         setExpandedSections(result.sections.map((section: any) => section.id));
         setSectionAnalysisStatus({});
         setSectionAnalysisError({});
+        generationRequested.current = false;
         result.sections.forEach((section: any) => {
-          if (section.content) analyzeSectionWithAI(section.title, section.content, section.id);
+          if (section.content) analyzeSectionWithAI(section.title, section.content, section.id, 0, section.requiredElements);
         });
         runSynopsisConsistencyCheck();
       })
@@ -138,6 +160,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         ));
       })
       .finally(() => {
+        generationRequested.current = false;
         setGeneratingProtocol(false);
       });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -154,6 +177,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     };
     setProtocolError(null);
     setCheckingProtocol(true);
+    setFailedProtocolOperation('load');
     apiFetch<any>(`/projects/${projectId}`, { cache: 'no-store' })
       .then(p => {
         if (p.data && p.data.projectData) {
@@ -196,9 +220,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       });
   }, [projectId, generateProtocolFromSavedProject]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleRegenerateProtocol = React.useCallback(() => {
+  const handleRegenerateProtocol = React.useCallback((confirmReplacement = true) => {
     if (!projectId || protocolLoadInFlightRef.current === projectId) return;
-    const confirmed = window.confirm(
+    const confirmed = !confirmReplacement || window.confirm(
       'Regenerate this protocol from the latest saved project setup and scope? This replaces the current draft sections.',
     );
     if (!confirmed) return;
@@ -249,107 +273,103 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
 
   // Current user context
-  const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0): Promise<number> => {
-    setSectionAnalyzing(prev => ({ ...prev, [sectionId]: true }));
-    setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
-    setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
-    try {
-      const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
-      });
-      if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
-      const result = await res.json();
-      if (!result || !Array.isArray(result.issues)) throw new Error(aiAnalysisErrorMessage(502));
-      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'succeeded' }));
-
-      let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
-      const elements = result.requiredElements || [];
-      // Filter out won't-fix descriptions for this section
-      const suppressed = wontFixDescriptions[sectionId] || [];
-      if (suppressed.length > 0) {
-        issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
-      }
-      const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
-      const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
-      // Always update protocol state (even if issuesArr is empty)
-      await new Promise<void>((resolve) => {
-        setProtocol((prev: any) => {
-          const updatedSections = prev.sections.map((s: any) =>
-            s.id === sectionId ? { ...s, issues: issuesArr, requiredElements: elements.length > 0 ? elements : s.requiredElements, analysisStatus: 'succeeded', analysisError: undefined } : s
-          );
-          const updated = { ...prev, sections: updatedSections };
-          fetch(apiBase + '/api/projects/' + projectId, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data: { protocol: updated } })
-          });
-          resolve();
-          return updated;
+  const analyzeSectionWithAI = (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0, requiredElements?: any[]): Promise<number> => {
+    if (generationRequested.current) return Promise.resolve(0);
+    const epoch = protocolEpoch.current;
+    return trackProtocolWork(async () => {
+      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: true }));
+      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
+      setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
+      try {
+        const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: requiredElements ?? protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements ?? [] })
         });
-      });
-      return resolvedCount;
-    } catch (e) {
-      console.error('Section analysis failed', e);
-      const message = e instanceof Error ? e.message : aiAnalysisErrorMessage(0);
-      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
-      setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
-      setProtocol((prev: any) => {
-        if (!prev) return prev;
-        const updated = { ...prev, sections: prev.sections.map((s: any) => s.id === sectionId ? { ...s, analysisStatus: 'failed', analysisError: message } : s) };
-        fetch(apiBase + '/api/projects/' + projectId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { protocol: updated } }) });
-        return updated;
-      });
-      return 0;
-    } finally {
-      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: false }));
-    }
+        if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
+        const result = await res.json();
+        if (!result || !Array.isArray(result.issues)) throw new Error(aiAnalysisErrorMessage(502));
+        if (epoch !== protocolEpoch.current) return 0;
+        setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'succeeded' }));
+
+        let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
+        const elements = result.requiredElements || [];
+        // Filter out won't-fix descriptions for this section
+        const suppressed = wontFixDescriptions[sectionId] || [];
+        if (suppressed.length > 0) {
+          issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
+        }
+        const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
+        const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
+        // The backend persisted this result against the exact section it analyzed.
+        setProtocol((prev: any) => !prev ? prev : ({
+          ...prev,
+          sections: prev.sections.map((s: any) =>
+            s.id === sectionId && s.content === sectionContent
+              ? { ...s, issues: issuesArr, requiredElements: elements.length ? elements : s.requiredElements, analysisStatus: 'succeeded', analysisError: undefined }
+              : s),
+        }));
+        return resolvedCount;
+      } catch (e) {
+        if (epoch !== protocolEpoch.current) return 0;
+        console.error('Section analysis failed', e);
+        const message = e instanceof Error ? e.message : aiAnalysisErrorMessage(0);
+        setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
+        setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
+        return 0;
+      } finally {
+        if (epoch === protocolEpoch.current) setSectionAnalyzing(prev => ({ ...prev, [sectionId]: false }));
+      }
+    });
   };
 
-  const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string) => {
-    const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
-    const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
+  const handleSectionSaved = (sectionId: string, newContent: string, prevContent: string, reason: string) => {
+    if (generationRequested.current) return Promise.reject(new Error('Please wait for protocol generation to finish.'));
+    return trackProtocolWork(async () => {
+      const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
+      const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
 
-    // 1. Persist to backend — this also creates the audit trail entry with full
-    //    user identity, before/after content, and reason for change.
-    try {
-      await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + sectionId, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: newContent,
-          previousContent: prevContent,
-          reason,
-          userId: currentUser,
-          userName: currentUser,
-          // Explicitly carry approval fields so saving content never clears them
-          approvalStatus: currentSection?.approvalStatus,
-          approvedBy: currentSection?.approvedBy,
-          approvedAt: currentSection?.approvedAt,
-        }),
+      // 1. Persist to backend — this also creates the audit trail entry with full
+      //    user identity, before/after content, and reason for change.
+      try {
+        await apiFetch('/projects/' + projectId + '/protocol/sections/' + sectionId, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: newContent,
+            previousContent: prevContent,
+            reason,
+            userId: currentUser,
+            userName: currentUser,
+            // Explicitly carry approval fields so saving content never clears them
+            approvalStatus: currentSection?.approvalStatus,
+            approvedBy: currentSection?.approvedBy,
+            approvedAt: currentSection?.approvedAt,
+          }),
+        });
+      } catch (e) {
+        console.error('Section save failed', e);
+        throw e;
+      }
+
+      // 2. Update local state to reflect the saved content immediately
+      setProtocol((prev: any) => {
+        if (!prev) return prev;
+        const updatedSections = prev.sections.map((s: any) =>
+          s.id === sectionId ? { ...s, content: newContent, updatedAt: new Date().toISOString() } : s
+        );
+        return { ...prev, sections: updatedSections };
       });
-    } catch (e) {
-      console.error('Section save failed', e);
-    }
 
-    // 2. Update local state to reflect the saved content immediately
-    setProtocol((prev: any) => {
-      if (!prev) return prev;
-      const updatedSections = prev.sections.map((s: any) =>
-        s.id === sectionId ? { ...s, content: newContent, updatedAt: new Date().toISOString() } : s
-      );
-      return { ...prev, sections: updatedSections };
+      // Development bypass sections remain fully editable without invoking the
+      // unavailable AI provider. They can be analysed manually after AI is configured.
+      if (currentSection?.aiGenerated === false) return;
+
+      // 3. Re-analyse and surface any resolved issues
+      const sectionTitle = currentSection?.title || '';
+      const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
+      // resolved issues are reflected in the issues panel automatically
     });
-
-    // Development bypass sections remain fully editable without invoking the
-    // unavailable AI provider. They can be analysed manually after AI is configured.
-    if (currentSection?.aiGenerated === false) return;
-
-    // 3. Re-analyse and surface any resolved issues
-    const sectionTitle = currentSection?.title || '';
-    const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
-    // resolved issues are reflected in the issues panel automatically
   };
 
   const canForceProtocolDraft = import.meta.env.DEV || sessionUser?.roles.includes('admin') === true;
@@ -661,6 +681,14 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     }, 100);
   };
 
+  const regenerationBlocked = Boolean(
+    protocol?.amendments?.length || amendments.length ||
+    (protocol?.status && protocol.status !== 'draft') ||
+    protocol?.sections?.some((s: any) => s.locked || s.approvedAt || s.approvedBy || s.amended ||
+      (s.approvalStatus && s.approvalStatus !== 'draft') ||
+      ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))
+  );
+
   const protocolSections = protocol?.sections?.map((s: any, idx: number) => ({
     id: s.id || String(idx + 1),
     number: s.id || String(idx + 1),
@@ -903,8 +931,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       snapshot?.steps?.['protocol-pdf']?.state !== 'signed' &&
                       snapshot?.steps?.['protocol-pdf']?.state !== 'final' && (
                       <button
-                        onClick={handleRegenerateProtocol}
-                        disabled={generatingProtocol || checkingProtocol}
+                        onClick={() => handleRegenerateProtocol()}
+                        disabled={generatingProtocol || checkingProtocol || regenerationBlocked}
+                        title={regenerationBlocked ? "Full regeneration requires an unapproved draft without amendments." : undefined}
                         className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 disabled:cursor-not-allowed text-white text-xs rounded transition-colors flex-shrink-0"
                       >
                         {generatingProtocol ? 'Regenerating…' : 'Regenerate Protocol'}
@@ -934,7 +963,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         <span>{protocolError}</span>
                       </div>
                       <button
-                        onClick={() => loadOrGenerateProtocol(true)}
+                        onClick={() => failedProtocolOperation === 'generate' ? handleRegenerateProtocol(false) : loadOrGenerateProtocol(true)}
                         disabled={generatingProtocol || checkingProtocol}
                         className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white text-xs rounded flex-shrink-0 flex items-center gap-1.5"
                       >

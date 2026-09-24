@@ -23,6 +23,8 @@ import { PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
 import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
 import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
+import { ConflictException } from '@nestjs/common';
+import { isDeepStrictEqual } from 'node:util';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
@@ -30,6 +32,17 @@ import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../pr
 @Controller('/api/projects')
 export class ProtocolsController {
   private readonly logger = new Logger(ProtocolsController.name);
+
+  private assertRegeneratable(protocol: any) {
+    const sections = protocol?.sections || [];
+    if ((protocol?.amendments || []).length ||
+        (protocol?.status && protocol.status !== 'draft') ||
+        sections.some((s: any) => s.locked || s.approvedAt || s.approvedBy || s.amended ||
+          (s.approvalStatus && s.approvalStatus !== 'draft') ||
+          ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))) {
+      throw new ConflictException('Full regeneration requires an unapproved draft without amendments. Existing review records cannot be replaced.');
+    }
+  }
 
   constructor(
     private readonly projects: ProjectsService,
@@ -76,6 +89,8 @@ export class ProtocolsController {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     await this.documentWorkflow.assertProtocolPrerequisites(projectId);
     const project = await this.projects.get(projectId);
+    const originalProtocol = project?.data?.protocol || {};
+    this.assertRegeneratable(originalProtocol);
     const { aiProjectData, scope, intendedUse } = buildProjectGenerationContext(project);
     const roles = project.roles || [];
     const synopsisData = project?.data?.synopsis || {};
@@ -146,7 +161,32 @@ export class ProtocolsController {
     // committed relational rows rather than an unsaved browser-only protocol.
     const savedProtocol = await this.protocols.updateAtomic(
       projectId,
-      () => protocol,
+      current => {
+        this.assertRegeneratable(current);
+        if (!isDeepStrictEqual(current, originalProtocol)) {
+          throw new ConflictException('The protocol changed during generation. Reload it before regenerating. Your saved changes were preserved.');
+        }
+        const previousSections = current.sections || [];
+        if (previousSections.some((old: any) => !protocol.sections.some((s: any) => s.id === old.id))) {
+          throw new ConflictException('Regeneration would remove existing sections. Your saved protocol was preserved.');
+        }
+        return {
+          ...current,
+          ...protocol,
+          protocolId: current.protocolId || protocol.protocolId,
+          amendments: current.amendments || [],
+          sections: protocol.sections.map((s: any) => ({
+            ...previousSections.find((old: any) => old.id === s.id),
+            ...s,
+            comments: previousSections.find((old: any) => old.id === s.id)?.comments || [],
+            aiGenerated: true,
+            updatedAt: new Date().toISOString(),
+            issues: [],
+            analysisStatus: 'not-run',
+            analysisError: null,
+          })),
+        };
+      },
       req.user,
       {
         type: 'protocol.generated',
@@ -166,11 +206,32 @@ export class ProtocolsController {
   @UseGuards(AiThrottlerGuard)
   async analyzeSection(
     @Param('projectId') projectId: string,
-    @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] }
+    @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] },
+    @Req() req?: any,
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
-    return this.runSectionAnalysis(project, body.sectionTitle, body.sectionContent, body.sectionId, body.requiredElements);
+    const originalSection = project?.data?.protocol?.sections?.find((s: any) => s.id === body.sectionId);
+    const result = await this.runSectionAnalysis(project, body.sectionTitle, body.sectionContent, body.sectionId, body.requiredElements);
+    if (originalSection && Array.isArray(result?.issues)) {
+      await this.protocols.updateAtomic(projectId, current => {
+        const section = current.sections?.find((s: any) => s.id === body.sectionId);
+        if (!section || section.content !== body.sectionContent || !isDeepStrictEqual(section, originalSection)) {
+          throw new ConflictException('The section changed during analysis. Retry analysis on the current text.');
+        }
+        return {
+          ...current,
+          sections: current.sections.map((s: any) => s.id !== body.sectionId ? s : {
+            ...s,
+            issues: result.issues,
+            requiredElements: result.requiredElements?.length ? result.requiredElements : s.requiredElements,
+            analysisStatus: 'succeeded',
+            analysisError: null,
+          }),
+        };
+      }, req?.user);
+    }
+    return result;
   }
 
   @Post('/:projectId/analyze-sections')
