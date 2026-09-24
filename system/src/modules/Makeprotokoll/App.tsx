@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useParams, useLocation, Link } from 'react-router-dom';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle } from 'lucide-react';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle, Loader2 } from 'lucide-react';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState } from '@/shared/workflow/types';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
@@ -68,7 +68,8 @@ export default function App() {
 const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
   const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
   const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
-  const [sectionAnalyzing, setSectionAnalyzing] = React.useState<Record<string, boolean>>({});
+  // A save may start another review before an earlier review of this section ends.
+  const [sectionAnalyzing, setSectionAnalyzing] = React.useState<Record<string, number>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
@@ -138,6 +139,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       await Promise.allSettled([...pendingProtocolWork.current]);
     }
     protocolEpoch.current += 1;
+    setSectionAnalyzing({});
     setFailedProtocolOperation('generate');
     return apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
       .then(result => {
@@ -277,7 +279,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     if (generationRequested.current) return Promise.resolve(0);
     const epoch = protocolEpoch.current;
     return trackProtocolWork(async () => {
-      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: true }));
+      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: (prev[sectionId] || 0) + 1 }));
       setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
       setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
       try {
@@ -318,7 +320,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
         return 0;
       } finally {
-        if (epoch === protocolEpoch.current) setSectionAnalyzing(prev => ({ ...prev, [sectionId]: false }));
+        if (epoch === protocolEpoch.current) {
+          setSectionAnalyzing(prev => ({ ...prev, [sectionId]: Math.max(0, (prev[sectionId] || 0) - 1) }));
+        }
       }
     });
   };
@@ -711,9 +715,12 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     approvalStatus: s.approvalStatus || 'draft',
     approvedBy: s.approvedBy || '',
     approvedAt: s.approvedAt || '',
-    analysisStatus: sectionAnalysisStatus[s.id] || s.analysisStatus || 'not-run',
+    analysisStatus: sectionAnalyzing[s.id] > 0 ? 'running' : sectionAnalysisStatus[s.id] || s.analysisStatus || 'not-run',
     analysisError: sectionAnalysisError[s.id] || s.analysisError || '',
   })) || [];
+
+  const analyzingSectionCount = protocolSections.filter(section => section.analysisStatus === 'running').length;
+  const aiAnalysisInProgress = analyzingSectionCount > 0 || synopsisConsistencyStatus === 'running';
 
   // Helper function to get section status visualization
   const getSectionStatusIcon = (section: typeof protocolSections[0]) => {
@@ -848,7 +855,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     isActive ? 'bg-slate-100' : 'hover:bg-slate-50'
                   }`}
                 >
-                  {isComplete ? (
+                  {section.analysisStatus === 'running' ? (
+                    <Loader2 className="w-4 h-4 flex-shrink-0 text-blue-600 animate-spin" aria-hidden="true" />
+                  ) : isComplete ? (
                     <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-blue-600" />
                   ) : (
                     <AlertCircle className="w-4 h-4 flex-shrink-0 text-orange-400" />
@@ -857,6 +866,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     isActive ? 'font-semibold text-slate-900' : 'font-normal text-slate-600'
                   }`}>
                     {section.title}
+                    {section.analysisStatus === 'running' && (
+                      <div className="text-xs text-blue-700 font-normal">AI analyzing…</div>
+                    )}
                   </div>
                 </div>
               );
@@ -1178,6 +1190,21 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
               <div className="p-4 border-b border-slate-200 flex-shrink-0 sticky top-0 bg-white z-10">
                 <h3 className="text-sm font-semibold text-slate-900 mb-1">Issues & Consistency</h3>
                 <p className="text-xs text-slate-500 mb-3">System-detected inconsistencies and review flags</p>
+
+                {aiAnalysisInProgress && (
+                  <div role="status" aria-live="polite" className="mb-3 rounded border border-blue-200 bg-blue-50 p-3 text-blue-900">
+                    <div className="flex items-center gap-2 text-xs font-semibold">
+                      <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" aria-hidden="true" />
+                      <span>{analyzingSectionCount > 0
+                        ? `AI analyzing ${analyzingSectionCount} section${analyzingSectionCount === 1 ? '' : 's'}`
+                        : 'AI consistency check in progress'}</span>
+                    </div>
+                    <p className="mt-1 text-xs">New blockers or warnings may appear as analysis finishes.</p>
+                    {analyzingSectionCount > 0 && synopsisConsistencyStatus === 'running' && (
+                      <p className="mt-1 text-xs">The synopsis consistency check is also running.</p>
+                    )}
+                  </div>
+                )}
                 
                 {/* Issue Filter Control */}
                 <IssueFilterControl
@@ -1295,7 +1322,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       )}
                     </div>
                   )}
-                  {filteredSections.every(s => s.analysisStatus === 'succeeded' && (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && synopsisConsistencyStatus === 'succeeded' && (
+                  {!aiAnalysisInProgress && filteredSections.every(s => s.analysisStatus === 'succeeded' && (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && synopsisConsistencyStatus === 'succeeded' && (
                     <div className="p-6 text-center">
                       <CheckCircle2 className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                       <p className="text-sm text-slate-700 mb-1">No issues found</p>

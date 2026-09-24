@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { highlightReviewHtml, stripReviewHighlights } from '@/shared/editor/review-highlights';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image } from 'lucide-react';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { InlineIssueMarker } from './inline-issue-marker';
@@ -453,6 +453,7 @@ function ProtocolSectionComponent(
   return (
     <div 
       ref={ref}
+      data-protocol-section={section.id}
       className={`bg-white border rounded transition-all duration-300 ${
         isHighlighted 
           ? 'border-blue-500 shadow-lg ring-2 ring-blue-200' 
@@ -469,6 +470,26 @@ function ProtocolSectionComponent(
               </h3>
               
               {/* Status Badges */}
+              {(section.aiGenerated || analysisStatus === 'running') && (
+                <span
+                  role="status"
+                  aria-live="polite"
+                  title={analysisStatus === 'running' ? 'New blockers or warnings may appear as analysis finishes.' : undefined}
+                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded border ${
+                    analysisStatus === 'running' ? 'bg-blue-50 text-blue-800 border-blue-200'
+                      : analysisStatus === 'failed' ? 'bg-red-50 text-red-800 border-red-200'
+                      : 'bg-slate-50 text-slate-600 border-slate-200'
+                  }`}
+                >
+                  {analysisStatus === 'running' && <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />}
+                  {analysisStatus === 'succeeded' && <CheckCircle2 className="w-3 h-3" aria-hidden="true" />}
+                  {analysisStatus === 'failed' && <AlertCircle className="w-3 h-3" aria-hidden="true" />}
+                  {analysisStatus === 'running' ? 'AI analyzing…'
+                    : analysisStatus === 'succeeded' ? 'AI analysis complete'
+                    : analysisStatus === 'failed' ? 'AI analysis failed'
+                    : 'AI analysis not run'}
+                </span>
+              )}
               {section.locked && (
                 <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded">
                   Locked
@@ -691,7 +712,9 @@ function ProtocolSectionComponent(
               </div>
             ) : analysisStatus === 'not-run' || analysisStatus === 'running' ? (
               <div className="px-3 py-2.5 border border-slate-200 bg-slate-50 rounded text-xs text-slate-600">
-                {analysisStatus === 'running' ? 'AI regulatory analysis is running…' : 'AI regulatory analysis has not run yet.'}
+                {analysisStatus === 'running'
+                  ? 'AI is analyzing this section. New blockers or warnings may appear when it finishes.'
+                  : 'AI regulatory analysis has not run yet.'}
               </div>
             ) : (
               section.requiredElements && section.requiredElements.length > 0 && (
