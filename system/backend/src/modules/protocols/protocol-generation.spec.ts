@@ -1,5 +1,6 @@
 import { ProtocolsController } from './protocols.controller';
 import { PROTOCOL_SECTION_TITLES } from '../ai/ai.service';
+import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 
 describe('protocol generation', () => {
   const actor = { userId: 'writer', name: 'Writer' };
@@ -161,6 +162,37 @@ describe('protocol generation', () => {
     await expect(controller.analyzeSection('project', {
       sectionId: '1', sectionTitle: 'Overview', sectionContent: 'Old text',
     }, { user: actor })).rejects.toThrow('changed during analysis');
+  });
+
+  it.each([
+    '<p>First<br>Second</p>',
+    '<p style="font-weight: bold;">Edited text</p>',
+  ])('analyzes the saved HTML when the editor sends an equivalent representation: %s', async editorHtml => {
+    const savedHtml = sanitizeSectionHtml(editorHtml);
+    expect(savedHtml).not.toBe(editorHtml);
+    const original = { id: '1', title: 'Overview', content: savedHtml, requiredElements: [] };
+    projects.get.mockResolvedValue({ data: { protocol: { sections: [original] } } });
+    const analyze = jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [] });
+    protocols.updateAtomic.mockImplementation(async (_id: string, mutate: any) => mutate({ sections: [original] }));
+
+    await expect(controller.analyzeSection('project', {
+      sectionId: '1', sectionTitle: 'Overview', sectionContent: editorHtml,
+    }, { user: actor })).resolves.toEqual({ issues: [] });
+
+    expect(analyze.mock.calls[0][2]).toBe(savedHtml);
+  });
+
+  it('rejects genuinely outdated text before spending an AI request', async () => {
+    projects.get.mockResolvedValue({ data: { protocol: { sections: [
+      { id: '1', title: 'Overview', content: '<p>New saved text</p>' },
+    ] } } });
+    const analyze = jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [] });
+
+    await expect(controller.analyzeSection('project', {
+      sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Old text</p>',
+    }, { user: actor })).rejects.toThrow('Reload');
+    expect(analyze).not.toHaveBeenCalled();
+    expect(protocols.updateAtomic).not.toHaveBeenCalled();
   });
 
   it('persists only the analyzed section while retaining concurrent changes elsewhere', async () => {

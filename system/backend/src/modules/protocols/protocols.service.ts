@@ -180,7 +180,7 @@ export class ProtocolsService {
       approvedAt?: string;
     },
     actor?: AuditActor,
-  ): Promise<{ ok: true; updatedAt: string }> {
+  ): Promise<{ ok: true; content: string; updatedAt: string }> {
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -233,7 +233,7 @@ export class ProtocolsService {
       }, client);
 
       await client.query("COMMIT");
-      return { ok: true, updatedAt: result.updatedAt };
+      return { ok: true, content: result.content, updatedAt: result.updatedAt };
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;

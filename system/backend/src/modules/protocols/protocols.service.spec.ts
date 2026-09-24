@@ -44,6 +44,21 @@ describe('protocol write transactions', () => {
     expect(client.release).toHaveBeenCalled();
   });
 
+  it('returns the exact saved content for subsequent analysis', async () => {
+    client.query.mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.includes('update protocol_section set')) {
+        return { rows: [{ title: 'Overview', content: params?.[2], updated_at: '2026-09-24T00:00:00Z' }] };
+      }
+      return { rows: [{ id: 'project', data: {} }] };
+    });
+    const response = await service.updateSection('project', '1', {
+      content: '<p>First<br>Second</p>', reason: 'Clarification',
+    }, actor);
+
+    expect(response).toMatchObject({ ok: true, content: '<p>First<br />Second</p>' });
+    expect(client.query).toHaveBeenLastCalledWith('COMMIT');
+  });
+
   it('rejects a missing project before saving section content', async () => {
     client.query.mockResolvedValue({ rows: [] });
     const save = jest.spyOn(service, 'updateSectionContent');

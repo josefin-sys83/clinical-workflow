@@ -58,6 +58,7 @@ export default function App() {
   const pendingProtocolWork = useRef(new Set<Promise<unknown>>());
   const generationRequested = useRef(false);
   const protocolEpoch = useRef(0);
+  const sectionAnalysisRequest = useRef<Record<string, number>>({});
   const trackProtocolWork = <T,>(work: () => Promise<T>): Promise<T> => {
     const promise = work();
     pendingProtocolWork.current.add(promise);
@@ -278,6 +279,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
   const analyzeSectionWithAI = (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0, requiredElements?: any[]): Promise<number> => {
     if (generationRequested.current) return Promise.resolve(0);
     const epoch = protocolEpoch.current;
+    const requestId = (sectionAnalysisRequest.current[sectionId] || 0) + 1;
+    sectionAnalysisRequest.current[sectionId] = requestId;
+    const isLatestAnalysis = () => epoch === protocolEpoch.current && sectionAnalysisRequest.current[sectionId] === requestId;
     return trackProtocolWork(async () => {
       setSectionAnalyzing(prev => ({ ...prev, [sectionId]: (prev[sectionId] || 0) + 1 }));
       setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
@@ -291,7 +295,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
         const result = await res.json();
         if (!result || !Array.isArray(result.issues)) throw new Error(aiAnalysisErrorMessage(502));
-        if (epoch !== protocolEpoch.current) return 0;
+        if (!isLatestAnalysis()) return 0;
         setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'succeeded' }));
 
         let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
@@ -313,7 +317,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         }));
         return resolvedCount;
       } catch (e) {
-        if (epoch !== protocolEpoch.current) return 0;
+        if (!isLatestAnalysis()) return 0;
         console.error('Section analysis failed', e);
         const message = e instanceof Error ? e.message : aiAnalysisErrorMessage(0);
         setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
@@ -335,8 +339,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
       // 1. Persist to backend — this also creates the audit trail entry with full
       //    user identity, before/after content, and reason for change.
+      let savedSection: { content: string; updatedAt: string };
       try {
-        await apiFetch('/projects/' + projectId + '/protocol/sections/' + sectionId, {
+        savedSection = await apiFetch<{ content: string; updatedAt: string }>('/projects/' + projectId + '/protocol/sections/' + sectionId, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -356,11 +361,12 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         throw e;
       }
 
-      // 2. Update local state to reflect the saved content immediately
+      // 2. Use the server's saved HTML for display, analysis, and retries. Saving
+      // sanitizes/normalizes editor HTML, so newContent may no longer match it.
       setProtocol((prev: any) => {
         if (!prev) return prev;
         const updatedSections = prev.sections.map((s: any) =>
-          s.id === sectionId ? { ...s, content: newContent, updatedAt: new Date().toISOString() } : s
+          s.id === sectionId ? { ...s, content: savedSection.content, updatedAt: savedSection.updatedAt } : s
         );
         return { ...prev, sections: updatedSections };
       });
@@ -371,7 +377,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
       // 3. Re-analyse and surface any resolved issues
       const sectionTitle = currentSection?.title || '';
-      const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
+      const resolvedCount = await analyzeSectionWithAI(sectionTitle, savedSection.content, sectionId, prevOpenCount);
       // resolved issues are reflected in the issues panel automatically
     });
   };

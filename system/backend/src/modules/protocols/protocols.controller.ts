@@ -8,6 +8,7 @@ import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { requireGeneratedText } from '../../common/require-generated-text';
+import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { randomUUID } from 'crypto';
 import { ProtocolsService } from './protocols.service';
 import { UpdateSectionContentDto, UploadProtocolAttachmentDto } from './dto';
@@ -212,11 +213,20 @@ export class ProtocolsController {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
     const originalSection = project?.data?.protocol?.sections?.find((s: any) => s.id === body.sectionId);
-    const result = await this.runSectionAnalysis(project, body.sectionTitle, body.sectionContent, body.sectionId, body.requiredElements);
+    // Browser HTML serialization can differ from the sanitized HTML stored by save
+    // (for example <br> versus <br />). Compare equivalent saved representations.
+    if (originalSection && originalSection.content !== sanitizeSectionHtml(body.sectionContent)) {
+      throw new ConflictException('The section changed before analysis started. Reload it and retry analysis on the saved text.');
+    }
+    const analyzedContent = originalSection?.content ?? body.sectionContent;
+    const result = await this.runSectionAnalysis(
+      project, originalSection?.title ?? body.sectionTitle, analyzedContent, body.sectionId,
+      originalSection?.requiredElements ?? body.requiredElements,
+    );
     if (originalSection && Array.isArray(result?.issues)) {
       await this.protocols.updateAtomic(projectId, current => {
         const section = current.sections?.find((s: any) => s.id === body.sectionId);
-        if (!section || section.content !== body.sectionContent || !isDeepStrictEqual(section, originalSection)) {
+        if (!section || section.content !== analyzedContent || !isDeepStrictEqual(section, originalSection)) {
           throw new ConflictException('The section changed during analysis. Retry analysis on the current text.');
         }
         return {
