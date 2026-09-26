@@ -361,7 +361,7 @@ export function ReportWorkspace() {
   const saveReportSectionState = async (sectionId: string, partialData: Record<string, any>) => {
     if (!projectId) return;
     try {
-      await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
+      return await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sections: { [sectionId]: partialData } }),
@@ -370,9 +370,11 @@ export function ReportWorkspace() {
           const errorBody = await response.json().catch(() => ({}));
           throw new Error(errorBody?.message || `Report section save failed (${response.status})`);
         }
+        return response.json();
       });
     } catch (error) {
       console.error('Report section state save failed', error);
+      return null;
     }
   };
 
@@ -418,10 +420,16 @@ export function ReportWorkspace() {
     return userFromRole(rawRoles, 'Medical Writer');
   }, [sessionUser, rawRoles]);
 
-  const handleSectionUpdate = (sectionId: string, content: string) => {
+  const handleSectionUpdate = async (sectionId: string, content: string, persisted = false) => {
     const section = sections.find(s => s.id === sectionId);
     if (!section) return;
 
+    // Start review only after the edited text has committed.
+    if (!persisted) {
+      const saved = await saveReportSectionState(sectionId, { content, userEdited: true });
+      if (!saved?.[sectionId]) return;
+      content = saved[sectionId].content;
+    }
     // Update content
     const updatedSection = { ...section, content, userEdited: true, aiDraft: undefined };
 
@@ -434,13 +442,13 @@ export function ReportWorkspace() {
       sections
     );
 
-    setSections(sections.map(s => 
-      s.id === sectionId 
-        ? { ...s, content, userEdited: true, aiDraft: undefined, validationFindings }
+    setSections(prev => prev.map(s =>
+      s.id === sectionId
+        ? { ...s, content, userEdited: true, aiDraft: undefined, validationFindings,
+            ...(!persisted ? { analysisStatus: 'not-run' as const, analysisError: null } : {}) }
         : s
     ));
-    
-    saveReportSectionState(sectionId, { content, userEdited: true });
+    if (!persisted) setSectionAiIssues(prev => ({ ...prev, [sectionId]: [] }));
   };
 
   // Persists real AI-derived completeness evidence — mirrors Protocol's
@@ -451,9 +459,12 @@ export function ReportWorkspace() {
     saveReportSectionState(sectionId, { completenessElements: elements });
   };
 
-  // Persists AI issues — mirrors Protocol's pattern of saving issues alongside the
-  // section data so they survive a reload instead of reading back as empty until
-  // the next analysis run completes.
+  // Analysis endpoints commit their result before returning it to the browser.
+  const handleSectionAnalysisChange = (sectionId: string, patch: Partial<ReportSection>, issues: any[]) => {
+    setSections(prev => prev.map(s => s.id === sectionId ? { ...s, ...patch } : s));
+    setSectionAiIssues(prev => ({ ...prev, [sectionId]: issues }));
+  };
+
   const handleSectionAiIssuesChange = (sectionId: string, issues: any[]) => {
     setSectionAiIssues(prev => ({ ...prev, [sectionId]: issues }));
     saveReportSectionState(sectionId, { issues });
@@ -461,15 +472,7 @@ export function ReportWorkspace() {
 
   const handleAcceptAIDraft = (sectionId: string) => {
     const section = sections.find(s => s.id === sectionId);
-    if (section?.aiDraft) {
-      const acceptedContent = section.aiDraft;
-      setSections(sections.map(s =>
-        s.id === sectionId
-          ? { ...s, content: s.aiDraft || '', aiDraft: undefined, userEdited: true }
-          : s
-      ));
-      saveReportSectionState(sectionId, { content: acceptedContent, userEdited: true });
-    }
+    if (section?.aiDraft) void handleSectionUpdate(sectionId, section.aiDraft);
   };
 
   const handleDismissAIDraft = (sectionId: string) => {
@@ -944,6 +947,7 @@ export function ReportWorkspace() {
             sectionAiIssues={sectionAiIssues}
             onSectionAiIssuesChange={handleSectionAiIssuesChange}
             onSectionCompletenessChange={handleSectionCompletenessChange}
+            onSectionAnalysisChange={handleSectionAnalysisChange}
             forceAnalyzeVersion={analysisVersion}
             savedWontFixIssues={savedWontFixIssues}
             onWontFixSave={handleWontFixSave}

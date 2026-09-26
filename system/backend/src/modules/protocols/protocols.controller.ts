@@ -9,6 +9,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { requireGeneratedText } from '../../common/require-generated-text';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
+import { logAnalyzeSectionRequest } from '../../common/analysis-request-logger';
 import { randomUUID } from 'crypto';
 import { ProtocolsService } from './protocols.service';
 import { UpdateSectionContentDto, UploadProtocolAttachmentDto } from './dto';
@@ -185,6 +186,7 @@ export class ProtocolsController {
             issues: [],
             analysisStatus: 'not-run',
             analysisError: null,
+            analysisRequestId: null,
           })),
         };
       },
@@ -212,36 +214,18 @@ export class ProtocolsController {
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
-    const originalSection = project?.data?.protocol?.sections?.find((s: any) => s.id === body.sectionId);
-    // Browser HTML serialization can differ from the sanitized HTML stored by save
-    // (for example <br> versus <br />). Compare equivalent saved representations.
-    if (originalSection && originalSection.content !== sanitizeSectionHtml(body.sectionContent)) {
-      throw new ConflictException('The section changed before analysis started. Reload it and retry analysis on the saved text.');
+    if (!body.sectionId) throw new BadRequestException('sectionId is required');
+    const { section, requestId } = await this.protocols.beginSectionAnalysis(projectId, body.sectionId, body.sectionContent, req?.user);
+    try {
+      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements);
+      if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
+      await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, result, null, req?.user);
+      return result;
+    } catch (error) {
+      await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, null,
+        error instanceof Error ? error.message : 'Section analysis failed', req?.user);
+      throw error;
     }
-    const analyzedContent = originalSection?.content ?? body.sectionContent;
-    const result = await this.runSectionAnalysis(
-      project, originalSection?.title ?? body.sectionTitle, analyzedContent, body.sectionId,
-      originalSection?.requiredElements ?? body.requiredElements,
-    );
-    if (originalSection && Array.isArray(result?.issues)) {
-      await this.protocols.updateAtomic(projectId, current => {
-        const section = current.sections?.find((s: any) => s.id === body.sectionId);
-        if (!section || section.content !== analyzedContent || !isDeepStrictEqual(section, originalSection)) {
-          throw new ConflictException('The section changed during analysis. Retry analysis on the current text.');
-        }
-        return {
-          ...current,
-          sections: current.sections.map((s: any) => s.id !== body.sectionId ? s : {
-            ...s,
-            issues: result.issues,
-            requiredElements: result.requiredElements?.length ? result.requiredElements : s.requiredElements,
-            analysisStatus: 'succeeded',
-            analysisError: null,
-          }),
-        };
-      }, req?.user);
-    }
-    return result;
   }
 
   @Post('/:projectId/analyze-sections')
@@ -249,6 +233,7 @@ export class ProtocolsController {
   async analyzeSections(
     @Param('projectId') projectId: string,
     @Body() body: { sectionIds?: string[] } = {},
+    @Req() req?: any,
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
@@ -260,7 +245,10 @@ export class ProtocolsController {
     // Batches of 3 (same pattern as generateProtocol) keep concurrent Azure OpenAI
     // requests low enough to avoid tripping per-minute rate limits.
     const results = await this.ai.mapInBatches(sections, 3, async (section: any) => {
-      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements);
+      const result = await this.analyzeSection(projectId, {
+        sectionId: section.id, sectionTitle: section.title, sectionContent: section.content,
+        requiredElements: section.requiredElements,
+      }, req);
       return { sectionId: section.id, ...result };
     });
 
@@ -303,6 +291,26 @@ export class ProtocolsController {
       targetMarkets,
       project?.data?.projectData || {},
     );
+
+    await logAnalyzeSectionRequest({
+      projectId: project.id,
+      sectionId,
+      aiRequestSent: attachmentIssues.length === 0,
+      request: {
+        sectionTitle,
+        sectionContent,
+        targetMarkets,
+        deviceCategory,
+        intendedUse,
+        requiredElements,
+        amendmentContext,
+        crossSectionContext,
+        acceptedRequirements,
+        synopsisExcerpt,
+      },
+      // The AI adapter currently omits attachments from its HTTP payload.
+      protocolAttachments: attachmentLabels,
+    });
 
     // This integrity check does not need AI. Return known-broken references
     // immediately, which also keeps this acceptance path usable before the AI

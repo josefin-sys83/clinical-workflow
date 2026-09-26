@@ -13,6 +13,8 @@ export type SectionRow = {
   status: string;
   ai_draft: string | null;
   user_edited: boolean;
+  analysis_status?: string;
+  analysis_error?: string | null;
 };
 
 type ChildRow = { section_id: string; position?: number | null };
@@ -184,7 +186,9 @@ function buildSection(
     aiDraft: section.ai_draft, // '<p>Suggested text</p>' or null.
     userEdited: section.user_edited, // true or false.
     comments: buildCommentTree(comments, null), // [{ id: 'comment-1', text: 'Please revise', replies: [...] }, ...].
-    issues: issues.map(mapIssue),
+    issues: issues.filter(issue => !dismissals.some(dismissal => dismissal.description === issue.description)).map(mapIssue),
+    analysisStatus: section.analysis_status || 'not-run',
+    analysisError: section.analysis_error || null,
     wontFixIssues: dismissals.map((dismissal) => dismissal.description), // ['Not applicable'] or [].
     completenessElements: completeness.map(mapCompletenessElement),
   };

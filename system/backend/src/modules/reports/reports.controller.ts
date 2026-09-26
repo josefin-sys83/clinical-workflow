@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Logger, Param, Patch, Post, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Get, Header, Logger, Param, Patch, Post, Req, UseGuards, ForbiddenException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
+import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { requireGeneratedText } from '../../common/require-generated-text';
 import { ReportsService } from './reports.service';
 import { UpdateReportSectionsDto } from './dto';
@@ -59,6 +60,7 @@ export class ReportsController {
   }
 
   @Get('/:projectId/report')
+  @Header('Cache-Control', 'no-store')
   getReport(@Param('projectId') projectId: string) {
     return this.reports.getByProject(projectId);
   }
@@ -249,7 +251,8 @@ export class ReportsController {
   @UseGuards(AiThrottlerGuard)
   async analyzeReportSection(
     @Param('projectId') projectId: string,
-    @Body() body: { sectionTitle: string; sectionContent: string; appendicesList?: string[] },
+    @Body() body: { sectionId: string; sectionTitle: string; sectionContent: string; appendicesList?: string[] },
+    @Req() req: any,
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
@@ -278,8 +281,19 @@ export class ReportsController {
       description: affectedAmendment.description,
     } : null;
 
-    const result = await this.ai.analyzeReportSection(body.sectionTitle, body.sectionContent, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext);
-    return result;
+    if (!body.sectionId) throw new BadRequestException('sectionId is required');
+    const content = sanitizeSectionHtml(body.sectionContent);
+    const requestId = await this.reports.beginSectionAnalysis(projectId, body.sectionId, content, req.user);
+    try {
+      const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext);
+      if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
+      const savedSection = await this.reports.finishSectionAnalysis(projectId, body.sectionId, requestId, result, null, req.user);
+      return { ...result, issues: savedSection.issues, section: savedSection };
+    } catch (error) {
+      await this.reports.finishSectionAnalysis(projectId, body.sectionId, requestId, null,
+        error instanceof Error ? error.message : 'Section analysis failed', req.user);
+      throw error;
+    }
   }
 
   @Post('/:projectId/check-cross-consistency')

@@ -1,3 +1,4 @@
+import { ProtocolsService } from './protocols.service';
 import { ProtocolsController } from './protocols.controller';
 import { PROTOCOL_SECTION_TITLES } from '../ai/ai.service';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
@@ -8,12 +9,18 @@ describe('protocol generation', () => {
   let protocols: any;
   let ai: any;
   let projects: any;
+  let stored: any;
 
   beforeEach(() => {
     projects = {
       get: jest.fn().mockResolvedValue({ name: 'Study', risk: 'IIa', deviceCategory: 'active', targetMarkets: ['EU'], roles: [], data: {} }),
     };
-    protocols = { updateAtomic: jest.fn(async (_id, mutate) => mutate({})) };
+    stored = {};
+    protocols = {
+      updateAtomic: jest.fn(async (_id, mutate) => { stored = mutate(stored); return stored; }),
+      beginSectionAnalysis: ProtocolsService.prototype.beginSectionAnalysis,
+      finishSectionAnalysis: ProtocolsService.prototype.finishSectionAnalysis,
+    };
     ai = {
       generateProtocol: jest.fn().mockResolvedValue({
         sections: PROTOCOL_SECTION_TITLES.map((title, i) => ({ id: String(i + 1), title, content: '<p>Generated content</p>' })),
@@ -88,6 +95,7 @@ describe('protocol generation', () => {
   });
 
   it('reloads canonical project metadata for every regeneration request', async () => {
+    protocols.updateAtomic.mockImplementation(async (_id: string, mutate: any) => mutate({}));
     projects.get
       .mockResolvedValueOnce({
         name: 'Study', deviceCategory: 'active', targetMarkets: ['EU'], roles: [],
@@ -156,9 +164,11 @@ describe('protocol generation', () => {
   it('rejects old analysis after section content was replaced', async () => {
     const original = { id: '1', title: 'Overview', content: 'Old text' };
     projects.get.mockResolvedValue({ data: { protocol: { sections: [original] } } });
-    jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [{ description: 'Old finding' }] });
-    protocols.updateAtomic.mockImplementation(async (_id: string, mutate: any) =>
-      mutate({ sections: [{ ...original, content: 'Regenerated text' }] }));
+    stored = { sections: [original] };
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockImplementation(async () => {
+      stored = { sections: [{ ...original, content: 'Regenerated text', analysisRequestId: null }] };
+      return { issues: [{ description: 'Old finding' }] };
+    });
     await expect(controller.analyzeSection('project', {
       sectionId: '1', sectionTitle: 'Overview', sectionContent: 'Old text',
     }, { user: actor })).rejects.toThrow('changed during analysis');
@@ -173,7 +183,7 @@ describe('protocol generation', () => {
     const original = { id: '1', title: 'Overview', content: savedHtml, requiredElements: [] };
     projects.get.mockResolvedValue({ data: { protocol: { sections: [original] } } });
     const analyze = jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [] });
-    protocols.updateAtomic.mockImplementation(async (_id: string, mutate: any) => mutate({ sections: [original] }));
+    stored = { sections: [original] };
 
     await expect(controller.analyzeSection('project', {
       sectionId: '1', sectionTitle: 'Overview', sectionContent: editorHtml,
@@ -192,7 +202,7 @@ describe('protocol generation', () => {
       sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Old text</p>',
     }, { user: actor })).rejects.toThrow('Reload');
     expect(analyze).not.toHaveBeenCalled();
-    expect(protocols.updateAtomic).not.toHaveBeenCalled();
+    expect(stored).toEqual({});
   });
 
   it('persists only the analyzed section while retaining concurrent changes elsewhere', async () => {
@@ -200,17 +210,39 @@ describe('protocol generation', () => {
     const other = { id: '2', content: 'Another user edited this section' };
     projects.get.mockResolvedValue({ data: { protocol: { sections: [original] } } });
     jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [], requiredElements: [] });
-    let saved: any;
-    protocols.updateAtomic.mockImplementation(async (_id: string, mutate: any) => {
-      saved = mutate({ sections: [original, other], amendments: [] });
-      return saved;
-    });
+    stored = { sections: [original, other], amendments: [] };
     await controller.analyzeSection('project', {
       sectionId: '1', sectionTitle: 'Overview', sectionContent: 'Current text',
     }, { user: actor });
-    expect(saved.sections[1]).toEqual(other);
-    expect(saved.sections[0].comments).toEqual(original.comments);
-    expect(saved.sections[0].issues).toEqual([]);
+    expect(stored.sections[1]).toEqual(other);
+    expect(stored.sections[0].comments).toEqual(original.comments);
+    expect(stored.sections[0].issues).toEqual([]);
+  });
+
+  it('clears old findings during review, then persists the new result including an empty success', async () => {
+    stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [{ id: 'old', textQuote: 'Text' }], analysisStatus: 'succeeded' }] };
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockImplementation(async () => {
+      expect(stored.sections[0]).toMatchObject({ analysisStatus: 'running', issues: [] });
+      return { issues: [] };
+    });
+    await controller.analyzeSection('project', { sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>' }, { user: actor });
+    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'succeeded', issues: [], analysisError: null });
+  });
+
+  it('persists a failed review without restoring stale findings', async () => {
+    stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [{ id: 'old' }] }] };
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockRejectedValue(new Error('Provider timed out'));
+    await expect(controller.analyzeSection('project', { sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>' }, { user: actor })).rejects.toThrow('Provider timed out');
+    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'failed', analysisError: 'Provider timed out', issues: [] });
+  });
+
+  it('uses the same saved review lifecycle for bulk section analysis', async () => {
+    stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [{ id: 'old' }] }] };
+    projects.get.mockImplementation(async () => ({ data: { protocol: stored } }));
+    ai.mapInBatches = async (items: any[], _size: number, fn: any) => Promise.all(items.map(fn));
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [] });
+    await controller.analyzeSections('project', {}, { user: actor });
+    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'succeeded', issues: [] });
   });
 
 });

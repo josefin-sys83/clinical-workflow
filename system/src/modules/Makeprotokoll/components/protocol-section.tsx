@@ -1,6 +1,8 @@
+import { SectionAnalysisOverlay } from '@/shared/editor/SectionAnalysisOverlay';
 import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
-import { highlightReviewHtml, stripReviewHighlights } from '@/shared/editor/review-highlights';
+import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
+import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
@@ -223,6 +225,7 @@ function ProtocolSectionComponent(
   const [showAmendmentWarning, setShowAmendmentWarning] = useState(false);
   const [completenessExpanded, setCompletenessExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [editorFindings, setEditorFindings] = useState<ReviewFinding[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showReasonModal, setShowReasonModal] = useState(false);
@@ -246,7 +249,7 @@ function ProtocolSectionComponent(
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
   // Count open issues by severity
-  const openIssues = section.issues?.filter(i => i.status === 'open') || [];
+  const openIssues = (section.issues || []).filter(i => i.status === 'open');
   const blockerCount = openIssues.filter(i => i.severity === 'blocker').length;
   const warningCount = openIssues.filter(i => i.severity === 'warning').length;
   const totalIssues = openIssues.length;
@@ -262,6 +265,7 @@ function ProtocolSectionComponent(
       // on entry so toolbar updates cannot replace the user's in-progress edits.
       editorRef.current.innerHTML = renderContent(section.content || '') || '<p><br></p>';
       editorRef.current.focus();
+      return trackReviewEditor(editorRef.current, openIssues, setEditorFindings);
     }
   }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -414,16 +418,17 @@ function ProtocolSectionComponent(
   // so it must never trust that alone — sanitize again immediately before render.
   const sanitizeForRender = (html: string): string => DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
-      'h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
       'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
       'img', 'mark', 'span', 'blockquote', 'code', 'pre',
     ],
-    ALLOWED_ATTR: ['style', 'src', 'alt'],
+    ALLOWED_ATTR: ['style', 'src', 'alt', 'start', 'reversed', 'value'],
   });
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), section.issues);
+    const findings = analysisStatus === 'running' || isAnalyzing ? [] : section.issues;
+    if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), findings);
     // Legacy markdown fallback
     let h = content
       .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -447,7 +452,7 @@ function ProtocolSectionComponent(
     h = h.split('\n').map(line =>
       /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
     ).join('\n');
-    return highlightReviewHtml(sanitizeForRender(h), section.issues);
+    return highlightReviewHtml(sanitizeForRender(h), findings);
   };
 
   return (
@@ -930,13 +935,6 @@ function ProtocolSectionComponent(
               </div>
             )}
 
-            {/* Re-analyzing banner */}
-            {isAnalyzing && (
-              <div style={{padding: '0.5rem 0.75rem', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.375rem', fontSize: '0.75rem', color: '#1d4ed8'}}>
-                Re-analyzing section for issues...
-              </div>
-            )}
-
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
               {section.content ? (() => {
@@ -945,7 +943,8 @@ function ProtocolSectionComponent(
                   const btnActive: React.CSSProperties = { ...btnBase, backgroundColor: '#e2e8f0' };
                   const divider = <div style={{ width: 1, height: 20, backgroundColor: '#d1d5db', margin: '0 4px', flexShrink: 0 }} />;
                   return (
-                    <div>
+                    <div key="section-edit">
+                      <ReviewAnchorNotice findings={editorFindings} />
                       {/* ── Toolbar ── */}
                       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, padding: '4px 6px', backgroundColor: '#f8fafc', borderRadius: '0.375rem 0.375rem 0 0', border: '2px solid #3b82f6', borderBottom: '1px solid #e2e8f0' }}>
                         {/* Text formatting group */}
@@ -1007,9 +1006,12 @@ function ProtocolSectionComponent(
                   </div>
                 );
                 return (
-                  <div>
+                  <div key="section-view">
                     {editButton}
-                    <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
+                    <div className="relative min-h-24" aria-busy={analysisStatus === 'running' || isAnalyzing}>
+                      {(analysisStatus === 'running' || isAnalyzing) && <SectionAnalysisOverlay />}
+                      <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
+                    </div>
                   </div>
                 );
               })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
