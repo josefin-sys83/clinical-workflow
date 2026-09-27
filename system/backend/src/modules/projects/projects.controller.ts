@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectsService, type ProjectAuditEvent } from './projects.service';
 import { AiService } from '../ai/ai.service';
+import { normalizeAiMarkets } from './project-generation-context';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -472,7 +473,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
     const existing = await this.projects.get(projectId);
     const existingSynopsis = existing?.data?.synopsis || {};
-    const targetMarkets = existing.targetMarkets || [];
+    const targetMarkets = normalizeAiMarkets(existing.targetMarkets);
 
     const results = await this.ai.analyzeSynopsis(text, targetMarkets);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));

@@ -364,6 +364,9 @@ export class ProtocolsService {
         subsection: row.subsection,
         description: row.description,
         reference: row.reference,
+        source: row.source,
+        targetSection: row.target_section,
+        remediation: row.remediation,
         raisedBy: row.raised_by,
         raisedDate: row.raised_date ? String(row.raised_date).slice(0, 10) : null,
         status: row.status,
@@ -839,8 +842,9 @@ export class ProtocolsService {
       await client.query(
         `insert into protocol_section_issue (
            section_id, issue_key, severity, subsection, description, reference,
-           raised_by, raised_date, status, due_date, text_quote
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           raised_by, raised_date, status, due_date, text_quote,
+           source, target_section, remediation
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          on conflict (section_id, issue_key) do update set
            severity = excluded.severity,
            subsection = excluded.subsection,
@@ -850,7 +854,10 @@ export class ProtocolsService {
            raised_date = excluded.raised_date,
            status = excluded.status,
            due_date = excluded.due_date,
-           text_quote = excluded.text_quote`,
+           text_quote = excluded.text_quote,
+           source = excluded.source,
+           target_section = excluded.target_section,
+           remediation = excluded.remediation`,
         [
           sectionId,
           key,
@@ -863,6 +870,9 @@ export class ProtocolsService {
           issue.status || 'open',
           issue.dueDate || null,
           issue.textQuote || null,
+          issue.source ?? null,
+          issue.targetSection ?? null,
+          issue.remediation ?? null,
         ],
       );
     }

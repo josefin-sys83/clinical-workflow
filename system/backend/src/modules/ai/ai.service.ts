@@ -1,10 +1,13 @@
 import {
+  BadGatewayException,
   GatewayTimeoutException,
   HttpException,
   Injectable,
   InternalServerErrorException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { acceptedRequirementsText } from '../projects/project-generation-context';
+import { validateAiResponse } from './ai-response-contract';
 
 export const PROTOCOL_SECTION_TITLES = [
   'Protocol Overview',
@@ -48,7 +51,8 @@ export class AiService {
     }
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  // Synopsis/scope/protocol opt in; report operations retain their current contract.
+  private async post<T>(path: string, body: unknown, validateResponse = false): Promise<T> {
     const response = await this.fetchAiService(path, {
       method: 'POST',
       headers: this.headers(),
@@ -58,23 +62,26 @@ export class AiService {
     const text = await response.text();
     let payload: any = null;
     if (text) {
-      try { payload = JSON.parse(text); } catch { payload = text; }
+      try { payload = JSON.parse(text); } catch {
+        if (response.ok && validateResponse) throw new BadGatewayException('AI service returned malformed JSON.');
+        payload = text;
+      }
     }
 
     if (!response.ok) this.throwRemoteError(response.status, payload);
-    return payload as T;
+    return validateResponse ? validateAiResponse<T>(path, payload) : payload as T;
   }
 
   async analyzeSynopsis(text: string, targetMarkets: string[] = []): Promise<any[]> {
-    return this.post('/v1/ai/analyze-synopsis', { text, targetMarkets });
+    return this.post('/v1/ai/analyze-synopsis', { text, targetMarkets }, true);
   }
 
   async deriveScopeFromSynopsis(text: string): Promise<{ deviceCategory: string; intendedUse: string; confidence: 'high' | 'medium' | 'low' }> {
-    return this.post('/v1/ai/derive-scope-from-synopsis', { text });
+    return this.post('/v1/ai/derive-scope-from-synopsis', { text }, true);
   }
 
   async analyzeScope(clientPrompt: string): Promise<any[]> {
-    return this.post('/v1/ai/analyze-scope', { clientPrompt });
+    return this.post('/v1/ai/analyze-scope', { clientPrompt }, true);
   }
 
   async generateProtocolSection(
@@ -88,9 +95,9 @@ export class AiService {
       sectionTitle,
       projectData,
       synopsis,
-      scope,
+      scope: { ...scope, requirements: acceptedRequirementsText(scope?.requirements) },
       additionalFixes,
-    });
+    }, true);
   }
 
   async mapInBatches<T, R>(
@@ -118,8 +125,9 @@ export class AiService {
     scope: any,
     onSectionDone?: (title: string) => void,
   ): Promise<any> {
+    scope = { ...scope, requirements: acceptedRequirementsText(scope?.requirements) };
     if (!onSectionDone) {
-      return this.post('/v1/ai/generate-protocol', { projectData, roles, synopsis, scope });
+      return this.post('/v1/ai/generate-protocol', { projectData, roles, synopsis, scope }, true);
     }
 
     const response = await this.fetchAiService('/v1/ai/generate-protocol/stream', {
@@ -134,7 +142,7 @@ export class AiService {
       try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
       this.throwRemoteError(response.status, payload);
     }
-    if (!response.body) throw new InternalServerErrorException('AI service returned an empty stream.');
+    if (!response.body) throw new BadGatewayException('AI service returned an empty stream.');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -143,36 +151,47 @@ export class AiService {
 
     const processLine = (line: string) => {
       if (!line.trim()) return;
-      const event = JSON.parse(line);
+      let event: any;
+      try { event = JSON.parse(line); } catch {
+        throw new BadGatewayException('AI service returned an invalid protocol stream.');
+      }
+      if (!event || typeof event !== 'object') throw new BadGatewayException('AI service returned an invalid protocol stream.');
       if (event.type === 'sectionDone') {
+        if (typeof event.title !== 'string') throw new BadGatewayException('AI service returned an invalid section title.');
         onSectionDone(event.title);
         return;
       }
       if (event.type === 'result') {
-        finalResult = event.data;
+        finalResult = validateAiResponse('/v1/ai/generate-protocol', event.data);
         return;
       }
       if (event.type === 'error') {
         this.throwRemoteError(event.statusCode || 500, event);
       }
+      throw new BadGatewayException('AI service returned an unknown protocol stream event.');
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newline: number;
-      while ((newline = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        processLine(line);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline: number;
+        while ((newline = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          processLine(line);
+        }
       }
+      buffer += decoder.decode();
+      if (buffer.trim()) processLine(buffer);
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
-    buffer += decoder.decode();
-    if (buffer.trim()) processLine(buffer);
 
     if (finalResult === undefined) {
-      throw new InternalServerErrorException('AI service stream ended without a final protocol result.');
+      throw new BadGatewayException('AI service stream ended without a final protocol result.');
     }
     return finalResult;
   }
@@ -183,7 +202,7 @@ export class AiService {
       targetMarkets,
       deviceCategory,
       intendedUse,
-    });
+    }, true);
   }
 
   async analyzeSection(
@@ -197,7 +216,6 @@ export class AiService {
     crossSectionContext?: { title: string; content: string }[],
     acceptedRequirements?: string,
     synopsisExcerpt?: string,
-    protocolAttachments?: string[],
   ): Promise<any> {
     return this.post('/v1/ai/analyze-section', {
       sectionTitle,
@@ -210,8 +228,7 @@ export class AiService {
       crossSectionContext,
       acceptedRequirements,
       synopsisExcerpt,
-      // protocolAttachments,
-    });
+    }, true);
   }
 
   async generateReportSection(
@@ -373,6 +390,6 @@ export class AiService {
     synopsisText: string,
     protocolSections: { title: string; content: string }[],
   ): Promise<{ issues: { description: string; severity: 'blocker' | 'warning' }[] }> {
-    return this.post('/v1/ai/check-synopsis-consistency', { synopsisText, protocolSections });
+    return this.post('/v1/ai/check-synopsis-consistency', { synopsisText, protocolSections }, true);
   }
 }

@@ -1,4 +1,4 @@
-import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
+import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, HttpException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -24,7 +24,7 @@ import { Roles } from '../auth/roles.decorator';
 import { PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
 import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
-import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
+import { acceptedRequirementsText, buildGenerationMetadataLog, buildProtocolGenerationContext, sourceSynopsisText } from '../projects/project-generation-context';
 import { ConflictException } from '@nestjs/common';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -93,12 +93,10 @@ export class ProtocolsController {
     const project = await this.projects.get(projectId);
     const originalProtocol = project?.data?.protocol || {};
     this.assertRegeneratable(originalProtocol);
-    const { aiProjectData, scope, intendedUse } = buildProjectGenerationContext(project);
+    const { aiProjectData, scope, intendedUse } = buildProtocolGenerationContext(project);
     const roles = project.roles || [];
-    const synopsisData = project?.data?.synopsis || {};
-    const synopsisText = synopsisData.extractedText ||
-      (synopsisData.readinessChecklist?.map((i: any) => i.reason).filter(Boolean).join(' ') ?? '');
-    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const synopsisText = sourceSynopsisText(project?.data?.synopsis);
+    const targetMarkets = aiProjectData.targetMarkets;
     const deviceCategory = aiProjectData.deviceCategory;
 
     const progressKey = `protocol:${projectId}`;
@@ -113,9 +111,7 @@ export class ProtocolsController {
         (title) => this.generationProgress.increment(progressKey, title),
       );
     } catch (err) {
-      // The real error (whatever an AI integration happens to throw — could include
-      // upstream response bodies, internal URLs, etc.) is logged and audited
-      // server-side only. The client always gets the same generic, predefined message.
+      // Audit the failure and preserve upstream status codes with a safe client message.
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[generateProtocol] failed for project ${projectId}:`, err);
       await this.projects.recordProjectEvent(projectId, {
@@ -127,7 +123,9 @@ export class ProtocolsController {
         entityLabel: 'Protocol',
         metadata: { error: message, failedAt: new Date().toISOString() },
       });
-      throw new InternalServerErrorException('Protocol generation failed. Please try again or contact support if the problem persists.');
+      const clientMessage = 'Protocol generation failed. Please try again or contact support if the problem persists.';
+      if (err instanceof HttpException) throw new HttpException(clientMessage, err.getStatus());
+      throw new InternalServerErrorException(clientMessage);
     } finally {
       this.generationProgress.clear(progressKey);
     }
@@ -256,8 +254,8 @@ export class ProtocolsController {
   }
 
   private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined) {
-    const { aiProjectData, intendedUse } = buildProjectGenerationContext(project);
-    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const { aiProjectData, intendedUse } = buildProtocolGenerationContext(project);
+    const targetMarkets = aiProjectData.targetMarkets;
     const deviceCategory = aiProjectData.deviceCategory;
 
     const protocol = project?.data?.protocol || {};
@@ -270,12 +268,8 @@ export class ProtocolsController {
       .filter((s: any) => ['Study Design', 'Study Rationale & Objectives'].includes(s.title) && s.title !== sectionTitle && s.content)
       .map((s: any) => ({ title: s.title, content: s.content }));
 
-    const acceptedRequirements = (project?.data?.scope?.requirements || [])
-      .filter((r: any) => r.status === 'accepted')
-      .map((r: any) => `${r.title}: ${r.description}`)
-      .join('\n');
-
-    const synopsisExcerpt = project?.data?.synopsis?.extractedText || '';
+    const acceptedRequirements = acceptedRequirementsText(project?.data?.scope?.requirements);
+    const synopsisExcerpt = sourceSynopsisText(project?.data?.synopsis);
 
     const protocolAttachments = await this.protocols.listAttachmentsForAnalysis(project.id);
     const attachmentLabels = protocolAttachments.map((attachment) =>
@@ -308,7 +302,7 @@ export class ProtocolsController {
         acceptedRequirements,
         synopsisExcerpt,
       },
-      // The AI adapter currently omits attachments from its HTTP payload.
+      // Attachments are checked locally; the Python API has no attachment input.
       protocolAttachments: attachmentLabels,
     });
 
@@ -323,7 +317,7 @@ export class ProtocolsController {
       };
     }
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt, attachmentLabels);
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt);
 
     if (result?.error) return result;
 
@@ -542,10 +536,7 @@ export class ProtocolsController {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
     const protocol = project?.data?.protocol || {};
-    const synopsis = project?.data?.synopsis || {};
-
-    const synopsisText = synopsis.readiness || synopsis.text || synopsis.content ||
-      Object.values(synopsis).filter(v => typeof v === 'string').join('\n') || '';
+    const synopsisText = sourceSynopsisText(project?.data?.synopsis);
 
     const protocolSections = (protocol.sections || []).map((s: any) => ({
       title: s.title,
