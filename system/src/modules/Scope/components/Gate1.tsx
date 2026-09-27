@@ -28,6 +28,7 @@ interface Requirement {
   status: "suggested" | "accepted" | "not-applicable";
   justification?: string;
   source?: "ai-suggested" | "user-defined" | "library" | "mandatory";
+  alwaysApplies?: boolean;
 }
 
 interface LibraryRequirement {
@@ -41,6 +42,7 @@ interface ProjectStandard {
   id: number;
   code: string;
   title: string;
+  alwaysApplies: boolean;
 }
 
 type RequirementsAnalysisStatus = 'not-run' | 'running' | 'succeeded' | 'failed';
@@ -62,20 +64,24 @@ const reconcileMandatoryStandards = (
     return {
       id,
       title: `${standard.code} — ${standard.title}`,
-      description: `This standard applies to the project based on its risk class, device category, and target markets.`,
-      status: existing?.status ?? "suggested",
-      justification: existing?.justification,
+      description: standard.alwaysApplies
+        ? 'Always required as a mandatory baseline for every project.'
+        : 'This standard applies to the project based on its risk class, device category, and target markets.',
+      status: standard.alwaysApplies ? "accepted" : existing?.status ?? "suggested",
+      justification: standard.alwaysApplies ? undefined : existing?.justification,
       source: "mandatory",
+      alwaysApplies: standard.alwaysApplies,
     };
   });
 
-  const mandatoryCodes = projectStandards.map(standard => standard.code.toLowerCase());
+  const normalizeCode = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const mandatoryCodes = projectStandards.map(standard => normalizeCode(standard.code));
   const nonMandatoryRequirements = currentRequirements.filter(requirement => {
     if (requirement.source === "mandatory") return false;
 
     // If the AI happened to suggest the same standard, keep only the authoritative
     // mandatory version returned through project_standards.
-    const normalizedTitle = requirement.title.toLowerCase();
+    const normalizedTitle = normalizeCode(requirement.title);
     return !mandatoryCodes.some(code => normalizedTitle.includes(code));
   });
 
@@ -786,10 +792,12 @@ Return ONLY a JSON array, no markdown:
   };
 
   const handleRevertRequirement = (requirementId: string) => {
+    if (requirements.find(r => r.id === requirementId)?.alwaysApplies) return;
     setRequirements(requirements.map(r => r.id === requirementId ? { ...r, status: "suggested" as const } : r));
   };
 
   const handleMarkNotApplicable = (requirementId: string) => {
+    if (requirements.find(r => r.id === requirementId)?.alwaysApplies) return;
     setJustificationDialog({
       open: true,
       requirementId,
@@ -800,7 +808,7 @@ Return ONLY a JSON array, no markdown:
   const handleSubmitJustification = () => {
     if (justificationDialog.requirementId) {
       setRequirements(requirements.map(r =>
-        r.id === justificationDialog.requirementId
+        r.id === justificationDialog.requirementId && !r.alwaysApplies
           ? { ...r, status: "not-applicable" as const, justification: justificationDialog.justification }
           : r
       ));
@@ -1128,6 +1136,11 @@ Return ONLY a JSON array, no markdown:
                       )}
                     </div>
                     <div className="flex gap-2 shrink-0">
+                      {req.alwaysApplies ? (
+                        <span className="inline-flex items-center gap-1.5 text-sm text-blue-700" title="Always accepted. Cannot be declined, reverted, or removed.">
+                          <Lock className="size-4" /> Accepted · Always required
+                        </span>
+                      ) : (<>
                       <Button
                         size="sm"
                         variant="outline"
@@ -1179,6 +1192,7 @@ Return ONLY a JSON array, no markdown:
                           <X className="size-4" />
                         </Button>
                       )}
+                      </>)}
                     </div>
                   </div>
                 ))}

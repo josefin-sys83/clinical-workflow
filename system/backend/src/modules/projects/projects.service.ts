@@ -11,6 +11,7 @@ import { AuditService } from "../audit/audit.service";
 import type { AuditActor, RecordAuditEvent } from "../audit/audit.service";
 import { ProtocolsService } from "../protocols/protocols.service";
 import { ReportsService } from "../reports/reports.service";
+import { withAcceptedBaselineRequirements } from './baseline-requirements';
 
 export type ProjectAuditEvent = Omit<RecordAuditEvent, "projectId" | "actor">;
 
@@ -167,6 +168,7 @@ export class ProjectsService {
     const report = await this.reports.getByProject(id);
     const reportSignatures = await this.reports.getSignaturesByProject(id);
     const { signatures: _signatures, ...responseData } = projectData;
+    responseData.scope = withAcceptedBaselineRequirements(responseData.scope, await this.getProjectStandards(id));
 
     return {
       ...p,
@@ -694,6 +696,7 @@ export class ProjectsService {
         await this.protocols.save(id, incomingProtocol, actor, client);
       }
 
+      mergedData.scope = withAcceptedBaselineRequirements(mergedData.scope, await this.getProjectStandards(id, client));
       const requirementAuditEvents = this.deriveRequirementAuditEvents(
         existingData,
         mergedData,
@@ -947,15 +950,20 @@ export class ProjectsService {
     return { frameworks, standards };
   }
 
-  async getProjectStandards(projectId: string): Promise<
+  async getProjectStandards(projectId: string, client?: PoolClient): Promise<
     Array<{
       id: number;
       code: string;
       title: string;
+      alwaysApplies: boolean;
     }>
   > {
-    const { rows } = await getPool().query(
-      `SELECT s.id, s.code, s.title
+    const { rows } = await (client ?? getPool()).query(
+      `SELECT s.id, s.code, s.title,
+              EXISTS (
+                SELECT 1 FROM standard_rules sr
+                WHERE sr.standard_id = s.id AND sr.always_applies = true
+              ) AS "alwaysApplies"
        FROM project_standards ps
        JOIN standards s ON s.id = ps.standard_id
        WHERE ps.project_id = $1
