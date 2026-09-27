@@ -3,15 +3,35 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel, ValidationError
 
 from clinical_ai.config import Settings
-from clinical_ai.errors import GatewayTimeoutException, ServiceUnavailableException
+from clinical_ai.errors import GatewayTimeoutException, ServiceUnavailableException, StructuredOutputException
 from .exceptions import LLMHTTPError, LLMNetworkError, LLMRateLimitError
 from .provider import LLMProvider
-from .types import LLMRequest, PROMPT_CONTENT_DELIMITER, PromptSpec
+from .types import LLMRequest, PromptSpec
 
 logger = logging.getLogger(__name__)
+
+StructuredResponse = TypeVar("StructuredResponse", bound=BaseModel)
+
+
+def _prepare_json_schema(value: Any) -> Any:
+    if isinstance(value, dict):
+        prepared: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "title":
+                continue
+            if key == "const":
+                prepared["enum"] = [item]
+                continue
+            prepared[key] = _prepare_json_schema(item)
+        return prepared
+    if isinstance(value, list):
+        return [_prepare_json_schema(item) for item in value]
+    return value
 
 
 class LLMGateway:
@@ -65,46 +85,114 @@ class LLMGateway:
 
     async def complete(self, spec: PromptSpec | str, max_tokens: int = 2000, temperature: float = 0.3) -> str:
         if isinstance(spec, PromptSpec):
-            prompt = spec.prompt
             max_tokens = spec.max_tokens
             temperature = spec.temperature
-        else:
-            prompt = spec
 
         await self._acquire_slot()
         try:
-            return await self._complete_with_retry(prompt, max_tokens, temperature)
+            return await self._complete_with_retry(spec, max_tokens, temperature)
         finally:
             self._release_slot()
 
-    def _make_request(self, prompt: str, max_tokens: int, temperature: float) -> LLMRequest:
-        delimiter_idx = prompt.find(PROMPT_CONTENT_DELIMITER)
-        if delimiter_idx == -1:
-            messages = [{"role": "user", "content": prompt}]
-        else:
+    async def complete_structured(
+        self,
+        spec: PromptSpec | str,
+        response_model: type[StructuredResponse],
+        max_tokens: int = 2000,
+        temperature: float = 0.3,
+    ) -> StructuredResponse:
+        if isinstance(spec, PromptSpec):
+            max_tokens = spec.max_tokens
+            temperature = spec.temperature
+
+        await self._acquire_slot()
+        try:
+            raw = await self._complete_with_retry(
+                spec,
+                max_tokens,
+                temperature,
+                response_schema=_prepare_json_schema(response_model.model_json_schema()),
+                response_schema_name=response_model.__name__,
+            )
+        finally:
+            self._release_slot()
+
+        if not raw:
+            raise StructuredOutputException(
+                "AI structured analysis failed to return a response."
+            )
+
+        try:
+            return response_model.model_validate_json(raw)
+        except ValidationError as exc:
+            logger.error(
+                "[AI] structured response validation failed for %s: %s raw: %s",
+                response_model.__name__,
+                exc,
+                raw[:500],
+            )
+            raise StructuredOutputException(
+                "AI response did not match the required structured output schema."
+            ) from exc
+        except ValueError as exc:
+            logger.error(
+                "[AI] structured response JSON parsing failed for %s: %r raw: %s",
+                response_model.__name__,
+                exc,
+                raw[:500],
+            )
+            raise StructuredOutputException(
+                "AI response did not match the required structured output schema."
+            ) from exc
+
+    def _make_request(
+        self,
+        spec: PromptSpec | str,
+        max_tokens: int,
+        temperature: float,
+        response_schema: dict[str, Any] | None = None,
+        response_schema_name: str | None = None,
+    ) -> LLMRequest:
+        if isinstance(spec, PromptSpec):
             messages = [
-                {"role": "system", "content": prompt[:delimiter_idx]},
-                {
-                    "role": "user",
-                    "content": prompt[delimiter_idx + len(PROMPT_CONTENT_DELIMITER):],
-                },
+                {"role": "system", "content": spec.system},
+                {"role": "user", "content": spec.user},
             ]
+            prompt_text = spec.system + "\n" + spec.user
+        else:
+            messages = [{"role": "user", "content": spec}]
+            prompt_text = spec
 
         return LLMRequest(
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
-            json_mode="Return ONLY this JSON" in prompt,
+            json_mode="Return ONLY this JSON" in prompt_text,
+            response_schema=response_schema,
+            response_schema_name=response_schema_name,
         )
 
     async def _sleep(self, seconds: float) -> None:
         await asyncio.sleep(max(0.0, seconds))
 
-    async def _complete_with_retry(self, prompt: str, max_tokens: int, temperature: float) -> str:
+    async def _complete_with_retry(
+        self,
+        spec: PromptSpec | str,
+        max_tokens: int,
+        temperature: float,
+        response_schema: dict[str, Any] | None = None,
+        response_schema_name: str | None = None,
+    ) -> str:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + (self.settings.ai_call_timeout_ms / 1000)
         max_attempts = self.settings.ai_max_attempts
-        request = self._make_request(prompt, max_tokens, temperature)
+        request = self._make_request(
+            spec,
+            max_tokens,
+            temperature,
+            response_schema,
+            response_schema_name,
+        )
 
         for attempt in range(max_attempts):
             remaining = deadline - loop.time()
