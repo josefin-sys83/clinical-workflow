@@ -94,6 +94,8 @@ export interface InsertedAsset {
 }
 
 export interface ReportSection {
+  analysisStatus?: 'not-run' | 'running' | 'succeeded' | 'failed';
+  analysisError?: string | null;
   id: string;
   title: string;
   helperText: string;

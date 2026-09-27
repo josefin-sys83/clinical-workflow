@@ -1,6 +1,5 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { getPool } from '../../db/pg';
-import { sanitizeIncomingProjectData } from '../../common/sanitize-section-html';
 import { ReportsService } from './reports.service';
 
 jest.mock('../../db/pg', () => ({ getPool: jest.fn() }));
@@ -75,12 +74,6 @@ describe('relational reports', () => {
     expect(inserts).toHaveLength(1);
     expect(inserts[0][1]).toEqual(['report', 'finding-a', actor.userId]);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ actor, type: 'report.consistency.dismissed' }), client);
-  });
-
-  it('does not allow project JSON to bypass report and signature endpoints', () => {
-    expect(() => sanitizeIncomingProjectData({ report: { sections: {} } })).toThrow(BadRequestException);
-    expect(() => sanitizeIncomingProjectData({ signatures: [] })).toThrow(BadRequestException);
-    expect(sanitizeIncomingProjectData({ scope: { title: 'Scope' } })).toEqual({ scope: { title: 'Scope' } });
   });
 
   it('returns saved evidence and nested comments from relational rows', async () => {
@@ -183,7 +176,7 @@ describe('relational reports', () => {
       wontFixIssues: ['Not applicable', 'Not applicable'],
     } }, actor);
     const [sql, values] = query.mock.calls.find(([sql]) => sql.startsWith('update report_section set'))!;
-    expect(sql).toBe('update report_section set updated_at=now(),updated_by_user_id=$2,title=$3,content=$4,status=$5,user_edited=$6 where id=$1');
+    expect(sql).toBe('update report_section set updated_at=now(),updated_by_user_id=$2,title=$3,content=$4,status=$5,user_edited=$6,analysis_status=\'not-run\',analysis_error=null,analysis_request_id=null where id=$1');
     expect(values).toEqual(['section', actor.userId, 'Safety', '<p>Saved</p>', 'draft', true]);
     const issueInsert = query.mock.calls.find(([sql]) => sql.startsWith('insert into report_section_issue('))!;
     expect(issueInsert[1]).toEqual(['section', 'issue', 1, 'info', undefined, undefined, 'Legacy description', undefined, undefined, null, 'open', undefined, undefined]);

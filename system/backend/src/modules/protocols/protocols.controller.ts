@@ -1,4 +1,4 @@
-import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -8,6 +8,8 @@ import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 import { requireGeneratedText } from '../../common/require-generated-text';
+import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
+import { logAnalyzeSectionRequest } from '../../common/analysis-request-logger';
 import { randomUUID } from 'crypto';
 import { ProtocolsService } from './protocols.service';
 import { UpdateSectionContentDto, UploadProtocolAttachmentDto } from './dto';
@@ -22,12 +24,28 @@ import { Roles } from '../auth/roles.decorator';
 import { PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
 import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
+import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
+import { ConflictException } from '@nestjs/common';
+import { isDeepStrictEqual } from 'node:util';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
 @ApiTags('protocols')
 @Controller('/api/projects')
 export class ProtocolsController {
+  private readonly logger = new Logger(ProtocolsController.name);
+
+  private assertRegeneratable(protocol: any) {
+    const sections = protocol?.sections || [];
+    if ((protocol?.amendments || []).length ||
+        (protocol?.status && protocol.status !== 'draft') ||
+        sections.some((s: any) => s.locked || s.approvedAt || s.approvedBy || s.amended ||
+          (s.approvalStatus && s.approvalStatus !== 'draft') ||
+          ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))) {
+      throw new ConflictException('Full regeneration requires an unapproved draft without amendments. Existing review records cannot be replaced.');
+    }
+  }
+
   constructor(
     private readonly projects: ProjectsService,
     private readonly protocols: ProtocolsService,
@@ -73,28 +91,25 @@ export class ProtocolsController {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     await this.documentWorkflow.assertProtocolPrerequisites(projectId);
     const project = await this.projects.get(projectId);
-    // Project Setup stores the authoritative title in the relational/top-level `name`
-    // field and intentionally omits `projectName` from data.projectData. Enrich the AI
-    // input here so protocol generation does not fall back to "[Study Title]".
-    const projectData = {
-      ...(project?.data?.projectData || {}),
-      projectName: project.name,
-    };
+    const originalProtocol = project?.data?.protocol || {};
+    this.assertRegeneratable(originalProtocol);
+    const { aiProjectData, scope, intendedUse } = buildProjectGenerationContext(project);
     const roles = project.roles || [];
-    const scope = project?.data?.scope || {};
     const synopsisData = project?.data?.synopsis || {};
     const synopsisText = synopsisData.extractedText ||
       (synopsisData.readinessChecklist?.map((i: any) => i.reason).filter(Boolean).join(' ') ?? '');
-    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
-    const deviceCategory = project.deviceCategory || '';
-    const intendedUse = scope?.intendedUse || '';
+    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const deviceCategory = aiProjectData.deviceCategory;
 
     const progressKey = `protocol:${projectId}`;
     let protocol: any;
     try {
       this.generationProgress.start(progressKey, PROTOCOL_SECTION_TITLES.length);
+      this.logger.log(buildGenerationMetadataLog(
+        'protocol', projectId, aiProjectData, scope, roles,
+      ));
       protocol = await this.ai.generateProtocol(
-        projectData, roles, synopsisText, scope,
+        aiProjectData, roles, synopsisText, scope,
         (title) => this.generationProgress.increment(progressKey, title),
       );
     } catch (err) {
@@ -148,7 +163,33 @@ export class ProtocolsController {
     // committed relational rows rather than an unsaved browser-only protocol.
     const savedProtocol = await this.protocols.updateAtomic(
       projectId,
-      () => protocol,
+      current => {
+        this.assertRegeneratable(current);
+        if (!isDeepStrictEqual(current, originalProtocol)) {
+          throw new ConflictException('The protocol changed during generation. Reload it before regenerating. Your saved changes were preserved.');
+        }
+        const previousSections = current.sections || [];
+        if (previousSections.some((old: any) => !protocol.sections.some((s: any) => s.id === old.id))) {
+          throw new ConflictException('Regeneration would remove existing sections. Your saved protocol was preserved.');
+        }
+        return {
+          ...current,
+          ...protocol,
+          protocolId: current.protocolId || protocol.protocolId,
+          amendments: current.amendments || [],
+          sections: protocol.sections.map((s: any) => ({
+            ...previousSections.find((old: any) => old.id === s.id),
+            ...s,
+            comments: previousSections.find((old: any) => old.id === s.id)?.comments || [],
+            aiGenerated: true,
+            updatedAt: new Date().toISOString(),
+            issues: [],
+            analysisStatus: 'not-run',
+            analysisError: null,
+            analysisRequestId: null,
+          })),
+        };
+      },
       req.user,
       {
         type: 'protocol.generated',
@@ -168,11 +209,23 @@ export class ProtocolsController {
   @UseGuards(AiThrottlerGuard)
   async analyzeSection(
     @Param('projectId') projectId: string,
-    @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] }
+    @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] },
+    @Req() req?: any,
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
-    return this.runSectionAnalysis(project, body.sectionTitle, body.sectionContent, body.sectionId, body.requiredElements);
+    if (!body.sectionId) throw new BadRequestException('sectionId is required');
+    const { section, requestId } = await this.protocols.beginSectionAnalysis(projectId, body.sectionId, body.sectionContent, req?.user);
+    try {
+      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements);
+      if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
+      await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, result, null, req?.user);
+      return result;
+    } catch (error) {
+      await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, null,
+        error instanceof Error ? error.message : 'Section analysis failed', req?.user);
+      throw error;
+    }
   }
 
   @Post('/:projectId/analyze-sections')
@@ -180,6 +233,7 @@ export class ProtocolsController {
   async analyzeSections(
     @Param('projectId') projectId: string,
     @Body() body: { sectionIds?: string[] } = {},
+    @Req() req?: any,
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     const project = await this.projects.get(projectId);
@@ -191,7 +245,10 @@ export class ProtocolsController {
     // Batches of 3 (same pattern as generateProtocol) keep concurrent Azure OpenAI
     // requests low enough to avoid tripping per-minute rate limits.
     const results = await this.ai.mapInBatches(sections, 3, async (section: any) => {
-      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements);
+      const result = await this.analyzeSection(projectId, {
+        sectionId: section.id, sectionTitle: section.title, sectionContent: section.content,
+        requiredElements: section.requiredElements,
+      }, req);
       return { sectionId: section.id, ...result };
     });
 
@@ -199,9 +256,9 @@ export class ProtocolsController {
   }
 
   private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined) {
-    const targetMarkets = project?.targetMarkets?.length > 0 ? project.targetMarkets : ['EU'];
-    const deviceCategory = project?.deviceCategory || '';
-    const intendedUse = project?.data?.scope?.intendedUse || '';
+    const { aiProjectData, intendedUse } = buildProjectGenerationContext(project);
+    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const deviceCategory = aiProjectData.deviceCategory;
 
     const protocol = project?.data?.protocol || {};
     const section = (protocol.sections || []).find((s: any) => s.title === sectionTitle || s.id === sectionId);
@@ -234,6 +291,26 @@ export class ProtocolsController {
       targetMarkets,
       project?.data?.projectData || {},
     );
+
+    await logAnalyzeSectionRequest({
+      projectId: project.id,
+      sectionId,
+      aiRequestSent: attachmentIssues.length === 0,
+      request: {
+        sectionTitle,
+        sectionContent,
+        targetMarkets,
+        deviceCategory,
+        intendedUse,
+        requiredElements,
+        amendmentContext,
+        crossSectionContext,
+        acceptedRequirements,
+        synopsisExcerpt,
+      },
+      // The AI adapter currently omits attachments from its HTTP payload.
+      protocolAttachments: attachmentLabels,
+    });
 
     // This integrity check does not need AI. Return known-broken references
     // immediately, which also keeps this acceptance path usable before the AI

@@ -1,6 +1,9 @@
+import { SectionAnalysisOverlay } from '@/shared/editor/SectionAnalysisOverlay';
 import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image } from 'lucide-react';
+import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
+import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { InlineIssueMarker } from './inline-issue-marker';
@@ -30,6 +33,7 @@ interface ProtocolIssue {
   raisedDate: string;
   status: 'open' | 'potentially-resolved' | 'resolved';
   dueDate?: string;
+  textQuote?: string | null;
 }
 
 interface RequiredElement {
@@ -214,13 +218,14 @@ function ProtocolSectionComponent(
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
   const [guidanceExpanded, setGuidanceExpanded] = useState(false);
-  const [issuesExpanded, setIssuesExpanded] = useState(false);
+  const [issuesExpanded, setIssuesExpanded] = useState(true);
   const [rolesExpanded, setRolesExpanded] = useState(false);
   const [auditTrailOpen, setAuditTrailOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [showAmendmentWarning, setShowAmendmentWarning] = useState(false);
   const [completenessExpanded, setCompletenessExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [editorFindings, setEditorFindings] = useState<ReviewFinding[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showReasonModal, setShowReasonModal] = useState(false);
@@ -244,9 +249,11 @@ function ProtocolSectionComponent(
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
   // Count open issues by severity
-  const openIssues = section.issues?.filter(i => i.status === 'open') || [];
-  const blockerCount = openIssues.filter(i => i.severity === 'blocker').length;
-  const warningCount = openIssues.filter(i => i.severity === 'warning').length;
+  const openIssues = (section.issues || []).filter(i => i.status === 'open' || !i.status);
+  const { blocker: blockerCount, warning: warningCount } = openIssues.reduce(
+    (counts, issue) => ({ ...counts, [issue.severity]: counts[issue.severity] + 1 }),
+    { blocker: 0, warning: 0 },
+  );
   const totalIssues = openIssues.length;
   const isBlocked = blockerCount > 0;
   const analysisBlocksApproval = section.aiGenerated && analysisStatus !== 'succeeded';
@@ -256,12 +263,11 @@ function ProtocolSectionComponent(
   // Populate editor HTML when entering edit mode
   useEffect(() => {
     if (isEditing && editorRef.current) {
-      // Fix 19: previously assigned section.content to innerHTML directly, bypassing the
-      // sanitizeForRender() DOMPurify pass used everywhere else in this file — a stray
-      // <img onerror=...> or similar would execute the instant a user opened the section
-      // for editing. Sanitize here too, exactly as the read-mode render path already does.
-      editorRef.current.innerHTML = sanitizeForRender(section.content || '') || '<p><br></p>';
+      // Use the same sanitized, annotated content as reading mode. Initialize only
+      // on entry so toolbar updates cannot replace the user's in-progress edits.
+      editorRef.current.innerHTML = renderContent(section.content || '') || '<p><br></p>';
       editorRef.current.focus();
+      return trackReviewEditor(editorRef.current, openIssues, setEditorFindings);
     }
   }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -414,16 +420,17 @@ function ProtocolSectionComponent(
   // so it must never trust that alone — sanitize again immediately before render.
   const sanitizeForRender = (html: string): string => DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
-      'h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
       'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
       'img', 'mark', 'span', 'blockquote', 'code', 'pre',
     ],
-    ALLOWED_ATTR: ['style', 'src', 'alt'],
+    ALLOWED_ATTR: ['style', 'src', 'alt', 'start', 'reversed', 'value'],
   });
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    if (/<[a-z][\s\S]*>/i.test(content)) return sanitizeForRender(content);
+    const findings = analysisStatus === 'running' || isAnalyzing ? [] : section.issues;
+    if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), findings);
     // Legacy markdown fallback
     let h = content
       .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -447,12 +454,13 @@ function ProtocolSectionComponent(
     h = h.split('\n').map(line =>
       /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
     ).join('\n');
-    return sanitizeForRender(h);
+    return highlightReviewHtml(sanitizeForRender(h), findings);
   };
 
   return (
     <div 
       ref={ref}
+      data-protocol-section={section.id}
       className={`bg-white border rounded transition-all duration-300 ${
         isHighlighted 
           ? 'border-blue-500 shadow-lg ring-2 ring-blue-200' 
@@ -469,6 +477,26 @@ function ProtocolSectionComponent(
               </h3>
               
               {/* Status Badges */}
+              {(section.aiGenerated || analysisStatus === 'running') && (
+                <span
+                  role="status"
+                  aria-live="polite"
+                  title={analysisStatus === 'running' ? 'New blockers or warnings may appear as analysis finishes.' : undefined}
+                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded border ${
+                    analysisStatus === 'running' ? 'bg-blue-50 text-blue-800 border-blue-200'
+                      : analysisStatus === 'failed' ? 'bg-red-50 text-red-800 border-red-200'
+                      : 'bg-slate-50 text-slate-600 border-slate-200'
+                  }`}
+                >
+                  {analysisStatus === 'running' && <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />}
+                  {analysisStatus === 'succeeded' && <CheckCircle2 className="w-3 h-3" aria-hidden="true" />}
+                  {analysisStatus === 'failed' && <AlertCircle className="w-3 h-3" aria-hidden="true" />}
+                  {analysisStatus === 'running' ? 'AI analyzing…'
+                    : analysisStatus === 'succeeded' ? 'AI analysis complete'
+                    : analysisStatus === 'failed' ? 'AI analysis failed'
+                    : 'AI analysis not run'}
+                </span>
+              )}
               {section.locked && (
                 <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded">
                   Locked
@@ -491,7 +519,8 @@ function ProtocolSectionComponent(
               )}
               {/* Issue Count Badges - clickable, expand issues list */}
               {totalIssues > 0 && (
-                <>
+                <span className="inline-flex items-center gap-2" aria-label="Open findings summary" aria-live="polite" data-section-findings-summary={section.id}>
+                  <span className="text-xs text-slate-600">Open findings:</span>
                   {blockerCount > 0 && (
                     <button
                       onClick={(e) => {
@@ -501,7 +530,7 @@ function ProtocolSectionComponent(
                         setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
                       }}
                       className="px-2 py-0.5 bg-rose-50 text-xs rounded border border-rose-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer" style={{color: '#991b1b'}}
-                      title="Click to view blockers"
+                      title="Open blockers in the findings list; completeness checks are counted separately"
                     >
                       {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
                     </button>
@@ -515,12 +544,12 @@ function ProtocolSectionComponent(
                         setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
                       }}
                       className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded border border-amber-200 hover:bg-amber-100 hover:border-amber-300 transition-colors cursor-pointer"
-                      title="Click to view warnings"
+                      title="Open warnings in the findings list; completeness checks are counted separately"
                     >
                       {warningCount} Warning{warningCount > 1 ? 's' : ''}
                     </button>
                   )}
-                </>
+                </span>
               )}
             </div>
             
@@ -691,7 +720,9 @@ function ProtocolSectionComponent(
               </div>
             ) : analysisStatus === 'not-run' || analysisStatus === 'running' ? (
               <div className="px-3 py-2.5 border border-slate-200 bg-slate-50 rounded text-xs text-slate-600">
-                {analysisStatus === 'running' ? 'AI regulatory analysis is running…' : 'AI regulatory analysis has not run yet.'}
+                {analysisStatus === 'running'
+                  ? 'AI is analyzing this section. New blockers or warnings may appear when it finishes.'
+                  : 'AI regulatory analysis has not run yet.'}
               </div>
             ) : (
               section.requiredElements && section.requiredElements.length > 0 && (
@@ -832,11 +863,20 @@ function ProtocolSectionComponent(
             </div>
 
             {/* ISSUES / ERRORS AREA - System Controlled, Non-Editable */}
-            {/* In AUTHORING mode: blockers always shown, warnings collapsible. In REVIEW mode: all expanded */}
-            {openIssues.length > 0 && (
-              <div ref={issuesRef} className="space-y-2">
+            <div ref={issuesRef} className="space-y-2" data-section-findings={section.id}>
+                <p className="text-xs text-slate-600">
+                  Open findings — counted in the section header. Resolved and Won’t fix findings are excluded.
+                  Required-element coverage is shown separately in the completeness checklist.
+                </p>
+                {openIssues.length === 0 && (
+                  <p className="text-xs text-slate-600" role="status">
+                    {analysisStatus === 'succeeded' ? 'No open findings.' : 'Findings will appear after successful analysis.'}
+                  </p>
+                )}
                 {/* Issues toggle row — subtle, full-width clickable */}
+                {openIssues.length > 0 && (
                 <button
+                  aria-expanded={issuesExpanded}
                   onClick={() => setIssuesExpanded(v => !v)}
                   className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors text-left cursor-pointer"
                 >
@@ -861,6 +901,7 @@ function ProtocolSectionComponent(
                     className={`w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform ${issuesExpanded ? '' : '-rotate-90'}`}
                   />
                 </button>
+                )}
 
                 {/* Issue cards */}
                 {openIssues.map((issue) => {
@@ -870,6 +911,8 @@ function ProtocolSectionComponent(
                   return (
                     <div
                       key={issue.id}
+                      data-finding-id={issue.id}
+                      data-finding-severity={issue.severity}
                       className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-rose-50 border-rose-500' : 'bg-amber-50 border-amber-500'}`}
                     >
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -905,14 +948,6 @@ function ProtocolSectionComponent(
                   );
                 })}
               </div>
-            )}
-
-            {/* Re-analyzing banner */}
-            {isAnalyzing && (
-              <div style={{padding: '0.5rem 0.75rem', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.375rem', fontSize: '0.75rem', color: '#1d4ed8'}}>
-                Re-analyzing section for issues...
-              </div>
-            )}
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
@@ -922,7 +957,8 @@ function ProtocolSectionComponent(
                   const btnActive: React.CSSProperties = { ...btnBase, backgroundColor: '#e2e8f0' };
                   const divider = <div style={{ width: 1, height: 20, backgroundColor: '#d1d5db', margin: '0 4px', flexShrink: 0 }} />;
                   return (
-                    <div>
+                    <div key="section-edit">
+                      <ReviewAnchorNotice findings={editorFindings} />
                       {/* ── Toolbar ── */}
                       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, padding: '4px 6px', backgroundColor: '#f8fafc', borderRadius: '0.375rem 0.375rem 0 0', border: '2px solid #3b82f6', borderBottom: '1px solid #e2e8f0' }}>
                         {/* Text formatting group */}
@@ -978,50 +1014,20 @@ function ProtocolSectionComponent(
                     </div>
                   );
                 }
-                const issues = section.issues || [];
-                const quotes = issues.filter((iss: any) => iss.textQuote);
                 const editButton = (
                   <div key="edit-button" style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
                     <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
                   </div>
                 );
-                if (quotes.length === 0) return (
-                  <div>
+                return (
+                  <div key="section-view">
                     {editButton}
-                    <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
+                    <div className="relative min-h-24" aria-busy={analysisStatus === 'running' || isAnalyzing}>
+                      {(analysisStatus === 'running' || isAnalyzing) && <SectionAnalysisOverlay />}
+                      <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
+                    </div>
                   </div>
                 );
-                // Quotes path: render markdown in plain text segments, highlight quoted spans
-                const quoteParts: React.ReactNode[] = [editButton];
-                console.log('quotes path - section content first 300:', (section.content || '').substring(0, 300));
-                let remaining = section.content || '';
-                quotes.forEach((iss: any) => {
-                  const idx = remaining.indexOf(iss.textQuote);
-                  if (idx === -1) return;
-                  if (idx > 0) quoteParts.push(
-                    <span key={`pre-${iss.id}`} dangerouslySetInnerHTML={{__html: renderContent(remaining.slice(0, idx))}} />
-                  );
-                  quoteParts.push(
-                    <span
-                      key={iss.id}
-                      id={'quote-' + iss.id}
-                      style={{
-                        backgroundColor: iss.severity === 'blocker' ? '#fee2e2' : '#fef9c3',
-                        borderBottom: iss.severity === 'blocker' ? '2px solid #ef4444' : '2px solid #f59e0b',
-                        cursor: 'pointer',
-                        borderRadius: '2px',
-                        padding: '0 2px'
-                      }}
-                      title={iss.description}
-                    >{iss.textQuote}</span>
-                  );
-                  remaining = remaining.slice(idx + iss.textQuote.length);
-                });
-                if (remaining) quoteParts.push(
-                  <span key="post" dangerouslySetInnerHTML={{__html: renderContent(remaining)}} />
-                );
-                console.log('quotes path rendering, quoteParts count:', quoteParts.length);
-                return <div style={{lineHeight: '1.7', fontSize: '0.9rem'}}>{quoteParts}</div>;
               })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
             </ProtocolTextSeparator>
 
@@ -1122,7 +1128,7 @@ function ProtocolSectionComponent(
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
                   const prevContent = section.content || '';
-                  const newContent = editorRef.current?.innerHTML || '';
+                  const newContent = stripReviewHighlights(editorRef.current?.innerHTML || '');
                   const reason = changeReason.trim();
                   // Close the modal and editing state immediately for responsive UX
                   setIsSaving(true);

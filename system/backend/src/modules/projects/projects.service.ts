@@ -7,7 +7,6 @@ import type { PoolClient } from "pg";
 import { getPool } from "../../db/pg";
 import { CreateProjectDto } from "./dto";
 import { AdminService } from "../admin/admin.service";
-import { sanitizeIncomingProjectData } from "../../common/sanitize-section-html";
 import { AuditService } from "../audit/audit.service";
 import type { AuditActor, RecordAuditEvent } from "../audit/audit.service";
 import { ProtocolsService } from "../protocols/protocols.service";
@@ -302,6 +301,13 @@ export class ProjectsService {
       const projectNumber = await this.generateProjectNumber(client);
       const id = crypto.randomUUID();
 
+      if (dto.data && Object.prototype.hasOwnProperty.call(dto.data, "signatures")) {
+        throw new BadRequestException("Electronic signatures must use the signing endpoint");
+      }
+      if (dto.data && Object.prototype.hasOwnProperty.call(dto.data, "report")) {
+        throw new BadRequestException("Reports must use the report endpoints");
+      }
+
       const incomingData = {
         ...(dto.data || {}),
         projectData: {
@@ -310,7 +316,7 @@ export class ProjectsService {
         },
       };
 
-      const data = sanitizeIncomingProjectData(incomingData);
+      const data = incomingData;
 
       await client.query(
         `INSERT INTO projects (
@@ -438,8 +444,7 @@ export class ProjectsService {
       throw new BadRequestException("All Synopsis readiness items must be resolved before completion");
     }
 
-    const sanitized = sanitizeIncomingProjectData({ synopsis: synopsisPatch })?.synopsis;
-    if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) {
+    if (!synopsisPatch || typeof synopsisPatch !== "object" || Array.isArray(synopsisPatch)) {
       throw new BadRequestException("Invalid Synopsis data");
     }
 
@@ -464,7 +469,7 @@ export class ProjectsService {
       const projectData = projectRows[0].data || {};
       const completedSynopsis = {
         ...(projectData.synopsis || {}),
-        ...sanitized,
+        ...synopsisPatch,
         synopsisStatus: "completed",
       };
       const now = new Date().toISOString();
@@ -607,8 +612,8 @@ export class ProjectsService {
     const incomingProtocol = hasProtocolPatch ? patch.data.protocol : undefined;
     const nonProtocolPatch = patch.data ? { ...patch.data } : undefined;
     if (nonProtocolPatch) delete nonProtocolPatch.protocol;
-    const sanitizedData = nonProtocolPatch && Object.keys(nonProtocolPatch).length > 0
-      ? sanitizeIncomingProjectData(nonProtocolPatch)
+    const projectDataPatch = nonProtocolPatch && Object.keys(nonProtocolPatch).length > 0
+      ? nonProtocolPatch
       : undefined;
     const hasRelationalSetupPatch =
       patch.risk !== undefined ||
@@ -616,7 +621,7 @@ export class ProjectsService {
       patch.targetMarkets !== undefined ||
       patch.roles !== undefined;
 
-    if (!sanitizedData && !hasRelationalSetupPatch && !hasProtocolPatch) {
+    if (!projectDataPatch && !hasRelationalSetupPatch && !hasProtocolPatch) {
       const client = await getPool().connect();
       try {
         await client.query("BEGIN");
@@ -664,23 +669,22 @@ export class ProjectsService {
 
       const existingData = rows[0].data || {};
       const mergedData: any = { ...existingData };
-      // Remove any legacy duplicate left by a partially-applied deployment. The
-      // migration performs the same cleanup for all existing projects.
+      // Protocol content is stored by ProtocolsService in relational tables.
       delete mergedData.protocol;
 
-      if (sanitizedData) {
-        for (const key of Object.keys(sanitizedData)) {
+      if (projectDataPatch) {
+        for (const key of Object.keys(projectDataPatch)) {
           if (
-            sanitizedData[key] !== null &&
-            typeof sanitizedData[key] === "object" &&
-            !Array.isArray(sanitizedData[key]) &&
+            projectDataPatch[key] !== null &&
+            typeof projectDataPatch[key] === "object" &&
+            !Array.isArray(projectDataPatch[key]) &&
             existingData[key] !== null &&
             typeof existingData[key] === "object" &&
             !Array.isArray(existingData[key])
           ) {
-            mergedData[key] = { ...existingData[key], ...sanitizedData[key] };
+            mergedData[key] = { ...existingData[key], ...projectDataPatch[key] };
           } else {
-            mergedData[key] = sanitizedData[key];
+            mergedData[key] = projectDataPatch[key];
           }
         }
       }
