@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import random
 import re
@@ -10,8 +9,9 @@ from typing import Any, Awaitable, Callable
 
 from clinical_ai.llm import LLMGateway
 from clinical_ai.utils import get_value
+from .models import AnalyzeSectionResponse, GenerateRequiredElementsResponse
 from .prompts import analyze_section_prompt, generate_protocol_section_prompt, generate_required_elements_prompt
-from .rules import PROTOCOL_SECTION_TITLES, get_core_regulatory_context, get_section_requirements
+from .rules import PROTOCOL_SECTION_TITLES, get_section_requirements
 from .validation import quote_appears_in_source, verify_required_element_evidence
 
 logger = logging.getLogger(__name__)
@@ -29,11 +29,9 @@ class ProtocolService:
         scope: Any,
         additional_fixes: str | None = None,
     ) -> str:
-        device_category = get_value(scope, "deviceCategory", "") or get_value(project_data, "deviceCategory", "") or ""
-        regulatory_refs = get_core_regulatory_context(
-            get_value(project_data, "targetMarkets", []) or [],
-            device_category,
-        )
+        # TODO: Source accepted regulatory requirements from the main backend
+        # through the project-context bridge.
+        regulatory_refs = get_value(scope, "requirements", "") or ""
         raw = await self.llm.complete(
             generate_protocol_section_prompt(
                 section_title,
@@ -108,14 +106,11 @@ class ProtocolService:
         device_category: str,
         intended_use: str,
     ) -> list[Any]:
-        result = await self.llm.complete(
-            generate_required_elements_prompt(section_title, target_markets, device_category, intended_use)
+        result = await self.llm.complete_structured(
+            generate_required_elements_prompt(section_title, target_markets, device_category, intended_use),
+            response_model=GenerateRequiredElementsResponse,
         )
-        try:
-            clean = re.sub(r"```json|```", "", result).strip()
-            return json.loads(clean)
-        except Exception:
-            return []
+        return [element.model_dump() for element in result.requiredElements]
 
     async def analyze_section(
         self,
@@ -130,7 +125,7 @@ class ProtocolService:
         accepted_requirements: str | None = None,
         synopsis_excerpt: str | None = None,
     ) -> Any:
-        result = await self.llm.complete(
+        result = await self.llm.complete_structured(
             analyze_section_prompt(
                 section_title,
                 section_content,
@@ -142,23 +137,11 @@ class ProtocolService:
                 cross_section_context,
                 accepted_requirements,
                 synopsis_excerpt,
-            )
+            ),
+            response_model=AnalyzeSectionResponse,
         )
-        if not result:
-            logger.error("[analyzeSection] AI call returned no response after retries")
-            return {"error": True, "message": "AI analysis is temporarily unavailable — no response after retries."}
 
-        try:
-            clean = re.sub(r"```json|```", "", result).strip()
-            json_match = re.search(r"\{[\s\S]*\}", clean)
-            if not json_match:
-                logger.error("[analyzeSection] No JSON object found in AI response: %s", result[:200])
-                return {"error": True, "message": "AI analysis failed to return a valid result."}
-            parsed = json.loads(json_match.group(0))
-            return verify_required_element_evidence(parsed, section_content)
-        except Exception as exc:
-            logger.error("[analyzeSection] JSON parse failed: %r raw: %s", exc, result[:200] if result else "")
-            return {"error": True, "message": "AI analysis failed to return a valid result."}
+        return result.model_dump()
 
     # Compatibility helpers used by parity tests and callers that relied on the old AiService surface.
     @staticmethod
@@ -168,10 +151,6 @@ class ProtocolService:
     @staticmethod
     def verify_required_element_evidence(parsed: Any, source_content: str) -> Any:
         return verify_required_element_evidence(parsed, source_content)
-
-    @staticmethod
-    def get_core_regulatory_context(target_markets: list[str], device_category: str) -> str:
-        return get_core_regulatory_context(target_markets, device_category)
 
     @staticmethod
     def get_section_requirements(section_title: str) -> dict[str, str]:
