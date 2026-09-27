@@ -218,7 +218,7 @@ function ProtocolSectionComponent(
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
   const [guidanceExpanded, setGuidanceExpanded] = useState(false);
-  const [issuesExpanded, setIssuesExpanded] = useState(false);
+  const [issuesExpanded, setIssuesExpanded] = useState(true);
   const [rolesExpanded, setRolesExpanded] = useState(false);
   const [auditTrailOpen, setAuditTrailOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -249,9 +249,11 @@ function ProtocolSectionComponent(
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
   // Count open issues by severity
-  const openIssues = (section.issues || []).filter(i => i.status === 'open');
-  const blockerCount = openIssues.filter(i => i.severity === 'blocker').length;
-  const warningCount = openIssues.filter(i => i.severity === 'warning').length;
+  const openIssues = (section.issues || []).filter(i => i.status === 'open' || !i.status);
+  const { blocker: blockerCount, warning: warningCount } = openIssues.reduce(
+    (counts, issue) => ({ ...counts, [issue.severity]: counts[issue.severity] + 1 }),
+    { blocker: 0, warning: 0 },
+  );
   const totalIssues = openIssues.length;
   const isBlocked = blockerCount > 0;
   const analysisBlocksApproval = section.aiGenerated && analysisStatus !== 'succeeded';
@@ -517,7 +519,8 @@ function ProtocolSectionComponent(
               )}
               {/* Issue Count Badges - clickable, expand issues list */}
               {totalIssues > 0 && (
-                <>
+                <span className="inline-flex items-center gap-2" aria-label="Open findings summary" aria-live="polite" data-section-findings-summary={section.id}>
+                  <span className="text-xs text-slate-600">Open findings:</span>
                   {blockerCount > 0 && (
                     <button
                       onClick={(e) => {
@@ -527,7 +530,7 @@ function ProtocolSectionComponent(
                         setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
                       }}
                       className="px-2 py-0.5 bg-rose-50 text-xs rounded border border-rose-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer" style={{color: '#991b1b'}}
-                      title="Click to view blockers"
+                      title="Open blockers in the findings list; completeness checks are counted separately"
                     >
                       {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
                     </button>
@@ -541,12 +544,12 @@ function ProtocolSectionComponent(
                         setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
                       }}
                       className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded border border-amber-200 hover:bg-amber-100 hover:border-amber-300 transition-colors cursor-pointer"
-                      title="Click to view warnings"
+                      title="Open warnings in the findings list; completeness checks are counted separately"
                     >
                       {warningCount} Warning{warningCount > 1 ? 's' : ''}
                     </button>
                   )}
-                </>
+                </span>
               )}
             </div>
             
@@ -860,11 +863,20 @@ function ProtocolSectionComponent(
             </div>
 
             {/* ISSUES / ERRORS AREA - System Controlled, Non-Editable */}
-            {/* In AUTHORING mode: blockers always shown, warnings collapsible. In REVIEW mode: all expanded */}
-            {openIssues.length > 0 && (
-              <div ref={issuesRef} className="space-y-2">
+            <div ref={issuesRef} className="space-y-2" data-section-findings={section.id}>
+                <p className="text-xs text-slate-600">
+                  Open findings — counted in the section header. Resolved and Won’t fix findings are excluded.
+                  Required-element coverage is shown separately in the completeness checklist.
+                </p>
+                {openIssues.length === 0 && (
+                  <p className="text-xs text-slate-600" role="status">
+                    {analysisStatus === 'succeeded' ? 'No open findings.' : 'Findings will appear after successful analysis.'}
+                  </p>
+                )}
                 {/* Issues toggle row — subtle, full-width clickable */}
+                {openIssues.length > 0 && (
                 <button
+                  aria-expanded={issuesExpanded}
                   onClick={() => setIssuesExpanded(v => !v)}
                   className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors text-left cursor-pointer"
                 >
@@ -889,6 +901,7 @@ function ProtocolSectionComponent(
                     className={`w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform ${issuesExpanded ? '' : '-rotate-90'}`}
                   />
                 </button>
+                )}
 
                 {/* Issue cards */}
                 {openIssues.map((issue) => {
@@ -898,6 +911,8 @@ function ProtocolSectionComponent(
                   return (
                     <div
                       key={issue.id}
+                      data-finding-id={issue.id}
+                      data-finding-severity={issue.severity}
                       className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-rose-50 border-rose-500' : 'bg-amber-50 border-amber-500'}`}
                     >
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -933,7 +948,6 @@ function ProtocolSectionComponent(
                   );
                 })}
               </div>
-            )}
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>

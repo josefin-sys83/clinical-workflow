@@ -66,7 +66,9 @@ export default function App() {
     void promise.then(remove, remove);
     return promise;
   };
-const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
+  // Analysis responses must consult the latest dismissals, including decisions
+  // made while the request was in flight.
+  const wontFixDescriptions = useRef<Record<string, string[]>>({});
   const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
   const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
   // A save may start another review before an earlier review of this section ends.
@@ -303,7 +305,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
         const elements = result.requiredElements || [];
         // Filter out won't-fix descriptions for this section
-        const suppressed = wontFixDescriptions[sectionId] || [];
+        const suppressed = wontFixDescriptions.current[sectionId] || [];
         if (suppressed.length > 0) {
           issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
         }
@@ -525,10 +527,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     if (!issue) return;
     const issueDescription = issue.description;
     // Store won't-fix description
-    setWontFixDescriptions((prev) => {
-      const existing = prev[sectionId] || [];
-      return { ...prev, [sectionId]: [...existing, issueDescription] };
-    });
+    const existing = wontFixDescriptions.current[sectionId] || [];
+    wontFixDescriptions.current[sectionId] = [...existing, issueDescription];
     // Remove issue from protocol state
     setProtocol((prev: any) => {
       if (!prev) return prev;
