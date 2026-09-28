@@ -24,9 +24,8 @@ def generate_protocol_section_prompt(
     deviceCategory = _get(scope, 'deviceCategory', '') or _get(projectData, 'deviceCategory', '') or ''
     scope_intended = _get(scope, 'intendedUse', '')
     intendedUse = (
-        _get(projectData, 'intendedUse', '')
-        or (scope_intended if scope_intended != 'other-custom' else '')
-        or _get(scope, 'customIntendedUse', '')
+        (_get(scope, 'customIntendedUse', '') if scope_intended == 'other-custom' else scope_intended)
+        or _get(projectData, 'intendedUse', '')
         or ''
     )
     studyTitle = _get(projectData, 'projectName', '') or '[Study Title]'
