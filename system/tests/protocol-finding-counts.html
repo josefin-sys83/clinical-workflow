@@ -1,0 +1,124 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import App from '/src/modules/Makeprotokoll/App.tsx';
+
+// Exercise the real Save and Won't fix handlers without AI calls or database writes.
+const errors = [];
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+const issue = (id, severity, status = 'open') => ({ id, severity, status,
+  description: `Finding ${id}`, subsection: 'Eligibility', raisedBy: 'System', raisedDate: '2026-09-27' });
+const blocker = issue('blocker', 'blocker');
+const warning = issue('warning', 'warning');
+const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['admin'] };
+const section = { id: '1', title: 'Subject Eligibility Criteria', content: '<p>Eligibility criteria.</p>',
+  status: 'draft', aiGenerated: true, analysisStatus: 'succeeded',
+  issues: [blocker, warning, issue('resolved', 'blocker', 'resolved')],
+  requiredElements: ['Inclusion', 'Exclusion', 'Screening', 'Recruitment'].map((name, i) => ({
+    id: String(i), name, reference: 'ISO 14155', status: i < 2 ? 'complete' : 'partial',
+  })) };
+const project = { id: 'fixture', targetMarkets: ['EU'], data: { projectData: {}, protocol: { sections: [section] } }, roles: [] };
+let releaseAnalysis;
+let patchCalls = 0;
+let releaseDismissal;
+window.fetch = async (input, init = {}) => {
+  const url = String(input);
+  const body = init.body ? JSON.parse(init.body) : {};
+  let payload = {};
+  if (url.endsWith('/protocol/sections/1') && init.method === 'PATCH') {
+    patchCalls++;
+    section.content = body.content;
+    payload = { content: section.content, updatedAt: '2026-09-27' };
+  } else if (url.endsWith('/analyze-section')) {
+    payload = await new Promise(resolve => { releaseAnalysis = resolve; });
+  } else if (url.endsWith('/projects/fixture') && init.method === 'PATCH') {
+    await new Promise(resolve => { releaseDismissal = resolve; });
+    project.data.protocol = body.data.protocol;
+  } else if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: [] };
+  else if (url.endsWith('/workflow')) payload = { steps: {} };
+  else if (url.endsWith('/milestones')) payload = { milestones: [] };
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+const el = React.createElement;
+createRoot(document.getElementById('root')).render(el(CurrentUserProvider, { user, status: 'ready' },
+  el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
+    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(App) })))));
+const assert = (value, message) => { if (!value) throw new Error(message); };
+const waitFor = async (predicate) => {
+  for (let i = 0; i < 160; i++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out: ${errors.join('; ')}`);
+};
+const list = () => document.querySelector('[data-section-findings="1"]');
+const summary = () => document.querySelector('[data-section-findings-summary="1"]');
+const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text);
+const setReason = () => {
+  const textarea = document.querySelector('textarea');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, 'Regression verification');
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+};
+const checkCounts = (blockers, warnings) => {
+  for (const [severity, expected] of [['blocker', blockers], ['warning', warnings]]) {
+    assert(list().querySelectorAll(`[data-finding-severity="${severity}"]`).length === expected, `${severity} cards mismatch`);
+    const label = severity === 'blocker' ? 'Blocker' : 'Warning';
+    const badge = [...(summary()?.querySelectorAll('button') || [])].find(b => b.textContent.includes(label));
+    assert(expected ? badge?.textContent.trim() === `${expected} ${label}${expected > 1 ? 's' : ''}` : !badge, `${severity} counter mismatch`);
+  }
+};
+const save = async () => {
+  button('Edit').click();
+  await waitFor(() => document.querySelector('[contenteditable="true"]'));
+  document.querySelector('[contenteditable="true"]').innerHTML = '<p>Updated eligibility criteria.</p>';
+  button('Save').click();
+  await waitFor(() => document.querySelector('textarea'));
+  setReason();
+  await waitFor(() => !button('Confirm').disabled);
+  releaseAnalysis = undefined;
+  button('Confirm').click();
+  await waitFor(() => releaseAnalysis);
+};
+try {
+  await waitFor(() => list()?.querySelectorAll('[data-finding-id]').length === 2);
+  checkCounts(1, 1);
+  assert(document.body.textContent.includes('these statuses are not blocker or warning severities'), 'Checklist scope unclear');
+  assert(list().textContent.includes('counted in the section header'), 'Finding scope unclear');
+
+  // A save clears stale findings while analysis is pending; the returned result
+  // resolves the blocker and immediately updates both the list and summary.
+  await save();
+  await waitFor(() => !summary());
+  checkCounts(0, 0);
+  releaseAnalysis({ issues: [warning], requiredElements: section.requiredElements });
+  await waitFor(() => list().querySelector('[data-finding-id="warning"]'));
+  checkCounts(0, 1);
+  assert(patchCalls === 1, 'Save did not persist the section exactly once');
+
+  list().querySelector('[data-finding-id="warning"] button').click();
+  await waitFor(() => document.querySelector('textarea'));
+  setReason();
+  await waitFor(() => !button('Confirm').disabled);
+  button('Confirm').click();
+  await waitFor(() => !summary() && releaseDismissal);
+  checkCounts(0, 0); // Must update even before the persistence request finishes.
+  releaseDismissal();
+
+  // A later review must not bring the dismissed warning back into the counts.
+  await save();
+  releaseAnalysis({ issues: [warning], requiredElements: section.requiredElements });
+  await waitFor(() => list().textContent.includes('No open findings.'));
+  checkCounts(0, 0);
+  assert(errors.length === 0, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: shared severity/counts, visible findings, separate coverage checklist, Save resolution, immediate Won\'t fix, and reanalysis suppression';
+} catch (error) {
+  document.getElementById('result').textContent = `FAIL: ${error.message}`;
+}
+</script></body></html>

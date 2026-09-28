@@ -1,14 +1,10 @@
+import { SectionAnalysisOverlay } from '@/shared/editor/SectionAnalysisOverlay';
 import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { hasReportText } from '@/shared/api/reports';
-
-function highlightPlaceholders(html: string): string {
-  return html.replace(
-    /\[(RESULT|TABLE|DATE|CONFIRM):([^\]]+)\]/g,
-    '<mark style="background:#fed7aa;color:#9a3412;border-radius:3px;padding:1px 4px;font-size:0.85em;font-weight:500;">[<strong>$1</strong>:$2]</mark>'
-  );
-}
+import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
+import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
 
 function stripCodeFences(content: string): string {
   return content.replace(/^```html\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '').trim();
@@ -20,18 +16,18 @@ function stripCodeFences(content: string): string {
 function sanitizeForRender(html: string): string {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
-      'h1', 'h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'p', 'br', 'strong', 'b', 'em', 'i', 'u',
       'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
       'img', 'mark', 'span', 'blockquote', 'code', 'pre',
     ],
-    ALLOWED_ATTR: ['style', 'src', 'alt'],
+    ALLOWED_ATTR: ['style', 'src', 'alt', 'start', 'reversed', 'value'],
   });
 }
 
-function renderContent(content: string): string {
+function renderContent(content: string, findings: ReviewFinding[] = []): string {
   if (!content) return '';
   const cleaned = stripCodeFences(content);
-  if (/<[a-z][\s\S]*>/i.test(cleaned)) return sanitizeForRender(highlightPlaceholders(cleaned));
+  if (/<[a-z][\s\S]*>/i.test(cleaned)) return highlightReviewHtml(sanitizeForRender(cleaned), findings, true);
   // Legacy markdown fallback
   let h = cleaned
     .replace(/(\|[^\n]+\|\n?)+/g, (block) => {
@@ -55,7 +51,7 @@ function renderContent(content: string): string {
   h = h.split('\n').map(line =>
     /^<(h[12]|table|tr|th|td|img|strong|em|u)/.test(line) ? line : line + '<br />'
   ).join('\n');
-  return sanitizeForRender(highlightPlaceholders(h));
+  return highlightReviewHtml(sanitizeForRender(h), findings, true);
 }
 import { ReportSection, DataAsset, User, ReportCompletenessStatus, CompletenessElement } from '../types';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
@@ -72,7 +68,7 @@ import aiDraftBanner from '../assets/ai-draft-banner.png';
 interface ReportContentProps {
   sections: ReportSection[];
   currentSection: string;
-  onSectionUpdate: (sectionId: string, content: string) => void;
+  onSectionUpdate: (sectionId: string, content: string, persisted?: boolean) => void;
   dataAssets: DataAsset[];
   onAssetToggle: (assetId: string) => void;
   currentUser: User;
@@ -96,6 +92,7 @@ interface ReportContentProps {
   sectionAiIssues: Record<string, any[]>;
   onSectionAiIssuesChange: (sectionId: string, issues: any[]) => void;
   onSectionCompletenessChange: (sectionId: string, elements: CompletenessElement[]) => void;
+  onSectionAnalysisChange: (sectionId: string, patch: Partial<ReportSection>, issues: any[]) => void;
   forceAnalyzeVersion: number;
   savedWontFixIssues?: Record<string, string[]>;
   onWontFixSave?: (sectionId: string, descriptions: string[]) => void;
@@ -139,6 +136,7 @@ export function ReportContent({
   onSectionAiIssuesChange,
   onSectionCompletenessChange,
   forceAnalyzeVersion,
+  onSectionAnalysisChange,
   savedWontFixIssues,
   onWontFixSave,
   isReportBlocked,
@@ -157,10 +155,12 @@ export function ReportContent({
   const sectionRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const editorRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const [editingSection, setEditingSection] = useState<string | null>(null);
+  const [editorFindings, setEditorFindings] = useState<ReviewFinding[]>([]);
   const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set(['normal']));
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [changeReason, setChangeReason] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingSave, setPendingSave] = useState<{ sectionId: string; newContent: string; previousContent: string } | null>(null);
   const [commentingSection, setCommentingSection] = useState<string | null>(null);
   const [commentText, setCommentText] = useState('');
@@ -206,62 +206,53 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
     if (ref) ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [currentSection, scrollTrigger]);
 
-  // Stable fingerprint of the (id, content, state) of every section — recomputed only when
-  // one of those actually changes, unlike `sections` itself, which gets a brand new array
-  // reference on every setSections() call anywhere in this tree (including ones completely
-  // unrelated to content, like a comment being added). Using the raw array as the effect
-  // dependency below made this effect re-walk every section on every such update; harmless
-  // once everything is fingerprinted-and-cached, but pure overhead, and it makes the one
-  // real bug below (analyzing already-approved sections) fire far more often than it needs
-  // to whenever the loop's initial burst overlaps with those unrelated updates.
-  const sectionsFingerprint = sections
-    .map(s => `${s.id}:${s.state}:${s.content.length}:${(s as any).appendices?.length ?? 0}`)
-    .join('|');
+  const lastForcedAnalysis = useRef(forceAnalyzeVersion);
+  const sectionsFingerprint = sections.map(s => `${s.id}:${s.state}:${s.analysisStatus}:${s.content}:${JSON.stringify(s.appendices || [])}`).join('|');
 
-  // Run AI analysis whenever content changes or a forced refresh is requested
   useEffect(() => {
-    // Forced refresh: clear all tracked fingerprints so every section re-analyzes
-    if (forceAnalyzeVersion > 0) {
-      analyzedSectionsRef.current = {};
-    }
-
-    // Mark fingerprints synchronously (before any async work) so a StrictMode
-    // double-invoke of this effect sees them already recorded and no-ops,
-    // and collect only the sections that actually need (re-)analysis.
-    const toAnalyze: { id: string; title: string; content: string }[] = [];
-    sections.forEach(s => {
-      const isAppendices = s.id === 'section-appendices';
-      const hasContent = !!s.content?.trim();
-      if (!hasContent && !isAppendices) return;
-      // An approved/locked section is done — re-running AI analysis on it every time this
-      // component mounts (i.e. every page visit) burns a real AI call and a DB write for a
-      // result nobody will act on, and does it even on documents that have already been
-      // through e-signature. Mirrors Makeprotokoll's analogous `approvalStatus !== 'approved'`
-      // check, which report-side never had.
-      if (s.state === 'approved' || s.state === 'locked') return;
-      // For appendices: fingerprint on the appendices list so re-analysis fires if the list changes
-      const fingerprint = isAppendices
-        ? `appendices:${(s as any).appendices?.length ?? 0}:${(s as any).appendices?.map((a: any) => a.id).join(',') ?? ''}`
-        : `${s.content.length}:${s.content.slice(0, 80)}`;
-      if (analyzedSectionsRef.current[s.id] !== fingerprint) {
-        analyzedSectionsRef.current[s.id] = fingerprint;
-        toAnalyze.push({ id: s.id, title: s.title, content: s.content });
-      }
+    const forced = lastForcedAnalysis.current !== forceAnalyzeVersion;
+    lastForcedAnalysis.current = forceAnalyzeVersion;
+    if (forced) analyzedSectionsRef.current = {};
+    const pending = sections.filter(s => {
+      if (s.state === 'approved' || s.state === 'locked') return false;
+      if (!s.content?.trim() && s.id !== 'section-appendices') return false;
+      if (s.analysisStatus === 'running' || (!forced && s.analysisStatus === 'succeeded')) return false;
+      const fingerprint = `${s.content}:${JSON.stringify(s.appendices || [])}`;
+      if (analyzedSectionsRef.current[s.id] === fingerprint) return false;
+      analyzedSectionsRef.current[s.id] = fingerprint;
+      return true;
     });
-    if (toAnalyze.length === 0) return;
-
-    // Batched (not all-at-once) so a first load with many sections needing
-    // analysis doesn't fire a large burst of concurrent requests against the
-    // same rate-limited Azure OpenAI deployment.
-    const ANALYZE_BATCH_SIZE = 3;
-    (async () => {
-      for (let i = 0; i < toAnalyze.length; i += ANALYZE_BATCH_SIZE) {
-        const batch = toAnalyze.slice(i, i + ANALYZE_BATCH_SIZE);
-        await Promise.all(batch.map(item => analyzeSectionWithAI(item.id, item.title, item.content)));
+    // Analyze new, never-reviewed content and retry failed sections once on entry.
+    // Successful saved reviews are reused, including successful reviews with zero issues.
+    void (async () => {
+      for (let i = 0; i < pending.length; i += 3) {
+        await Promise.all(pending.slice(i, i + 3).map(s => analyzeSectionWithAI(s.id, s.title, s.content)));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionsFingerprint, forceAnalyzeVersion]);
+  }, [sectionsFingerprint, forceAnalyzeVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeAnalysis = useRef(new Set<string>());
+  const waitingForSavedAnalysis = sections.filter(s => s.analysisStatus === 'running' && !activeAnalysis.current.has(s.id)).map(s => s.id).join(',');
+  useEffect(() => {
+    if (!projectId || !waitingForSavedAnalysis) return;
+    let cancelled = false;
+    const ids = new Set(waitingForSavedAnalysis.split(','));
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/projects/${projectId}/report`);
+        if (!response.ok) return;
+        const report = await response.json();
+        if (cancelled) return;
+        for (const saved of Object.values(report.sections || {}) as any[]) {
+          if (ids.has(saved.id) && saved.analysisStatus !== 'running') {
+            analyzedSectionsRef.current[saved.id] = `${saved.content}:${JSON.stringify(saved.appendices || [])}`;
+            onSectionAnalysisChange(saved.id, saved, saved.issues || []);
+          }
+        }
+      } catch (error) { console.error('Could not load section review status', error); }
+    }, 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [projectId, waitingForSavedAnalysis]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getAssetIcon = (type: string) => {
     switch (type) {
@@ -274,18 +265,22 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
     }
   };
 
+  const analysisRequests = useRef<Record<string, number>>({});
+
   // ── Populate editor when entering edit mode ────────────────────────────────
   useEffect(() => {
     if (editingSection) {
       const el = editorRefs.current.get(editingSection);
       const sec = sections.find(s => s.id === editingSection);
       if (el && sec) {
-        // Fix 19: this previously assigned sec.content to innerHTML directly, bypassing the
-        // sanitizeForRender() DOMPurify pass used everywhere else in this file — a stray
-        // <img onerror=...> or similar would execute the instant a user opened the section
-        // for editing. Sanitize here too, exactly as the read-mode render path already does.
-        el.innerHTML = sanitizeForRender(sec.content || '') || '<p><br></p>';
+        const suppressed = new Set(wontFixDescRef.current[sec.id] || []);
+        const findings = (sectionAiIssues[sec.id] || []).filter(issue =>
+          !suppressed.has(issue.description || issue.message || ''),
+        );
+        // Initialize once on entry; typing and toolbar updates keep the live DOM.
+        el.innerHTML = renderContent(sec.content || '', findings) || '<p><br></p>';
         el.focus();
+        return trackReviewEditor(el, findings, setEditorFindings);
       }
     }
   }, [editingSection]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -391,75 +386,54 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
   const analyzeSectionWithAI = async (sectionId: string, sectionTitle: string, sectionContent: string) => {
     if (!projectId) return;
+    const requestId = (analysisRequests.current[sectionId] || 0) + 1;
+    analysisRequests.current[sectionId] = requestId;
     const section = sections.find(s => s.id === sectionId);
-    const isAppendices = sectionId === 'section-appendices';
-    // For appendices, the section content may be empty — still analyze using the appendices list
-    if (!isAppendices && !sectionContent?.trim()) return;
-    const appendicesList = isAppendices && section?.appendices
-      ? section.appendices.map((a: any) => `${a.name}${a.category === 'recommended' ? ' (recommended)' : ''}`)
-      : undefined;
+    const appendicesList = sectionId === 'section-appendices'
+      ? section?.appendices?.map(a => `${a.name}${a.category === 'recommended' ? ' (recommended)' : ''}`) : undefined;
+    analyzedSectionsRef.current[sectionId] = `${sectionContent}:${JSON.stringify(section?.appendices || [])}`;
+    activeAnalysis.current.add(sectionId);
+    onSectionAnalysisChange(sectionId, { analysisStatus: 'running', analysisError: null }, []);
     try {
-      const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-report-section', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sectionTitle, sectionContent, ...(appendicesList ? { appendicesList } : {}) }),
+      const response = await fetch(`${apiBase}/api/projects/${projectId}/analyze-report-section`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId, sectionTitle, sectionContent, ...(appendicesList ? { appendicesList } : {}) }),
       });
-      const result = await res.json();
-
-      // A failed AI call (e.g. blocked because the report is already signed, rate-limited,
-      // or any other backend error) is an explicit error state, not an empty success —
-      // mirrors Makeprotokoll's analyzeSectionWithAI, which this was meant to but never
-      // actually did. Without this check, every failed call still fell through to
-      // onSectionAiIssuesChange(sectionId, []) below, which persists via
-      // saveReportSectionState on every single call regardless of outcome — silently
-      // overwriting a section's real, previously-recorded issues with an empty array, and
-      // producing one extra GET+PATCH round trip per section on every page load.
-      if (!res.ok || result?.error) {
-        console.error('Report section analysis failed', result?.message || res.statusText);
-        return;
+      const result = await response.json();
+      if (!response.ok || !result.section || !Array.isArray(result.section.issues)) {
+        throw new Error(result?.message || 'Section analysis failed. Retry analysis.');
       }
-
-      let issues: any[] = result.issues || (Array.isArray(result) ? result : []);
-      const suppressed = wontFixDescRef.current[sectionId] || [];
-      if (suppressed.length > 0) {
-        issues = issues.filter((i: any) => !suppressed.includes(i.description));
-      }
-      onSectionAiIssuesChange(sectionId, issues);
-
-      // Populate real completeness evidence from the AI result — mirrors Protocol's
-      // analyzeSectionWithAI, which merges requiredElements into persisted state
-      // instead of leaving completenessElements stale/empty/fabricated.
-      const rawElements: any[] = result.requiredElements || [];
-      if (rawElements.length > 0) {
-        const mapped: CompletenessElement[] = rawElements.map((e: any) => ({
-          id: e.id,
-          title: e.name,
-          isoReference: e.reference,
-          status: 'not-yet-verified',
-          aiSuggestion: e.status === 'complete' ? 'covered' : e.status === 'partial' ? 'partial' : 'missing',
-        }));
-        onSectionCompletenessChange(sectionId, mapped);
-      }
-    } catch {
-      // silently fail
+      if (analysisRequests.current[sectionId] !== requestId) return;
+      onSectionAnalysisChange(sectionId, result.section, result.section.issues);
+    } catch (error) {
+      if (analysisRequests.current[sectionId] !== requestId) return;
+      onSectionAnalysisChange(sectionId, { analysisStatus: 'failed', analysisError: error instanceof Error ? error.message : 'Section analysis failed' }, []);
+    } finally {
+      if (analysisRequests.current[sectionId] === requestId) activeAnalysis.current.delete(sectionId);
     }
   };
 
   const handleSaveSection = async (sectionId: string, newContent: string, previousContent: string, reason: string) => {
     setIsSaving(true);
+    setSaveError(null);
+    analysisRequests.current[sectionId] = (analysisRequests.current[sectionId] || 0) + 1;
     try {
       const response = await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sections: { [sectionId]: { content: newContent } } }),
+        body: JSON.stringify({ sections: { [sectionId]: { content: newContent, previousContent, userEdited: true } } }),
       });
       if (!response.ok) throw new Error(`Report section save failed (${response.status})`);
 
-      onSectionUpdate(sectionId, newContent);
+      const savedSections = await response.json();
+      const saved = savedSections[sectionId];
+      onSectionUpdate(sectionId, saved.content, true);
+      onSectionAnalysisChange(sectionId, saved, []);
       // Re-run analysis on the updated content
       const sec2 = sections.find(s => s.id === sectionId);
-      analyzeSectionWithAI(sectionId, sec2?.title || sectionId, newContent);
+      analyzeSectionWithAI(sectionId, sec2?.title || sectionId, saved.content);
     } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save section');
       console.error('Failed to save section', err);
     } finally {
       setIsSaving(false);
@@ -548,6 +522,8 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
             const hasContent = hasReportText(section.content);
             const isEditing = editingSection === section.id;
+            const isAnalyzing = section.analysisStatus === 'running';
+            const reviewIncomplete = section.analysisStatus !== 'succeeded';
             const sectionNumber = section.order ?? (sections.indexOf(section) + 1);
             const stateBadge = getStateBadge(section.state);
             const isLocked = section.state === 'approved' || section.state === 'locked';
@@ -555,7 +531,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             
             // Count blockers and warnings from AI analysis
             const suppressedDescriptions = new Set(wontFixDescRef.current[section.id] || []);
-            const openAiIssues = (sectionAiIssues[section.id] || []).filter((i: any) =>
+            const openAiIssues = (isAnalyzing ? [] : sectionAiIssues[section.id] || []).filter((i: any) =>
               (i.status === 'open' || !i.status) &&
               !suppressedDescriptions.has(i.description || i.message || ''),
             );
@@ -936,7 +912,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                         fontWeight: 400,
                       }}
                       data-ai-draft={section.id}
-                      dangerouslySetInnerHTML={{ __html: renderContent(section.aiDraft) }}
+                      dangerouslySetInnerHTML={{ __html: renderContent(section.aiDraft, openAiIssues) }}
                     />
                   )}
 
@@ -956,7 +932,8 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                     const btnActive: React.CSSProperties = { ...btnBase, backgroundColor: '#e2e8f0' };
                     const divider = <div style={{ width: 1, height: 20, backgroundColor: '#d1d5db', margin: '0 4px', flexShrink: 0 }} />;
                     return (
-                      <div className="mb-4">
+                      <div key="section-edit" className="mb-4">
+                        <ReviewAnchorNotice findings={editorFindings} />
                         {/* Toolbar */}
                         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, padding: '4px 6px', backgroundColor: '#f8fafc', borderRadius: '0.375rem 0.375rem 0 0', border: '2px solid #3b82f6', borderBottom: '1px solid #e2e8f0' }}>
                           <button title="Bold" style={activeFormats.has('bold') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('bold')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleBold}><Bold size={13} /></button>
@@ -1001,7 +978,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                           <button
                             onClick={() => {
                               const el = editorRefs.current.get(section.id);
-                              const newContent = el?.innerHTML || '';
+                              const newContent = stripReviewHighlights(el?.innerHTML || '');
                               setPendingSave({ sectionId: section.id, newContent, previousContent: section.content || '' });
                               setChangeReason('');
                               setShowReasonModal(true);
@@ -1025,8 +1002,14 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                           style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: isLocked ? 'not-allowed' : 'pointer', color: isLocked ? '#9CA3AF' : '#374151', opacity: isLocked ? 0.6 : 1 }}
                         >Edit</button>
                       </div>
+                      {section.analysisStatus === 'failed' && <div role="alert" className="mb-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {section.analysisError || 'AI analysis failed.'}
+                        <button className="ml-3 underline" onClick={() => void analyzeSectionWithAI(section.id, section.title, section.content)}>Retry analysis</button>
+                      </div>}
+                      {saveError && <p role="alert" className="mb-3 text-sm text-red-700">{saveError}</p>}
                       {/* Content — bordered container matching Make Protocol's ProtocolTextSeparator */}
-                      <div className="border-2 border-slate-300 rounded bg-white relative">
+                      <div className="border-2 border-slate-300 rounded bg-white relative min-h-24" aria-busy={isAnalyzing}>
+                        {isAnalyzing && <SectionAnalysisOverlay />}
                         <div className="absolute -top-2.5 left-3 px-2 bg-white border border-slate-300 rounded">
                           <span className="text-xs font-medium text-slate-700">REPORT TEXT</span>
                         </div>
@@ -1034,7 +1017,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                           {hasContent ? (
                             <div
                               style={{ lineHeight: '1.7', fontSize: '0.9rem' }}
-                              dangerouslySetInnerHTML={{ __html: renderContent(section.content || '') }}
+                              dangerouslySetInnerHTML={{ __html: renderContent(section.content || '', openAiIssues) }}
                             />
                           ) : (
                             <div className="text-[#9CA3AF] italic" style={{ fontSize: '14px', fontFamily: 'system-ui, sans-serif' }}>
@@ -1088,14 +1071,14 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                     )}
                     {!isLocked && (
                       <button
-                        disabled={blockerCount > 0 || isReportBlocked}
+                        disabled={blockerCount > 0 || isReportBlocked || reviewIncomplete}
                         onClick={() => {
                           setSelectedSectionForApprovals(section.id);
                           setApprovalsModalOpen(true);
                         }}
-                        className={`px-3 py-1.5 text-white rounded transition-colors ${(blockerCount > 0 || isReportBlocked) ? 'bg-[#93C5FD] cursor-not-allowed' : 'bg-[#2563EB] hover:bg-[#1D4ED8] cursor-pointer'}`}
+                        className={`px-3 py-1.5 text-white rounded transition-colors ${(blockerCount > 0 || isReportBlocked || reviewIncomplete) ? 'bg-[#93C5FD] cursor-not-allowed' : 'bg-[#2563EB] hover:bg-[#1D4ED8] cursor-pointer'}`}
                         style={{ fontSize: '12px', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}
-                        title={isReportBlocked ? 'Report authoring is blocked pending protocol amendment approval/rejection' : blockerCount > 0 ? 'Resolve all blockers before approving' : undefined}
+                        title={reviewIncomplete ? 'Complete AI analysis before approving this section' : isReportBlocked ? 'Report authoring is blocked pending protocol amendment approval/rejection' : blockerCount > 0 ? 'Resolve all blockers before approving' : undefined}
                       >
                         Approve Section
                       </button>

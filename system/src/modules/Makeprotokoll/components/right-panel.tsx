@@ -1,3 +1,4 @@
+import { AuditTrailButton } from '@/shared/components/AuditTrailButton';
 import React, { useState } from 'react';
 import { AlertTriangle, FileText, Clock, BookOpen, ChevronRight, X } from 'lucide-react';
 
@@ -16,14 +17,6 @@ interface EvidenceItem {
   source: string;
   snippet: string;
   page: string;
-}
-
-interface AuditEvent {
-  id: string;
-  timestamp: string;
-  user: string;
-  action: string;
-  section?: string;
 }
 
 interface RightPanelProps {
@@ -66,29 +59,7 @@ export function RightPanel({ isCollapsed, onToggleCollapse }: RightPanelProps) {
     }
   ];
 
-  const auditEvents: AuditEvent[] = [
-    {
-      id: 'a1',
-      timestamp: 'Feb 8, 2026 09:15',
-      user: 'Dr. Emma Weber',
-      action: 'SECTION_EDITED',
-      section: '4.2 Study Rationale'
-    },
-    {
-      id: 'a2',
-      timestamp: 'Feb 8, 2026 09:12',
-      user: 'System',
-      action: 'CONFLICT_DETECTED',
-      section: '4.5 Study Endpoints'
-    },
-    {
-      id: 'a3',
-      timestamp: 'Feb 7, 2026 16:45',
-      user: 'Lisa Schmidt',
-      action: 'SECTION_COMPLETED',
-      section: '4.3 Device Description'
-    }
-  ];
+
 
   if (isCollapsed) {
     return (
@@ -214,23 +185,7 @@ export function RightPanel({ isCollapsed, onToggleCollapse }: RightPanelProps) {
           </div>
         )}
 
-        {activeTab === 'audit' && (
-          <div className="space-y-2">
-            {auditEvents.map((event) => (
-              <div
-                key={event.id}
-                className="p-3 bg-white border border-slate-300 rounded text-xs space-y-1"
-              >
-                <div className="font-medium text-slate-900">{event.action}</div>
-                <div className="text-slate-700">{event.user}</div>
-                {event.section && (
-                  <div className="text-slate-600">{event.section}</div>
-                )}
-                <div className="text-slate-500">{event.timestamp}</div>
-              </div>
-            ))}
-          </div>
-        )}
+        {activeTab === 'audit' && <AuditTrailButton />}
 
         {activeTab === 'guidance' && (
           <div className="space-y-4">

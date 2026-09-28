@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Get, Header, Logger, Param, Patch, Post, Req, UseGuards, ForbiddenException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -7,16 +7,20 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
+import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { requireGeneratedText } from '../../common/require-generated-text';
 import { ReportsService } from './reports.service';
 import { UpdateReportSectionsDto } from './dto';
 import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
+import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
 @ApiTags('reports')
 @Controller('/api/projects')
 export class ReportsController {
+  private readonly logger = new Logger(ReportsController.name);
+
   constructor(
     private readonly projects: ProjectsService,
     private readonly reports: ReportsService,
@@ -56,6 +60,7 @@ export class ReportsController {
   }
 
   @Get('/:projectId/report')
+  @Header('Cache-Control', 'no-store')
   getReport(@Param('projectId') projectId: string) {
     return this.reports.getByProject(projectId);
   }
@@ -87,9 +92,8 @@ export class ReportsController {
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
-    const projectData = project?.data?.projectData || {};
+    const { aiProjectData, scope } = buildProjectGenerationContext(project);
     const roles = project.roles || [];
-    const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
     const existingReport = project?.report || {};
     const existingSections: Record<string, any> = existingReport.sections || {};
@@ -97,28 +101,8 @@ export class ReportsController {
       throw new ForbiddenException('Finalize or reject pending protocol amendments before generating the report.');
     }
 
-    // Resolve targetMarkets from multiple sources
-    const inferredFromRequirements: string[] = (scope?.requirements || [])
-      .filter((r: any) => r.status === 'accepted')
-      .map((r: any) => {
-        if (r.title.includes('FDA') || r.title.includes('US')) return 'FDA';
-        if (r.title.includes('EU') || r.title.includes('MDR')) return 'EU';
-        return null;
-      })
-      .filter(Boolean);
-    const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
-    const targetMarkets: string[] =
-      project.targetMarkets.length > 0
-        ? project.targetMarkets
-        : (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
-
-    // Resolve device name from multiple sources
-    const deviceName: string =
-      projectData?.deviceName ||
-      scope?.deviceName ||
-      project?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim() ||
-      project?.name ||
-      '[Device Name]';
+    const targetMarkets: string[] = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const deviceName: string = aiProjectData.deviceName || '[Device Name]';
 
     // Build enriched synopsis context from whichever fields are populated
     const rawSynopsis = project?.data?.synopsis || {};
@@ -140,9 +124,6 @@ export class ReportsController {
       synopsisText: synopsisTextParts.join('\n'),
     };
 
-    // Enrich scope with resolved values so AI service picks them up
-    const enrichedScope = { ...scope, targetMarkets, deviceName };
-
     const sectionDefs = this.getDynamicReportSections(targetMarkets, scope);
 
     // Sanitize before persistence and before returning generated HTML to the browser.
@@ -150,9 +131,14 @@ export class ReportsController {
       ? sectionDefs.filter((section) => !String(existingSections[section.id]?.content || existingSections[section.id]?.aiDraft || '').trim())
       : sectionDefs;
     const generatedContents = new Map<string, string>();
+    if (sectionsToGenerate.length > 0) {
+      this.logger.log(buildGenerationMetadataLog(
+        'report', projectId, aiProjectData, scope, roles,
+      ));
+    }
     await this.ai.mapInBatches(sectionsToGenerate, 3, async s => {
       const content = await this.ai.generateReportSection(
-        s.title, s.number, protocolSections, enrichedSynopsis, enrichedScope, projectData, roles, []
+        s.title, s.number, protocolSections, enrichedSynopsis, scope, aiProjectData, roles, []
       );
       generatedContents.set(s.id, requireGeneratedText(content, s.title));
     });
@@ -199,31 +185,10 @@ export class ReportsController {
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
-    const projectData = project?.data?.projectData || {};
+    const { aiProjectData, scope } = buildProjectGenerationContext(project);
     const roles = project.roles || [];
-    const scope = project?.data?.scope || {};
     const protocolSections = project?.data?.protocol?.sections || [];
-    // Same context resolution as generate-report
-    const inferredFromRequirements: string[] = (scope?.requirements || [])
-      .filter((r: any) => r.status === 'accepted')
-      .map((r: any) => {
-        if (r.title.includes('FDA') || r.title.includes('US')) return 'FDA';
-        if (r.title.includes('EU') || r.title.includes('MDR')) return 'EU';
-        return null;
-      })
-      .filter(Boolean);
-    const uniqueInferred = [...new Set(inferredFromRequirements)] as string[];
-    const targetMarkets: string[] =
-      project.targetMarkets.length > 0
-        ? project.targetMarkets
-        : (uniqueInferred.length > 0 ? uniqueInferred : ['EU']);
-
-    const deviceName: string =
-      projectData?.deviceName ||
-      scope?.deviceName ||
-      project?.description?.match(/Device:\s*([^|]+)/)?.[1]?.trim() ||
-      project?.name ||
-      '[Device Name]';
+    const targetMarkets: string[] = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
 
     const rawSynopsis = project?.data?.synopsis || {};
     const synopsisTextParts = [
@@ -240,15 +205,17 @@ export class ReportsController {
         : '',
     ].filter(Boolean);
     const enrichedSynopsis = { ...rawSynopsis, synopsisText: synopsisTextParts.join('\n') };
-    const enrichedScope = { ...scope, targetMarkets, deviceName };
 
+    this.logger.log(buildGenerationMetadataLog(
+      'report-section', projectId, aiProjectData, scope, roles,
+    ));
     const content = await this.ai.generateReportSection(
       body.sectionTitle,
       body.sectionNumber,
       protocolSections,
       enrichedSynopsis,
-      enrichedScope,
-      projectData,
+      scope,
+      aiProjectData,
       roles,
       [],
     );
@@ -284,13 +251,14 @@ export class ReportsController {
   @UseGuards(AiThrottlerGuard)
   async analyzeReportSection(
     @Param('projectId') projectId: string,
-    @Body() body: { sectionTitle: string; sectionContent: string; appendicesList?: string[] },
+    @Body() body: { sectionId: string; sectionTitle: string; sectionContent: string; appendicesList?: string[] },
+    @Req() req: any,
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
-    const targetMarkets = project.targetMarkets.length > 0 ? project.targetMarkets : ['EU'];
-    const deviceCategory = project.deviceCategory || '';
-    const intendedUse = project?.data?.scope?.intendedUse || '';
+    const { aiProjectData, intendedUse } = buildProjectGenerationContext(project);
+    const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
+    const deviceCategory = aiProjectData.deviceCategory;
 
     const protocol = project?.data?.protocol || {};
     const reportSections = project?.report?.sections || {};
@@ -313,8 +281,19 @@ export class ReportsController {
       description: affectedAmendment.description,
     } : null;
 
-    const result = await this.ai.analyzeReportSection(body.sectionTitle, body.sectionContent, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext);
-    return result;
+    if (!body.sectionId) throw new BadRequestException('sectionId is required');
+    const content = sanitizeSectionHtml(body.sectionContent);
+    const requestId = await this.reports.beginSectionAnalysis(projectId, body.sectionId, content, req.user);
+    try {
+      const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext);
+      if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
+      const savedSection = await this.reports.finishSectionAnalysis(projectId, body.sectionId, requestId, result, null, req.user);
+      return { ...result, issues: savedSection.issues, section: savedSection };
+    } catch (error) {
+      await this.reports.finishSectionAnalysis(projectId, body.sectionId, requestId, null,
+        error instanceof Error ? error.message : 'Section analysis failed', req.user);
+      throw error;
+    }
   }
 
   @Post('/:projectId/check-cross-consistency')

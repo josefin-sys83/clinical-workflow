@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -305,11 +306,47 @@ export class ReportsService {
     });
   }
 
+  async beginSectionAnalysis(projectId: string, key: string, content: string, actor: AuditActor) {
+    const requestId = randomUUID();
+    await this.write(projectId, actor, 'report.analysis.started', async (client, reportId) => {
+      const definitions = await this.sectionDefinitions(projectId, client);
+      const id = await this.ensureSection(reportId, key, definitions.find(d => d.id === key), actor, client);
+      const { rows } = await client.query('select content from report_section where id=$1', [id]);
+      if (sanitizeSectionHtml(rows[0]?.content) !== sanitizeSectionHtml(content)) {
+        throw new ConflictException('The section changed before analysis started. Reload and retry on the saved text.');
+      }
+      await client.query("update report_section set analysis_status='running', analysis_error=null, analysis_request_id=$2 where id=$1", [id, requestId]);
+      await client.query('delete from report_section_issue where section_id=$1', [id]);
+    });
+    return requestId;
+  }
+
+  async finishSectionAnalysis(projectId: string, key: string, requestId: string, result: any, error: string | null, actor: AuditActor) {
+    return this.write(projectId, actor, 'report.analysis.finished', async (client, reportId) => {
+      const { rows } = await client.query('select id, analysis_request_id from report_section where report_id=$1 and section_key=$2', [reportId, key]);
+      const section = rows[0];
+      if (!section || section.analysis_request_id !== requestId) {
+        if (error) return; // A previous request cannot overwrite a newer edit/review.
+        throw new ConflictException('The section changed during analysis. Retry analysis on the saved text.');
+      }
+      await this.replaceSectionIssues(section.id, error ? [] : result.issues, client);
+      if (!error && result.requiredElements?.length) {
+        await this.replaceCompletenessElements(section.id, result.requiredElements.map((e: any) => ({
+          id: e.id, title: e.name, isoReference: e.reference, status: 'not-yet-verified',
+          aiSuggestion: e.status === 'complete' ? 'covered' : e.status === 'partial' ? 'partial' : 'missing',
+        })), actor, client);
+      }
+      await client.query('update report_section set analysis_status=$2, analysis_error=$3 where id=$1',
+        [section.id, error ? 'failed' : 'succeeded', error]);
+      return (await this.getByProject(projectId, client)).sections[key];
+    });
+  }
+
   private validateSectionPatch(key: string, patch: any) {
     if (!key.trim() || !patch || Array.isArray(patch) || typeof patch !== 'object')
       throw new BadRequestException('Invalid section patch');
     const columns = SECTION_COLUMNS;
-    const collections = ['issues', 'wontFixIssues', 'completenessElements'];
+    const collections = ['issues', 'wontFixIssues', 'completenessElements', 'previousContent'];
     for (const field of Object.keys(patch))
       if (!columns[field] && !collections.includes(field))
         throw new BadRequestException(`Unsupported report section field: ${field}`);
@@ -320,6 +357,7 @@ export class ReportsService {
       throw new BadRequestException('Invalid section state');
     if (own(patch, 'order') && (!Number.isInteger(patch.order) || patch.order < 1))
       throw new BadRequestException('Invalid section order');
+    if (own(patch, 'previousContent')) text(patch.previousContent, 'previousContent');
     if (own(patch, 'userEdited') && typeof patch.userEdited !== 'boolean')
       throw new BadRequestException('userEdited must be boolean');
   }
@@ -354,6 +392,12 @@ export class ReportsService {
     actor: AuditActor,
     client: PoolClient,
   ) {
+    const previous = own(patch, 'content') ? await client.query('select content from report_section where id=$1', [sectionId]) : null;
+    if (previous && own(patch, 'previousContent') &&
+        sanitizeSectionHtml(previous.rows[0]?.content) !== sanitizeSectionHtml(patch.previousContent)) {
+      throw new ConflictException('The section changed while you were editing. Reload before saving.');
+    }
+    const resetAnalysis = previous && (own(patch, 'previousContent') || patch.userEdited === true || sanitizeSectionHtml(previous.rows[0]?.content) !== sanitizeSectionHtml(patch.content));
     const values: any[] = [sectionId, actor.userId ?? null];
     const sets = ['updated_at=now()', 'updated_by_user_id=$2'];
     for (const [field, col] of Object.entries(SECTION_COLUMNS))
@@ -366,7 +410,9 @@ export class ReportsService {
         values.push(value);
         sets.push(`${col}=$${values.length}`);
       }
+    if (resetAnalysis) sets.push("analysis_status='not-run'", 'analysis_error=null', 'analysis_request_id=null');
     await client.query(`update report_section set ${sets.join(',')} where id=$1`, values);
+    if (resetAnalysis) await client.query('delete from report_section_issue where section_id=$1', [sectionId]);
   }
 
   private async updateSectionCollections(
@@ -377,9 +423,6 @@ export class ReportsService {
     actor: AuditActor,
     client: PoolClient,
   ) {
-    if (own(patch, 'issues')) {
-      await this.replaceSectionIssues(sectionId, patch.issues, client);
-    }
     if (own(patch, 'wontFixIssues')) {
       await this.syncSectionDismissals(
         projectId,
@@ -390,6 +433,9 @@ export class ReportsService {
         client,
       );
     }
+    if (own(patch, 'issues')) {
+      await this.replaceSectionIssues(sectionId, patch.issues, client);
+    }
     if (own(patch, 'completenessElements')) {
       await this.replaceCompletenessElements(sectionId, patch.completenessElements, actor, client);
     }
@@ -397,10 +443,16 @@ export class ReportsService {
 
   private async replaceSectionIssues(sectionId: string, issues: any, client: PoolClient) {
     const items = list(issues, 'issues');
+    const dismissals = await client.query(
+      'select description from report_section_issue_dismissal where section_id=$1', [sectionId],
+    );
+    const suppressed = new Set(dismissals.rows.map(row => row.description));
     await client.query('delete from report_section_issue where section_id=$1', [sectionId]);
     for (const [index, issue] of items.entries()) {
       if (!issue || !['blocker', 'warning', 'info'].includes(issue.severity))
         throw new BadRequestException('Invalid issue severity');
+      // Keep the existing exact-description dismissal rule across reanalysis and reload.
+      if (suppressed.has(issue.description ?? issue.message ?? '')) continue;
       await client.query(
         `insert into report_section_issue(section_id,issue_key,position,severity,title,subsection,description,reference,raised_by,raised_date,status,due_date,text_quote)
               values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
@@ -444,6 +496,10 @@ export class ReportsService {
             values($1,$2,$3,now()) on conflict(section_id,description) do nothing`,
         [sectionId, description, actor.userId ?? null],
       );
+    await client.query(
+      'delete from report_section_issue where section_id=$1 and description=any($2::text[])',
+      [sectionId, descriptions],
+    );
     await this.audit.record(
       {
         projectId,

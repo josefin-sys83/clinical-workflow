@@ -68,7 +68,16 @@ class AzureOpenAIProvider:
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
         }
-        if request.json_mode:
+        if request.response_schema:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.response_schema_name or "structured_response",
+                    "strict": True,
+                    "schema": request.response_schema,
+                },
+            }
+        elif request.json_mode:
             body["response_format"] = {"type": "json_object"}
 
         try:

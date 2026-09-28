@@ -51,7 +51,7 @@ export function AuthorityExportsPanel({
     {
       id: 'sponsor',
       name: 'Sponsor Template',
-      description: 'Internal sponsor format with full audit trail and metadata',
+      description: 'Internal sponsor format with metadata',
       authority: 'CardioMed Technologies Internal Standard',
       icon: '🏢'
     }
@@ -88,7 +88,6 @@ export function AuthorityExportsPanel({
       case 'sponsor':
         return [
           ...commonDocs,
-          { name: 'Complete Audit Trail Export', included: true },
           { name: 'Section Approval Log with Signatures', included: true },
           { name: 'Amendment History with Rationale', included: true },
           { name: 'Justified Deviations Log', included: true },
@@ -164,11 +163,6 @@ export function AuthorityExportsPanel({
             category: 'Content Completeness',
             status: 'Pass',
             message: 'All protocol sections approved and locked'
-          },
-          {
-            category: 'Audit Trail',
-            status: 'Pass',
-            message: 'Complete edit history with timestamps and user IDs'
           },
           {
             category: 'Quality Review',

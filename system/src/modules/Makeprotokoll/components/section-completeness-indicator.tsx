@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, AlertCircle, Circle, ChevronDown, ChevronRight, Info } from 'lucide-react';
+import { CheckCircle2, Clock, Circle, ChevronDown, ChevronRight, Info } from 'lucide-react';
 
 interface RequiredElement {
   id: string;
@@ -39,7 +39,7 @@ export function SectionCompletenessIndicator({
       case 'complete':
         return <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />;
       case 'partial':
-        return <AlertCircle className="w-3.5 h-3.5 text-amber-600" />;
+        return <Clock className="w-3.5 h-3.5 text-slate-500" />;
       case 'missing':
         return <Circle className="w-3.5 h-3.5 text-slate-300" />;
     }
@@ -81,7 +81,8 @@ export function SectionCompletenessIndicator({
             <div className="flex items-start gap-2">
               <Info className="w-3.5 h-3.5 text-slate-500 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-slate-600">
-                Inspection requirement: This section must cover all required elements 
+                Coverage checklist — these statuses are not blocker or warning severities and are not included in the header’s finding counts.
+                {' '}Inspection requirement: This section must cover all required elements
                 per ISO 14155:2020. AI may assist in identifying gaps, but final confirmation 
                 must be performed and verified by the section owner or reviewer.
               </p>
@@ -113,7 +114,7 @@ export function SectionCompletenessIndicator({
                     </div>
                   )}
                   {element.status === 'missing' && (
-                    <div className="text-xs text-rose-700 mt-1">
+                    <div className="text-xs text-slate-600 mt-1">
                       Missing - must be added before approval
                     </div>
                   )}

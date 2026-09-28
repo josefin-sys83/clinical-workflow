@@ -3,13 +3,12 @@ import { ReviewHeader } from '../components/ReviewHeader';
 import { ReportContent } from '../components/ReportContent';
 import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
-import { AuditTrailModal } from '../components/AuditTrailModal';
+import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import {
   reportSections,
   regulatoryFindings,
   reviewerComments,
   aiFindings as initialAIFindings,
-  auditTrail,
   projectRoles,
 } from '../data/mockReportData';
 import { transitionWorkflow } from '@/shared/services/workflowService';
@@ -23,7 +22,6 @@ export default function ReviewPageCopy() {
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [aiFindings, setAIFindings] = useState(initialAIFindings);
   const [findings, setFindings] = useState(regulatoryFindings);
-  const [auditEntries, setAuditEntries] = useState(auditTrail);
 
   const handleSectionClick = (sectionId: string) => {
     setActiveSection(sectionId);
@@ -54,19 +52,6 @@ export default function ReviewPageCopy() {
             acceptedAt: new Date(),
           };
           
-          // Add audit trail entry
-          const now = new Date();
-          const auditEntry = {
-            id: `audit-${Date.now()}`,
-            domain: 'Review' as const,
-            timestamp: `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-            action: `${finding.severity === 'blocker' ? 'Blocker' : 'Warning'} risk accepted for ${finding.location}`,
-            userBy: 'Dr. Sarah Chen',
-            userEmail: 'sarah.chen@medtech.com',
-            details: finding.description,
-          };
-          setAuditEntries((prev) => [auditEntry, ...prev]);
-
           return updatedFinding;
         }
         return finding;
@@ -75,19 +60,6 @@ export default function ReviewPageCopy() {
   };
 
   const handleApproveReport = async () => {
-    // Add audit trail entry
-    const now = new Date();
-    const auditEntry = {
-      id: `audit-${Date.now()}`,
-      domain: 'Review' as const,
-      timestamp: `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-      action: 'Report approved',
-      userBy: 'Dr. Sarah Chen',
-      userEmail: 'sarah.chen@medtech.com',
-      details: 'Clinical Investigation Report has been approved for regulatory submission',
-    };
-    setAuditEntries((prev) => [auditEntry, ...prev]);
-
     if (!projectId) return;
     await transitionWorkflow({ projectId, stepId: 'report-review', to: 'approved', note: 'Report approved in review UI' });
 
@@ -144,11 +116,6 @@ export default function ReviewPageCopy() {
         </div>
       </div>
 
-      <AuditTrailModal
-        isOpen={showAuditTrail}
-        onClose={() => setShowAuditTrail(false)}
-        auditEntries={auditEntries}
-      />
-    </div>
+      <AuditTrailModal open={showAuditTrail} onOpenChange={setShowAuditTrail} />    </div>
   );
 }

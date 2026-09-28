@@ -43,12 +43,18 @@ export function normalizeStoredIntendedUse(
     };
   }
 
-  //  before the dropdown existed, Project Setup stored the
-  // the complete free-text description directly in `intendedUse`.
-  return {
-    intendedUse: 'other-custom',
-    customIntendedUse: intendedUse,
-  };
+  return { intendedUse: '', customIntendedUse: '' };
+}
+
+export function normalizeDerivedIntendedUse(
+  derivedValue: unknown,
+): { intendedUse: string; customIntendedUse: string } {
+  const derived = typeof derivedValue === 'string' ? derivedValue.trim() : '';
+  if (!derived) return { intendedUse: '', customIntendedUse: '' };
+  if (INTENDED_USE_VALUES.has(derived)) {
+    return { intendedUse: derived, customIntendedUse: '' };
+  }
+  return { intendedUse: 'other-custom', customIntendedUse: derived };
 }
 
 export function intendedUseLabel(value: string): string {

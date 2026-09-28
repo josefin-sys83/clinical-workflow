@@ -16,7 +16,6 @@ export function SubmissionPreparation({ onBackToProtocol, projectData }: Submiss
     { id: '1', name: 'Clinical Investigation Plan (PDF)', status: 'Ready', category: 'Protocol' },
     { id: '2', name: 'Synopsis', status: 'Ready', category: 'Protocol' },
     { id: '3', name: 'Approval Signatures', status: 'Ready', category: 'Approval' },
-    { id: '4', name: 'Audit Trail Summary', status: 'Ready', category: 'Audit' },
     { id: '5', name: 'Amendment History', status: 'Filed', category: 'Versioning' },
     { id: '6', name: 'Deviation Log', status: 'Missing', category: 'Monitoring' }
   ];

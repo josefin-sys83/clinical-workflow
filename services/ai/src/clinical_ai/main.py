@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from clinical_ai.ai_service import AiService
 from clinical_ai.api import router
 from clinical_ai.config import Settings
-from clinical_ai.errors import GatewayTimeoutException, ServiceUnavailableException
+from clinical_ai.errors import GatewayTimeoutException, ServiceUnavailableException, StructuredOutputException
 from clinical_ai.llm import LLMGateway, create_llm_provider
 
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +45,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(GatewayTimeoutException)
     async def gateway_timeout_handler(_, exc: GatewayTimeoutException):
         return _nest_error(504, str(exc), "Gateway Timeout")
+
+    @app.exception_handler(StructuredOutputException)
+    async def structured_output_handler(_, exc: StructuredOutputException):
+        return _nest_error(502, str(exc), "Bad Gateway")
 
     app.include_router(router)
     return app

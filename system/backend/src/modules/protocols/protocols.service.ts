@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
@@ -168,6 +168,36 @@ export class ProtocolsService {
     return this.getByProject(id);
   }
 
+  async beginSectionAnalysis(projectId: string, sectionId: string, content: string, actor?: AuditActor) {
+    const requestId = randomUUID();
+    let analyzedSection: any;
+    await this.updateAtomic(projectId, current => {
+      const section = current.sections?.find((s: any) => s.id === sectionId);
+      if (!section || section.content !== sanitizeSectionHtml(content)) {
+        throw new ConflictException('The section changed before analysis started. Reload it and retry analysis on the saved text.');
+      }
+      analyzedSection = { ...section, issues: [], analysisStatus: 'running', analysisError: null, analysisRequestId: requestId };
+      return { ...current, sections: current.sections.map((s: any) => s.id === sectionId ? analyzedSection : s) };
+    }, actor);
+    return { section: analyzedSection, requestId };
+  }
+
+  async finishSectionAnalysis(projectId: string, sectionId: string, requestId: string, result: any, error: string | null, actor?: AuditActor) {
+    await this.updateAtomic(projectId, current => {
+      const section = current.sections?.find((s: any) => s.id === sectionId);
+      if (!section || section.analysisRequestId !== requestId) {
+        if (error) return current; // An old failure must not alter a newer edit/review.
+        throw new ConflictException('The section changed during analysis. Retry analysis on the current text.');
+      }
+      return { ...current, sections: current.sections.map((s: any) => s.id !== sectionId ? s : {
+        ...s,
+        issues: error ? [] : result.issues,
+        requiredElements: !error && result.requiredElements?.length ? result.requiredElements : s.requiredElements,
+        analysisStatus: error ? 'failed' : 'succeeded', analysisError: error,
+      }) };
+    }, actor);
+  }
+
   async updateSection(
     projectId: string,
     sectionId: string,
@@ -180,7 +210,7 @@ export class ProtocolsService {
       approvedAt?: string;
     },
     actor?: AuditActor,
-  ): Promise<{ ok: true; updatedAt: string }> {
+  ): Promise<{ ok: true; content: string; updatedAt: string }> {
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -233,7 +263,7 @@ export class ProtocolsService {
       }, client);
 
       await client.query("COMMIT");
-      return { ok: true, updatedAt: result.updatedAt };
+      return { ok: true, content: result.content, updatedAt: result.updatedAt };
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
@@ -334,6 +364,9 @@ export class ProtocolsService {
         subsection: row.subsection,
         description: row.description,
         reference: row.reference,
+        source: row.source,
+        targetSection: row.target_section,
+        remediation: row.remediation,
         raisedBy: row.raised_by,
         raisedDate: row.raised_date ? String(row.raised_date).slice(0, 10) : null,
         status: row.status,
@@ -455,6 +488,9 @@ export class ProtocolsService {
       locked: row.locked,
       reviewCycle: row.review_cycle,
       aiGenerated: row.ai_generated,
+      analysisStatus: row.analysis_status,
+      analysisError: row.analysis_error,
+      analysisRequestId: row.analysis_request_id,
       approvalStatus: row.approval_status,
       approvedBy: row.approved_by_name,
       approvedAt: iso(row.approved_at),
@@ -722,8 +758,8 @@ export class ProtocolsService {
            protocol_id, section_key, section_number, position, title, content, status,
            review_status, locked, review_cycle, ai_generated, approval_status,
            approved_by_user_id, approved_by_name, approved_at, amended, amendment_id,
-           amendment_number, created_at, updated_at
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+           amendment_number, created_at, updated_at, analysis_status, analysis_error, analysis_request_id
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          on conflict (protocol_id, section_key) do update set
            section_number = excluded.section_number,
            position = excluded.position,
@@ -734,6 +770,9 @@ export class ProtocolsService {
            locked = excluded.locked,
            review_cycle = excluded.review_cycle,
            ai_generated = excluded.ai_generated,
+           analysis_status = excluded.analysis_status,
+           analysis_error = excluded.analysis_error,
+           analysis_request_id = excluded.analysis_request_id,
            approval_status = excluded.approval_status,
            approved_by_user_id = coalesce(excluded.approved_by_user_id, protocol_section.approved_by_user_id),
            approved_by_name = excluded.approved_by_name,
@@ -764,6 +803,9 @@ export class ProtocolsService {
           section.amendmentNumber ? Number(section.amendmentNumber) : null,
           iso(section.createdAt) || new Date().toISOString(),
           iso(section.updatedAt) || new Date().toISOString(),
+          section.analysisStatus || 'not-run',
+          section.analysisError || null,
+          section.analysisRequestId || null,
         ],
       );
       const sectionId = String(rows[0].id);
@@ -800,8 +842,9 @@ export class ProtocolsService {
       await client.query(
         `insert into protocol_section_issue (
            section_id, issue_key, severity, subsection, description, reference,
-           raised_by, raised_date, status, due_date, text_quote
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           raised_by, raised_date, status, due_date, text_quote,
+           source, target_section, remediation
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          on conflict (section_id, issue_key) do update set
            severity = excluded.severity,
            subsection = excluded.subsection,
@@ -811,7 +854,10 @@ export class ProtocolsService {
            raised_date = excluded.raised_date,
            status = excluded.status,
            due_date = excluded.due_date,
-           text_quote = excluded.text_quote`,
+           text_quote = excluded.text_quote,
+           source = excluded.source,
+           target_section = excluded.target_section,
+           remediation = excluded.remediation`,
         [
           sectionId,
           key,
@@ -824,6 +870,9 @@ export class ProtocolsService {
           issue.status || 'open',
           issue.dueDate || null,
           issue.textQuote || null,
+          issue.source ?? null,
+          issue.targetSection ?? null,
+          issue.remediation ?? null,
         ],
       );
     }
@@ -1036,6 +1085,7 @@ export class ProtocolsService {
     sectionKey: string,
     values: {
       content: string;
+      previousContent?: string;
       approvalStatus?: string;
       approvedBy?: string;
       approvedAt?: string;
@@ -1044,6 +1094,11 @@ export class ProtocolsService {
     client: PoolClient,
   ): Promise<{ title: string; content: string; updatedAt: string }> {
     const protocolId = await this.ensureForProject(projectId, client);
+    const previous = await client.query('select content from protocol_section where protocol_id=$1 and section_key=$2', [protocolId, sectionKey]);
+    if (previous.rows[0] && values.previousContent !== undefined &&
+        sanitizeSectionHtml(previous.rows[0].content) !== sanitizeSectionHtml(values.previousContent)) {
+      throw new ConflictException('The section changed while you were editing. Reload before saving.');
+    }
     const now = new Date().toISOString();
     const approvedBy = values.approvedBy ?? null;
     const { rows } = await client.query(
@@ -1068,6 +1123,10 @@ export class ProtocolsService {
       ],
     );
     if (!rows[0]) throw new NotFoundException('Protocol section not found');
+    await client.query(`update protocol_section set analysis_status='not-run', analysis_error=null, analysis_request_id=null
+      where protocol_id=$1 and section_key=$2`, [protocolId, sectionKey]);
+    await client.query(`delete from protocol_section_issue where section_id in
+      (select id from protocol_section where protocol_id=$1 and section_key=$2)`, [protocolId, sectionKey]);
     await client.query(`update protocol set updated_at = $2 where id = $1`, [protocolId, now]);
     return {
       title: rows[0].title,

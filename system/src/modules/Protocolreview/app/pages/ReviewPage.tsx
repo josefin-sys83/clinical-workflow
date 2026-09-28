@@ -4,13 +4,12 @@ import { ReviewHeader } from '../components/ReviewHeader';
 import { ReportContent } from '../components/ReportContent';
 import { FindingsPanel } from '../components/FindingsPanel';
 import { ReviewFooter } from '../components/ReviewFooter';
-import { AuditTrailModal } from '../components/AuditTrailModal';
+import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import {
   reportSections,
   regulatoryFindings,
   reviewerComments,
   aiFindings as initialAIFindings,
-  auditTrail,
 } from '../data/mockReportData';
 
 export default function ReviewPage() {
@@ -19,7 +18,6 @@ export default function ReviewPage() {
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [aiFindings, setAIFindings] = useState(initialAIFindings);
   const [findings, setFindings] = useState(regulatoryFindings);
-  const [auditEntries, setAuditEntries] = useState(auditTrail);
 
   const handleSectionClick = (sectionId: string) => {
     setActiveSection(sectionId);
@@ -50,18 +48,6 @@ export default function ReviewPage() {
             acceptedAt: new Date(),
           };
           
-          // Add audit trail entry
-          const auditEntry = {
-            id: `audit-${Date.now()}`,
-            domain: 'Approval' as const,
-            timestamp: new Date(),
-            action: `Accepted ${finding.severity === 'blocker' ? 'blocker' : 'warning'} risk`,
-            userBy: 'Dr. Sarah Chen',
-            userEmail: 'sarah.chen@medtech.com',
-            details: finding.description,
-          };
-          setAuditEntries((prev) => [auditEntry, ...prev]);
-          
           return updatedFinding;
         }
         return finding;
@@ -74,7 +60,7 @@ export default function ReviewPage() {
   };
 
   const handleRequestChanges = () => {
-    alert('Changes requested. This action would be logged in the audit trail.');
+    alert('Changes requested.');
   };
 
   // Check if report can be approved
@@ -115,11 +101,6 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      <AuditTrailModal
-        isOpen={showAuditTrail}
-        onClose={() => setShowAuditTrail(false)}
-        auditEntries={auditEntries}
-      />
-    </div>
+      <AuditTrailModal open={showAuditTrail} onOpenChange={setShowAuditTrail} />    </div>
   );
 }

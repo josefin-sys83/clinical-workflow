@@ -1,4 +1,4 @@
-import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding, AuditEntry } from '../types/review';
+import type { ReportSection, RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
 
 export const protocolSections: ReportSection[] = [
   {
@@ -494,53 +494,5 @@ export const protocolAIFindings: AIFinding[] = [
     details: 'Protocol may benefit from pre-specified subgroup analysis based on device flow rate quartiles or patient hemodynamic response patterns.',
     source: 'AI Protocol Optimization',
     confidence: 0.72,
-  },
-];
-
-export const protocolAuditTrail: AuditEntry[] = [
-  {
-    id: 'audit-1',
-    domain: 'Review',
-    timestamp: new Date('2024-02-22T14:30:00'),
-    action: 'Added comment to Section 2',
-    userBy: 'Dr. Emma Nilsson',
-    userEmail: 'emma.nilsson@medtech.com',
-    details: 'Requested clarification on study objectives alignment with endpoints',
-  },
-  {
-    id: 'audit-2',
-    domain: 'Review',
-    timestamp: new Date('2024-02-22T13:15:00'),
-    action: 'Replied to comment in Section 5',
-    userBy: 'Dr. Anders Bergman',
-    userEmail: 'anders.bergman@medtech.com',
-    details: 'Confirmed biomarker criteria needs specification',
-  },
-  {
-    id: 'audit-3',
-    domain: 'Approval',
-    timestamp: new Date('2024-02-21T16:45:00'),
-    action: 'Accepted warning risk',
-    userBy: 'Dr. Emma Nilsson',
-    userEmail: 'emma.nilsson@medtech.com',
-    details: 'Concurrent medication tracking details limited to cardiovascular medications',
-  },
-  {
-    id: 'audit-4',
-    domain: 'Review',
-    timestamp: new Date('2024-02-21T14:20:00'),
-    action: 'Added comment to Section 6',
-    userBy: 'Dr. Anders Bergman',
-    userEmail: 'anders.bergman@medtech.com',
-    details: 'Visit windows need explicit definition for per-protocol analysis',
-  },
-  {
-    id: 'audit-5',
-    domain: 'Review',
-    timestamp: new Date('2024-02-20T15:30:00'),
-    action: 'Added comment to Section 3',
-    userBy: 'Dr. Emma Nilsson',
-    userEmail: 'emma.nilsson@medtech.com',
-    details: 'Device specifications section is comprehensive and meets requirements',
   },
 ];

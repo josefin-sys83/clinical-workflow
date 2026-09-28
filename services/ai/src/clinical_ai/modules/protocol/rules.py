@@ -33,7 +33,7 @@ def get_section_requirements(sectionTitle: str) -> dict[str, str]:
             'forbidden': 'Do not flag missing device specifications, study procedures, or statistical analysis details.',
         },
         'Device Description & Intended Clinical Use': {
-            'required': 'Device name and model, regulatory classification per each target market (e.g. EU MDR class, FDA device class), intended use statement, contraindications, and key device specifications.',
+            'required': 'Device name and model, regulatory classification for each active project market, intended use statement, contraindications, and key device specifications.',
             'forbidden': 'Do not flag missing study design details, eligibility criteria, or statistical methods.',
         },
         'Study Design': {
@@ -49,7 +49,7 @@ def get_section_requirements(sectionTitle: str) -> dict[str, str]:
             'forbidden': 'Do not flag missing eligibility criteria, statistical analysis details, or ethics committee information.',
         },
         'Safety Monitoring & Reporting': {
-            'required': 'AE and SAE definitions per ISO 14155, reporting timelines for SAEs, safety monitoring committee or DSMB charter, stopping rules, and integration with risk management per EU MDR Annex XV (for EU markets), UADE (Unanticipated Adverse Device Effect) definition per ISO 14155:2020 §4.10.2, SADE (Serious Adverse Device Effect) definition, EU MDR Article 80 serious incident reporting to competent authority, causality assessment methodology, 24-hour expedited reporting timeline to sponsor.',
+            'required': 'Applicable adverse event definitions, reporting timelines, safety oversight, stopping rules, causality assessment, and risk-management integration required by the project-approved regulatory requirements.',
             'forbidden': 'Do not flag missing statistical methods, eligibility criteria, or ethics committee details.',
         },
         'Statistical Considerations': {
@@ -57,7 +57,7 @@ def get_section_requirements(sectionTitle: str) -> dict[str, str]:
             'forbidden': 'Do not flag missing eligibility criteria, study procedures, safety monitoring, or ethics details.',
         },
         'Ethics & Regulatory Considerations': {
-            'required': 'Ethics committee approval process, informed consent process and documentation, data protection per GDPR Article 32 (for EU markets) including encryption, pseudonymization methods, and breach notification procedures, Declaration of Helsinki reference, ICH-GCP E6(R2) compliance statement, CIV notification (EU) or IDE application (US) regulatory pathway reference, data retention period per EU MDR (15 years minimum).',
+            'required': 'Ethics approval process, informed consent process and documentation, applicable data-protection requirements, regulatory pathway requirements, and record-retention requirements defined by the project-approved regulatory requirements.',
             'forbidden': 'Do not flag missing statistical methods, safety monitoring details, or device specifications.',
         },
     }
@@ -67,6 +67,10 @@ def get_section_requirements(sectionTitle: str) -> dict[str, str]:
     })
 
 
+# DEPRECATED:
+# Regulatory requirements must come from the authoritative project context
+# provided by the main backend. Do not infer them from target markets or
+# device category. Remove this helper once the project-context integration is complete.
 def get_core_regulatory_context(targetMarkets: list[str], deviceCategory: str) -> str:
     isEU = any(('EU' in m or 'Europe' in m) for m in targetMarkets)
     isUS = any(('US' in m or 'FDA' in m or 'United States' in m) for m in targetMarkets)

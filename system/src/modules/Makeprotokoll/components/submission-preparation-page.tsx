@@ -1,5 +1,6 @@
 import React from 'react';
 import { ArrowLeft, Lock, FileText, History } from 'lucide-react';
+import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { eTMFPackagePanel } from './etmf-package-panel';
 import { FinalSignoffPanel } from './final-signoff-panel';
 import { AuthorityExportsPanel } from './authority-exports-panel';
@@ -16,9 +17,11 @@ export function SubmissionPreparationPage({
   onBackToProtocol
 }: SubmissionPreparationPageProps) {
   const [allSignoffsComplete, setAllSignoffsComplete] = React.useState(false);
+  const [auditOpen, setAuditOpen] = React.useState(false);
 
   return (
     <div className="min-h-screen bg-slate-100">
+      <AuditTrailModal open={auditOpen} onOpenChange={setAuditOpen} />
       {/* Header */}
       <div className="bg-white border-b border-slate-300 sticky top-0 z-40">
         <div className="max-w-[1600px] mx-auto px-8 py-4">
@@ -64,10 +67,7 @@ export function SubmissionPreparationPage({
             </div>
 
             <button
-              onClick={() => {
-                console.log('View complete audit trail');
-                alert('Complete Audit Trail\n\nShowing full protocol history:\n- All section edits with timestamps\n- AI generation events\n- Review cycles\n- Approvals and sign-offs\n- eTMF filing actions\n- Export generations\n\nAll events logged with user ID, timestamp, and IP address per 21 CFR Part 11.');
-              }}
+              onClick={() => setAuditOpen(true)}
               className="flex items-center gap-2 px-4 py-2 text-sm border border-slate-300 text-slate-700 rounded-md hover:bg-slate-50 transition-colors"
             >
               <History className="w-4 h-4" />

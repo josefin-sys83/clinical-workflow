@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useParams, useLocation, Link } from 'react-router-dom';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle } from 'lucide-react';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronRight, ChevronDown, User, FileText, Lock, Check, Circle, CheckCircle, Loader2 } from 'lucide-react';
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import type { DocumentLifecycleState } from '@/shared/workflow/types';
 import { advanceWorkflowStep } from '@/shared/services/workflowService';
@@ -36,7 +36,6 @@ export default function App() {
   const [showReviewConfirmation, setShowReviewConfirmation] = useState<boolean>(false);
   const [issueFilter, setIssueFilter] = useState<'my-issues' | 'all-issues'>('my-issues');
   const { user: sessionUser } = useCurrentUser();
-  const [showAuditLog, setShowAuditLog] = useState<boolean>(false);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mainContentRef = useRef<HTMLDivElement | null>(null);
 
@@ -55,10 +54,25 @@ export default function App() {
   const [checkingProtocol, setCheckingProtocol] = React.useState(false);
   const [generationProgress, setGenerationProgress] = React.useState<{ completed: number; total: number; currentLabel: string | null } | null>(null);
   const [protocolError, setProtocolError] = React.useState<string | null>(null);
-const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<string, string[]>>({});
+  const [failedProtocolOperation, setFailedProtocolOperation] = useState<'load' | 'generate'>('load');
+  const pendingProtocolWork = useRef(new Set<Promise<unknown>>());
+  const generationRequested = useRef(false);
+  const protocolEpoch = useRef(0);
+  const sectionAnalysisRequest = useRef<Record<string, number>>({});
+  const trackProtocolWork = <T,>(work: () => Promise<T>): Promise<T> => {
+    const promise = work();
+    pendingProtocolWork.current.add(promise);
+    const remove = () => { pendingProtocolWork.current.delete(promise); };
+    void promise.then(remove, remove);
+    return promise;
+  };
+  // Analysis responses must consult the latest dismissals, including decisions
+  // made while the request was in flight.
+  const wontFixDescriptions = useRef<Record<string, string[]>>({});
   const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
   const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
-  const [sectionAnalyzing, setSectionAnalyzing] = React.useState<Record<string, boolean>>({});
+  // A save may start another review before an earlier review of this section ends.
+  const [sectionAnalyzing, setSectionAnalyzing] = React.useState<Record<string, number>>({});
   const [rightPanelWontFixModal, setRightPanelWontFixModal] = React.useState<{ sectionId: string; issueId: string } | null>(null);
   const [rightPanelWontFixComment, setRightPanelWontFixComment] = React.useState('');
   const [showAmendmentModal, setShowAmendmentModal] = useState(false);
@@ -85,6 +99,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const runSynopsisConsistencyCheck = async () => {
     if (!projectId) return;
+    const epoch = protocolEpoch.current;
     setSynopsisConsistencyStatus('running');
     setSynopsisConsistencyError(null);
     try {
@@ -94,9 +109,11 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
       if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
       const data = await res.json();
       if (!data || !Array.isArray(data.issues)) throw new Error(aiAnalysisErrorMessage(502));
+      if (epoch !== protocolEpoch.current) return;
       setSynopsisConsistencyIssues(data.issues || []);
       setSynopsisConsistencyStatus('succeeded');
     } catch (e) {
+      if (epoch !== protocolEpoch.current) return;
       console.error('Synopsis consistency check failed', e);
       setSynopsisConsistencyStatus('failed');
       setSynopsisConsistencyError(e instanceof Error ? e.message : aiAnalysisErrorMessage(0));
@@ -114,6 +131,45 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
   const protocolLoadInFlightRef = useRef<string | null>(null);
 
+  const generateProtocolFromSavedProject = React.useCallback(async () => {
+    if (!projectId) return Promise.resolve();
+
+    setProtocolError(null);
+    setGeneratingProtocol(true);
+    generationRequested.current = true;
+    // Each tracked analysis includes its persistence; finish old work before replacement.
+    while (pendingProtocolWork.current.size) {
+      await Promise.allSettled([...pendingProtocolWork.current]);
+    }
+    protocolEpoch.current += 1;
+    setSectionAnalyzing({});
+    setFailedProtocolOperation('generate');
+    return apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
+      .then(result => {
+        if (!result?.sections?.length) throw new Error('Protocol generation returned no sections');
+        setProtocol(result);
+        setExpandedSections(result.sections.map((section: any) => section.id));
+        setSectionAnalysisStatus({});
+        setSectionAnalysisError({});
+        generationRequested.current = false;
+        result.sections.forEach((section: any) => {
+          if (section.content) analyzeSectionWithAI(section.title, section.content, section.id, 0, section.requiredElements);
+        });
+        runSynopsisConsistencyCheck();
+      })
+      .catch((err: any) => {
+        console.error('Protocol generation failed', err);
+        setProtocolError(apiErrorMessage(
+          err,
+          err instanceof Error ? err.message : 'Protocol generation failed. Please try again.',
+        ));
+      })
+      .finally(() => {
+        generationRequested.current = false;
+        setGeneratingProtocol(false);
+      });
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadOrGenerateProtocol = React.useCallback((generateIfMissing = !import.meta.env.DEV) => {
     if (!projectId) return;
     // Guards against duplicate concurrent generation runs (e.g. React StrictMode's
@@ -126,6 +182,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     };
     setProtocolError(null);
     setCheckingProtocol(true);
+    setFailedProtocolOperation('load');
     apiFetch<any>(`/projects/${projectId}`, { cache: 'no-store' })
       .then(p => {
         if (p.data && p.data.projectData) {
@@ -141,7 +198,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
           setSectionAnalysisStatus(Object.fromEntries(p.data.protocol.sections.map((s: any) => [s.id, s.analysisStatus || 'not-run'])));
           setSectionAnalysisError(Object.fromEntries(p.data.protocol.sections.filter((s: any) => s.analysisError).map((s: any) => [s.id, s.analysisError])));
           p.data.protocol.sections?.forEach((s: any) => {
-            if (s.content && s.approvalStatus !== 'approved' && s.aiGenerated !== false)
+            if (s.content && s.approvalStatus !== 'approved' && s.aiGenerated !== false && s.analysisStatus === 'failed')
               analyzeSectionWithAI(s.title, s.content, s.id);
           });
           if (p.data.protocol.sections.some((s: any) => s.aiGenerated !== false)) {
@@ -157,28 +214,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
             clearInFlight();
             return;
           }
-          setGeneratingProtocol(true);
-          apiFetch<any>(`/projects/${projectId}/generate-protocol`, { method: 'POST' })
-            .then(result => {
-              if (!result?.sections?.length) throw new Error('Protocol generation returned no sections');
-              setProtocol(result);
-              setExpandedSections(result.sections.map((section: any) => section.id));
-              result.sections?.forEach((s: any) => {
-                if (s.content) analyzeSectionWithAI(s.title, s.content, s.id);
-              });
-              runSynopsisConsistencyCheck();
-            })
-            .catch((err: any) => {
-              console.error('Protocol generation failed', err);
-              setProtocolError(apiErrorMessage(
-                err,
-                err instanceof Error ? err.message : 'Protocol generation failed. Please try again.',
-              ));
-            })
-            .finally(() => {
-              setGeneratingProtocol(false);
-              clearInFlight();
-            });
+          void generateProtocolFromSavedProject().finally(clearInFlight);
         }
       })
       .catch((err: any) => {
@@ -187,7 +223,21 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
         setCheckingProtocol(false);
         clearInFlight();
       });
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, generateProtocolFromSavedProject]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRegenerateProtocol = React.useCallback((confirmReplacement = true) => {
+    if (!projectId || protocolLoadInFlightRef.current === projectId) return;
+    const confirmed = !confirmReplacement || window.confirm(
+      'Regenerate this protocol from the latest saved project setup and scope? This replaces the current draft sections.',
+    );
+    if (!confirmed) return;
+
+    protocolLoadInFlightRef.current = projectId;
+    setCheckingProtocol(false);
+    void generateProtocolFromSavedProject().finally(() => {
+      if (protocolLoadInFlightRef.current === projectId) protocolLoadInFlightRef.current = null;
+    });
+  }, [projectId, generateProtocolFromSavedProject]);
 
   // Polls real backend progress ("3 of 9 sections done") while a protocol generation
   // run is in flight, so the spinner shown below can say something more useful than a
@@ -228,107 +278,137 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
 
 
   // Current user context
-  const analyzeSectionWithAI = async (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0): Promise<number> => {
-    setSectionAnalyzing(prev => ({ ...prev, [sectionId]: true }));
-    setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
-    setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
-    try {
-      const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements || [] })
-      });
-      if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
-      const result = await res.json();
-      if (!result || !Array.isArray(result.issues)) throw new Error(aiAnalysisErrorMessage(502));
-      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'succeeded' }));
-
-      let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
-      const elements = result.requiredElements || [];
-      // Filter out won't-fix descriptions for this section
-      const suppressed = wontFixDescriptions[sectionId] || [];
-      if (suppressed.length > 0) {
-        issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
-      }
-      const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
-      const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
-      // Always update protocol state (even if issuesArr is empty)
-      await new Promise<void>((resolve) => {
-        setProtocol((prev: any) => {
-          const updatedSections = prev.sections.map((s: any) =>
-            s.id === sectionId ? { ...s, issues: issuesArr, requiredElements: elements.length > 0 ? elements : s.requiredElements, analysisStatus: 'succeeded', analysisError: undefined } : s
-          );
-          const updated = { ...prev, sections: updatedSections };
-          fetch(apiBase + '/api/projects/' + projectId, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data: { protocol: updated } })
-          });
-          resolve();
-          return updated;
+  const analyzeSectionWithAI = (sectionTitle: string, sectionContent: string, sectionId: string, prevOpenCount: number = 0, requiredElements?: any[]): Promise<number> => {
+    if (generationRequested.current) return Promise.resolve(0);
+    const epoch = protocolEpoch.current;
+    const requestId = (sectionAnalysisRequest.current[sectionId] || 0) + 1;
+    sectionAnalysisRequest.current[sectionId] = requestId;
+    const isLatestAnalysis = () => epoch === protocolEpoch.current && sectionAnalysisRequest.current[sectionId] === requestId;
+    return trackProtocolWork(async () => {
+      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: (prev[sectionId] || 0) + 1 }));
+      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
+      setProtocol((prev: any) => !prev ? prev : ({ ...prev, sections: prev.sections.map((s: any) =>
+        s.id === sectionId ? { ...s, issues: [], analysisStatus: 'running', analysisError: null } : s) }));
+      setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
+      try {
+        const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sectionTitle, sectionId, sectionContent, requiredElements: requiredElements ?? protocol?.sections?.find((s: any) => s.id === sectionId)?.requiredElements ?? [] })
         });
-      });
-      return resolvedCount;
-    } catch (e) {
-      console.error('Section analysis failed', e);
-      const message = e instanceof Error ? e.message : aiAnalysisErrorMessage(0);
-      setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
-      setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
-      setProtocol((prev: any) => {
-        if (!prev) return prev;
-        const updated = { ...prev, sections: prev.sections.map((s: any) => s.id === sectionId ? { ...s, analysisStatus: 'failed', analysisError: message } : s) };
-        fetch(apiBase + '/api/projects/' + projectId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { protocol: updated } }) });
-        return updated;
-      });
-      return 0;
-    } finally {
-      setSectionAnalyzing(prev => ({ ...prev, [sectionId]: false }));
-    }
+        if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
+        const result = await res.json();
+        if (!result || !Array.isArray(result.issues)) throw new Error(aiAnalysisErrorMessage(502));
+        if (!isLatestAnalysis()) return 0;
+        setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'succeeded' }));
+
+        let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
+        const elements = result.requiredElements || [];
+        // Filter out won't-fix descriptions for this section
+        const suppressed = wontFixDescriptions.current[sectionId] || [];
+        if (suppressed.length > 0) {
+          issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
+        }
+        const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
+        const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
+        // The backend persisted this result against the exact section it analyzed.
+        setProtocol((prev: any) => !prev ? prev : ({
+          ...prev,
+          sections: prev.sections.map((s: any) =>
+            s.id === sectionId && s.content === sectionContent
+              ? { ...s, issues: issuesArr, requiredElements: elements.length ? elements : s.requiredElements, analysisStatus: 'succeeded', analysisError: undefined }
+              : s),
+        }));
+        return resolvedCount;
+      } catch (e) {
+        if (!isLatestAnalysis()) return 0;
+        console.error('Section analysis failed', e);
+        const message = e instanceof Error ? e.message : aiAnalysisErrorMessage(0);
+        setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
+        setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
+        setProtocol((prev: any) => !prev ? prev : ({ ...prev, sections: prev.sections.map((s: any) =>
+          s.id === sectionId ? { ...s, issues: [], analysisStatus: 'failed', analysisError: message } : s) }));
+        return 0;
+      } finally {
+        if (epoch === protocolEpoch.current) {
+          setSectionAnalyzing(prev => ({ ...prev, [sectionId]: Math.max(0, (prev[sectionId] || 0) - 1) }));
+        }
+      }
+    });
   };
 
-  const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string) => {
-    const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
-    const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
+  // A reload during a review observes its saved status; it does not start another AI call.
+  const waitingForSavedAnalysis = (protocol?.sections || []).filter((s: any) =>
+    s.analysisStatus === 'running' && !sectionAnalyzing[s.id]).map((s: any) => s.id).join(',');
+  React.useEffect(() => {
+    if (!projectId || !waitingForSavedAnalysis) return;
+    let cancelled = false;
+    const ids = new Set(waitingForSavedAnalysis.split(','));
+    const timer = window.setInterval(async () => {
+      try {
+        const p = await apiFetch<any>(`/projects/${projectId}`, { cache: 'no-store' });
+        if (cancelled) return;
+        const completed = (p.data?.protocol?.sections || []).filter((s: any) => ids.has(s.id) && s.analysisStatus !== 'running');
+        setProtocol((prev: any) => !prev ? prev : ({ ...prev, sections: prev.sections.map((s: any) =>
+          completed.find((next: any) => next.id === s.id && next.content === s.content) || s) }));
+        setSectionAnalysisStatus(prev => ({ ...prev, ...Object.fromEntries(completed.map((s: any) => [s.id, s.analysisStatus])) }));
+        setSectionAnalysisError(prev => ({ ...prev, ...Object.fromEntries(completed.map((s: any) => [s.id, s.analysisError || ''])) }));
+      } catch (error) { console.error('Could not load section review status', error); }
+    }, 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [projectId, waitingForSavedAnalysis]);
 
-    // 1. Persist to backend — this also creates the audit trail entry with full
-    //    user identity, before/after content, and reason for change.
-    try {
-      await fetch(apiBase + '/api/projects/' + projectId + '/protocol/sections/' + sectionId, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: newContent,
-          previousContent: prevContent,
-          reason,
-          userId: currentUser,
-          userName: currentUser,
-          // Explicitly carry approval fields so saving content never clears them
-          approvalStatus: currentSection?.approvalStatus,
-          approvedBy: currentSection?.approvedBy,
-          approvedAt: currentSection?.approvedAt,
-        }),
+  const handleSectionSaved = (sectionId: string, newContent: string, prevContent: string, reason: string) => {
+    if (generationRequested.current) return Promise.reject(new Error('Please wait for protocol generation to finish.'));
+    sectionAnalysisRequest.current[sectionId] = (sectionAnalysisRequest.current[sectionId] || 0) + 1;
+    return trackProtocolWork(async () => {
+      const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
+      const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
+
+      // 1. Persist to backend — this also creates the audit trail entry with full
+      //    user identity, before/after content, and reason for change.
+      let savedSection: { content: string; updatedAt: string };
+      try {
+        savedSection = await apiFetch<{ content: string; updatedAt: string }>('/projects/' + projectId + '/protocol/sections/' + sectionId, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: newContent,
+            previousContent: prevContent,
+            reason,
+            userId: currentUser,
+            userName: currentUser,
+            // Explicitly carry approval fields so saving content never clears them
+            approvalStatus: currentSection?.approvalStatus,
+            approvedBy: currentSection?.approvedBy,
+            approvedAt: currentSection?.approvedAt,
+          }),
+        });
+      } catch (e) {
+        console.error('Section save failed', e);
+        throw e;
+      }
+
+      // 2. Use the server's saved HTML for display, analysis, and retries. Saving
+      // sanitizes/normalizes editor HTML, so newContent may no longer match it.
+      setProtocol((prev: any) => {
+        if (!prev) return prev;
+        const updatedSections = prev.sections.map((s: any) =>
+          s.id === sectionId ? { ...s, content: savedSection.content, updatedAt: savedSection.updatedAt,
+            issues: [], analysisStatus: 'not-run', analysisError: null } : s
+        );
+        return { ...prev, sections: updatedSections };
       });
-    } catch (e) {
-      console.error('Section save failed', e);
-    }
 
-    // 2. Update local state to reflect the saved content immediately
-    setProtocol((prev: any) => {
-      if (!prev) return prev;
-      const updatedSections = prev.sections.map((s: any) =>
-        s.id === sectionId ? { ...s, content: newContent, updatedAt: new Date().toISOString() } : s
-      );
-      return { ...prev, sections: updatedSections };
+      // Development bypass sections remain fully editable without invoking the
+      // unavailable AI provider. They can be analysed manually after AI is configured.
+      if (currentSection?.aiGenerated === false) return;
+
+      // 3. Re-analyse and surface any resolved issues
+      const sectionTitle = currentSection?.title || '';
+      const resolvedCount = await analyzeSectionWithAI(sectionTitle, savedSection.content, sectionId, prevOpenCount);
+      // resolved issues are reflected in the issues panel automatically
     });
-
-    // Development bypass sections remain fully editable without invoking the
-    // unavailable AI provider. They can be analysed manually after AI is configured.
-    if (currentSection?.aiGenerated === false) return;
-
-    // 3. Re-analyse and surface any resolved issues
-    const sectionTitle = currentSection?.title || '';
-    const resolvedCount = await analyzeSectionWithAI(sectionTitle, newContent, sectionId, prevOpenCount);
-    // resolved issues are reflected in the issues panel automatically
   };
 
   const canForceProtocolDraft = import.meta.env.DEV || sessionUser?.roles.includes('admin') === true;
@@ -447,10 +527,8 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     if (!issue) return;
     const issueDescription = issue.description;
     // Store won't-fix description
-    setWontFixDescriptions((prev) => {
-      const existing = prev[sectionId] || [];
-      return { ...prev, [sectionId]: [...existing, issueDescription] };
-    });
+    const existing = wontFixDescriptions.current[sectionId] || [];
+    wontFixDescriptions.current[sectionId] = [...existing, issueDescription];
     // Remove issue from protocol state
     setProtocol((prev: any) => {
       if (!prev) return prev;
@@ -640,6 +718,14 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     }, 100);
   };
 
+  const regenerationBlocked = Boolean(
+    protocol?.amendments?.length || amendments.length ||
+    (protocol?.status && protocol.status !== 'draft') ||
+    protocol?.sections?.some((s: any) => s.locked || s.approvedAt || s.approvedBy || s.amended ||
+      (s.approvalStatus && s.approvalStatus !== 'draft') ||
+      ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))
+  );
+
   const protocolSections = protocol?.sections?.map((s: any, idx: number) => ({
     id: s.id || String(idx + 1),
     number: s.id || String(idx + 1),
@@ -665,6 +751,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
     analysisStatus: sectionAnalysisStatus[s.id] || s.analysisStatus || 'not-run',
     analysisError: sectionAnalysisError[s.id] || s.analysisError || '',
   })) || [];
+
+  const analyzingSectionCount = protocolSections.filter(section => section.analysisStatus === 'running').length;
+  const aiAnalysisInProgress = analyzingSectionCount > 0 || synopsisConsistencyStatus === 'running';
 
   // Helper function to get section status visualization
   const getSectionStatusIcon = (section: typeof protocolSections[0]) => {
@@ -799,7 +888,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     isActive ? 'bg-slate-100' : 'hover:bg-slate-50'
                   }`}
                 >
-                  {isComplete ? (
+                  {section.analysisStatus === 'running' ? (
+                    <Loader2 className="w-4 h-4 flex-shrink-0 text-blue-600 animate-spin" aria-hidden="true" />
+                  ) : isComplete ? (
                     <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-blue-600" />
                   ) : (
                     <AlertCircle className="w-4 h-4 flex-shrink-0 text-orange-400" />
@@ -808,6 +899,9 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                     isActive ? 'font-semibold text-slate-900' : 'font-normal text-slate-600'
                   }`}>
                     {section.title}
+                    {section.analysisStatus === 'running' && (
+                      <div className="text-xs text-blue-700 font-normal">AI analyzing…</div>
+                    )}
                   </div>
                 </div>
               );
@@ -877,6 +971,19 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                 <div className="mb-6">
                   <div className="flex items-start justify-between gap-4 mb-1">
                     <h2 className="text-lg font-semibold text-slate-900">Protocol Sections</h2>
+                    {protocolSections.length > 0 &&
+                      !protocolFinalized &&
+                      snapshot?.steps?.['protocol-pdf']?.state !== 'signed' &&
+                      snapshot?.steps?.['protocol-pdf']?.state !== 'final' && (
+                      <button
+                        onClick={() => handleRegenerateProtocol()}
+                        disabled={generatingProtocol || checkingProtocol || regenerationBlocked}
+                        title={regenerationBlocked ? "Full regeneration requires an unapproved draft without amendments." : undefined}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 disabled:cursor-not-allowed text-white text-xs rounded transition-colors flex-shrink-0"
+                      >
+                        {generatingProtocol ? 'Regenerating…' : 'Regenerate Protocol'}
+                      </button>
+                    )}
                     {snapshot?.steps?.['protocol-pdf']?.state === 'final' && (
                       <button
                         onClick={() => setShowAmendmentModal(true)}
@@ -901,7 +1008,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         <span>{protocolError}</span>
                       </div>
                       <button
-                        onClick={() => loadOrGenerateProtocol(true)}
+                        onClick={() => failedProtocolOperation === 'generate' ? handleRegenerateProtocol(false) : loadOrGenerateProtocol(true)}
                         disabled={generatingProtocol || checkingProtocol}
                         className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white text-xs rounded flex-shrink-0 flex items-center gap-1.5"
                       >
@@ -1002,7 +1109,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                         deadline={protocolMakeDeadline}
                         analysisStatus={section.analysisStatus}
                         analysisError={section.analysisError}
-                        analysisRetrying={!!sectionAnalyzing[section.id]}
+                        analysisRetrying={section.analysisStatus === 'running'}
                         onRetryAnalysis={() => {
                           analyzeSectionWithAI(section.title, section.content, section.id);
                         }}
@@ -1116,6 +1223,21 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
               <div className="p-4 border-b border-slate-200 flex-shrink-0 sticky top-0 bg-white z-10">
                 <h3 className="text-sm font-semibold text-slate-900 mb-1">Issues & Consistency</h3>
                 <p className="text-xs text-slate-500 mb-3">System-detected inconsistencies and review flags</p>
+
+                {aiAnalysisInProgress && (
+                  <div role="status" aria-live="polite" className="mb-3 rounded border border-blue-200 bg-blue-50 p-3 text-blue-900">
+                    <div className="flex items-center gap-2 text-xs font-semibold">
+                      <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" aria-hidden="true" />
+                      <span>{analyzingSectionCount > 0
+                        ? `AI analyzing ${analyzingSectionCount} section${analyzingSectionCount === 1 ? '' : 's'}`
+                        : 'AI consistency check in progress'}</span>
+                    </div>
+                    <p className="mt-1 text-xs">New blockers or warnings may appear as analysis finishes.</p>
+                    {analyzingSectionCount > 0 && synopsisConsistencyStatus === 'running' && (
+                      <p className="mt-1 text-xs">The synopsis consistency check is also running.</p>
+                    )}
+                  </div>
+                )}
                 
                 {/* Issue Filter Control */}
                 <IssueFilterControl
@@ -1233,7 +1355,7 @@ const [wontFixDescriptions, setWontFixDescriptions] = React.useState<Record<stri
                       )}
                     </div>
                   )}
-                  {filteredSections.every(s => s.analysisStatus === 'succeeded' && (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && synopsisConsistencyStatus === 'succeeded' && (
+                  {!aiAnalysisInProgress && filteredSections.every(s => s.analysisStatus === 'succeeded' && (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && synopsisConsistencyStatus === 'succeeded' && (
                     <div className="p-6 text-center">
                       <CheckCircle2 className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                       <p className="text-sm text-slate-700 mb-1">No issues found</p>

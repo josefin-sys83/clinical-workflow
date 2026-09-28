@@ -7,7 +7,6 @@ import { theme } from '@/app/theme';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { AIInsightBadge } from '@/shared/components/AIInsightBadge';
-import { AuditEntry } from './AuditTrail';
 import { aiAnalysisErrorMessage } from '@/shared/api/http';
 import { AIFindingOverrideDialog } from '@/shared/components/AIFindingOverrideDialog';
 import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
@@ -110,7 +109,6 @@ export function SynopsisPage() {
     { id: '3', label: 'Scope & Intended Use', status: (maxStep >= 3 || synopsisStatus === 'completed') ? 'completed' : 'locked', path: `/projects/${projectId}/workflow/scope` },
   ];
 
-  const auditEntries: AuditEntry[] = [];
 
   const runAnalysis = async (file?: File) => {
     setAnalysisStatus('running');

@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, ForbiddenException, UnauthorizedException, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Logger, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, ForbiddenException, UnauthorizedException, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
 import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectsService, type ProjectAuditEvent } from './projects.service';
 import { AiService } from '../ai/ai.service';
+import { normalizeAiMarkets } from './project-generation-context';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -29,6 +30,8 @@ const SIGNATURE_STEP_ROLES: Record<string, { stepId?: string; requiredRoles: str
 @ApiTags('projects')
 @Controller('/api/projects')
 export class ProjectsController {
+  private readonly logger = new Logger(ProjectsController.name);
+
   constructor(
     private readonly projects: ProjectsService,
     private readonly ai: AiService,
@@ -470,7 +473,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
 
     const existing = await this.projects.get(projectId);
     const existingSynopsis = existing?.data?.synopsis || {};
-    const targetMarkets = existing.targetMarkets || [];
+    const targetMarkets = normalizeAiMarkets(existing.targetMarkets);
 
     const results = await this.ai.analyzeSynopsis(text, targetMarkets);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
@@ -502,6 +505,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   @Post('/:projectId/analyze-scope')
   @UseGuards(AiThrottlerGuard)
   async analyzeScope(@Param('projectId') projectId: string, @Body() body: { prompt: string }) {
+    this.logger.log({ event: 'analyze-scope.request', projectId, body });
     const results = await this.ai.analyzeScope(body.prompt);
     return results;
   }
