@@ -543,7 +543,7 @@ export function ProjectSetupPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Intended Use <span className="text-rose-700">*</span></label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Intended Use Category <span className="text-rose-700">*</span></label>
                     <select
                       required
                       value={projectData.intendedUse}
@@ -567,14 +567,17 @@ export function ProjectSetupPage() {
                       ))}
                     </select>
                     {projectData.intendedUse === 'other-custom' && (
-                      <input
-                        type="text"
-                        required
-                        value={projectData.customIntendedUse}
-                        onChange={(e) => handleInputChange('customIntendedUse', e.target.value)}
-                        placeholder="Describe the intended use and clinical context"
-                        className="w-full mt-2 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                      />
+                      <div className="mt-3">
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Intended Use Statement</label>
+                        <textarea
+                          required
+                          rows={4}
+                          value={projectData.customIntendedUse}
+                          onChange={(e) => handleInputChange('customIntendedUse', e.target.value)}
+                          placeholder="Describe the intended use and clinical context"
+                          className="w-full resize-y px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                        />
+                      </div>
                     )}
                   </div>
                 </div>
@@ -808,7 +811,11 @@ export function ProjectSetupPage() {
                 <button
                   disabled={!isSetupComplete || isSaving}
                   onClick={handleCompleteSetup}
-                  className={`...`}
+                  className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-medium transition-colors
+                    ${theme.button.primary}
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2
+                    active:bg-indigo-800
+                    disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200`}
                 >
                   {isSaving
                     ? 'Saving...'
