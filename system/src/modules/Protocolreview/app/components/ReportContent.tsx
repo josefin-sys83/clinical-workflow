@@ -1,3 +1,4 @@
+import { countIssueSeverities, getIssuePresentation } from '@/shared/protocol/issues';
 import { useEffect, useRef } from 'react';
 import {
   CheckCircle2,
@@ -119,9 +120,10 @@ export function ReportContent({
         const before = paragraph.substring(0, idx);
         const after = paragraph.substring(idx + hi.length);
 
-        let bgClass = 'bg-amber-100 border-amber-300 text-amber-900';
-        if (matchingFinding.acceptedRisk) bgClass = 'bg-neutral-100 border-neutral-300 text-neutral-700';
-        else if (matchingFinding.severity === 'blocker') bgClass = 'bg-rose-50 border-rose-300 text-rose-800';
+        const presentation = getIssuePresentation(matchingFinding.severity);
+        const bgClass = matchingFinding.acceptedRisk
+          ? 'bg-neutral-100 border-neutral-300 text-neutral-700'
+          : `${presentation.badge} ${presentation.border}`;
 
         return (
           <p key={i} className="text-neutral-700 leading-relaxed mb-4">
@@ -178,25 +180,15 @@ export function ReportContent({
                 <h2 className="text-lg font-medium text-neutral-900 leading-tight">
                   {index + 1}. {section.title}
                 </h2>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex flex-wrap justify-end items-center gap-2">
                   {/* Findings count badge */}
                   {(() => {
                     const sf = findings.filter((f) => f.sectionId === section.id && !f.acceptedRisk);
-                    const blockers = sf.filter((f) => f.severity === 'blocker').length;
-                    const warnings = sf.filter((f) => f.severity === 'warning').length;
-                    if (blockers > 0) return (
-                      <span className="flex items-center gap-1 text-xs text-rose-700 font-medium">
-                        <AlertCircle className="h-3.5 w-3.5" />
-                        {blockers}
+                    return countIssueSeverities(sf).map(({ severity, count, label, plural, badge, border }) => (
+                      <span key={severity} className={`px-2 py-0.5 rounded border text-xs font-medium ${badge} ${border}`}>
+                        {count} {count === 1 ? label : plural}
                       </span>
-                    );
-                    if (warnings > 0) return (
-                      <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        {warnings}
-                      </span>
-                    );
-                    return null;
+                    ));
                   })()}
                   {getReviewBadge(section)}
                 </div>

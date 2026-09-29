@@ -24,13 +24,11 @@ export function IssueFilterControl({
         }`}
       >
         My issues
-        {myIssuesCount > 0 && (
-          <span className={`ml-1.5 ${
-            filter === 'my-issues' ? 'text-slate-500' : 'text-slate-400'
-          }`}>
-            ({myIssuesCount})
-          </span>
-        )}
+        <span className={`ml-1.5 ${
+          filter === 'my-issues' ? 'text-slate-500' : 'text-slate-400'
+        }`}>
+          ({myIssuesCount})
+        </span>
       </button>
       <button
         onClick={() => onFilterChange('all-issues')}
@@ -41,13 +39,11 @@ export function IssueFilterControl({
         }`}
       >
         All issues
-        {allIssuesCount > 0 && (
-          <span className={`ml-1.5 ${
-            filter === 'all-issues' ? 'text-slate-500' : 'text-slate-400'
-          }`}>
-            ({allIssuesCount})
-          </span>
-        )}
+        <span className={`ml-1.5 ${
+          filter === 'all-issues' ? 'text-slate-500' : 'text-slate-400'
+        }`}>
+          ({allIssuesCount})
+        </span>
       </button>
     </div>
   );

@@ -1,6 +1,8 @@
+import type { IssueSeverity } from '@/shared/protocol/issues';
+
 export type SectionStatus = 'approved' | 'warning' | 'blocked';
 export type SectionReviewStatus = 'pending' | 'approved' | 'rejected';
-export type FindingSeverity = 'warning' | 'blocker';
+export type FindingSeverity = IssueSeverity;
 export type FindingSource = 'regulatory' | 'system';
 export type ReviewRole = 'regulatory' | 'vp' | 'viewer';
 

@@ -24,6 +24,7 @@ import {
   type ProtocolAttachment,
 } from '@/shared/api/documents';
 import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
+import { getIssuePresentation, isOpenIssue } from '@/shared/protocol/issues';
 
 
 
@@ -803,14 +804,13 @@ export default function App() {
     setIsReviewMode(false);
   };
 
-  // Calculate review readiness metrics
-  const totalBlockers = protocolSections.reduce((count, section) => 
-    count + (section.issues?.filter(i => i.severity === 'blocker' && i.status === 'open').length || 0), 0
+  // Counts and cards share the same open findings, across all five severities.
+  const allSectionIssues = protocolSections.flatMap(section =>
+    section.issues.filter(isOpenIssue).map(issue => ({ section, issue }))
   );
-  const totalWarnings = protocolSections.reduce((count, section) => 
-    count + (section.issues?.filter(i => i.severity === 'warning' && i.status === 'open').length || 0), 0
-  );
-  const allOpenIssuesCount = totalBlockers + totalWarnings;
+  const totalBlockers = allSectionIssues.filter(({ issue }) => issue.severity === 'blocker').length;
+  const totalWarnings = allSectionIssues.filter(({ issue }) => issue.severity === 'warning').length;
+  const allOpenIssuesCount = allSectionIssues.length + synopsisConsistencyIssues.length;
   const allSectionsComplete = protocolSections.length > 0 && protocolSections.every(s =>
     s.approvalStatus === 'approved' || s.status === 'approved'
   );
@@ -846,16 +846,12 @@ export default function App() {
 
   const filteredSections = getFilteredSections();
 
-  // "My issues" count must always reflect the current user's subset,
-  // regardless of which tab (issueFilter) is currently active.
   const myIssuesSections = getMyIssuesSections();
-  const myIssuesBlockers = myIssuesSections.reduce((count, section) =>
-    count + (section.issues?.filter(i => i.severity === 'blocker' && i.status === 'open').length || 0), 0
-  );
-  const myIssuesWarnings = myIssuesSections.reduce((count, section) =>
-    count + (section.issues?.filter(i => i.severity === 'warning' && i.status === 'open').length || 0), 0
-  );
-  const myIssuesCount = myIssuesBlockers + myIssuesWarnings;
+  const mySectionIssues = allSectionIssues.filter(({ section }) => myIssuesSections.includes(section));
+  // Synopsis findings are project-wide and appear in both filter states.
+  const myIssuesCount = mySectionIssues.length + synopsisConsistencyIssues.length;
+  const visibleSectionIssues = issueFilter === 'all-issues' ? allSectionIssues : mySectionIssues;
+  const visibleIssuesCount = visibleSectionIssues.length + synopsisConsistencyIssues.length;
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
@@ -1221,7 +1217,7 @@ export default function App() {
                 <>
               {/* Fixed Header */}
               <div className="p-4 border-b border-slate-200 flex-shrink-0 sticky top-0 bg-white z-10">
-                <h3 className="text-sm font-semibold text-slate-900 mb-1">Issues & Consistency</h3>
+                <h3 className="text-sm font-semibold text-slate-900 mb-1" data-issues-panel-count={visibleIssuesCount}>Issues & Consistency ({visibleIssuesCount})</h3>
                 <p className="text-xs text-slate-500 mb-3">System-detected inconsistencies and review flags</p>
 
                 {aiAnalysisInProgress && (
@@ -1232,7 +1228,7 @@ export default function App() {
                         ? `AI analyzing ${analyzingSectionCount} section${analyzingSectionCount === 1 ? '' : 's'}`
                         : 'AI consistency check in progress'}</span>
                     </div>
-                    <p className="mt-1 text-xs">New blockers or warnings may appear as analysis finishes.</p>
+                    <p className="mt-1 text-xs">New findings may appear as analysis finishes.</p>
                     {analyzingSectionCount > 0 && synopsisConsistencyStatus === 'running' && (
                       <p className="mt-1 text-xs">The synopsis consistency check is also running.</p>
                     )}
@@ -1250,100 +1246,86 @@ export default function App() {
 
               {/* Scrollable Content */}
               <div className="flex-1 overflow-y-auto min-h-0">
-                <div className="p-4 space-y-3">
-                  {synopsisConsistencyIssues.length > 0 && (issueFilter === 'all-issues' || issueFilter === 'my-issues') && synopsisConsistencyIssues.map((issue: any, i: number) => (
-                    <div key={'synopsis-' + i} className="p-3 border-b border-slate-100 hover:bg-slate-50">
-                      <div className="flex items-start gap-2">
-                        <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${issue.severity === 'blocker' ? 'bg-rose-500' : 'bg-amber-400'}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${issue.severity === 'blocker' ? 'bg-rose-50 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
-                              {issue.severity === 'blocker' ? 'Blocker' : 'Warning'}
-                            </span>
-                            <span className="text-xs text-slate-500">Synopsis consistency</span>
+                <div className="p-4 space-y-3" data-issues-panel-list>
+                  {synopsisConsistencyIssues.map((issue: any, i: number) => {
+                    const presentation = getIssuePresentation(issue.severity);
+                    return (
+                      <div key={'synopsis-' + i} data-panel-finding-severity={issue.severity} className={`p-3 rounded border ${presentation.badge} ${presentation.border}`}>
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${presentation.badge}`}>
+                            {presentation.label}
+                          </span>
+                          <span className="text-xs text-slate-500">Synopsis consistency</span>
+                        </div>
+                        <p className="text-xs text-slate-700 leading-relaxed">{issue.description}</p>
+                        <p className="text-xs text-slate-500 mt-1">Affected: Synopsis ↔ Protocol</p>
+                      </div>
+                    );
+                  })}
+                  {visibleSectionIssues.map(({ section, issue }) => {
+                    const presentation = getIssuePresentation(issue.severity);
+                    return (
+                      <div
+                        key={`${section.id}-${issue.id}`}
+                        data-panel-finding-severity={issue.severity}
+                        onClick={() => navigateToSection(section.id)}
+                        className={`p-3 rounded border ${presentation.badge} ${presentation.border} cursor-pointer hover:brightness-95 transition-colors`}
+                      >
+                        <div className="flex items-start gap-2 mb-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${presentation.badge}`}>
+                                {presentation.label}
+                              </span>
+                              {issue.raisedBy?.toLowerCase().includes('system') && (
+                                <span className="text-xs text-slate-500">AI Regulatory Review</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-900 mb-1">{issue.subsection || 'Issue'}</div>
+                            <p className="text-xs text-slate-600 leading-relaxed mb-2">
+                              {issue.description}
+                            </p>
+
+                            <div className={`pt-2 border-t ${presentation.border} space-y-1.5`}>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-500">Affected section</span>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
+                                  className={`text-xs ${presentation.text} hover:underline`}
+                                >
+                                  {section.number}
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-500">Section owner</span>
+                                <span className="text-xs text-slate-700">{section.owner}</span>
+                              </div>
+                              {issue.dueDate && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs text-slate-500">Due in</span>
+                                  <span className="text-xs text-slate-700 font-medium">{issue.dueDate}</span>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <p className="text-xs text-slate-700 leading-relaxed">{issue.description}</p>
-                          <p className="text-xs text-slate-400 mt-1">Affected: Synopsis ↔ Protocol</p>
+                        </div>
+                        <div className="flex items-center justify-between mt-2">
+                          <div
+                            onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
+                            className={`text-xs ${presentation.text} flex items-center gap-1 font-medium cursor-pointer`}
+                          >
+                            <span>Navigate to Section {section.number}</span>
+                            <ChevronRight className="w-3 h-3" />
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setRightPanelWontFixModal({ sectionId: section.id, issueId: issue.id }); setRightPanelWontFixComment(''); }}
+                            className="text-xs text-slate-400 hover:text-slate-600 transition-colors ml-2"
+                          >
+                            Won't fix
+                          </button>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                  {filteredSections.map((section) => {
-                    const openIssues = (section.issues || []).filter((issue: any) => issue.status === 'open');
-                    if (openIssues.length === 0) return null;
-
-                    return openIssues.map((issue: any) => {
-                      const isBlocker = issue.severity === 'blocker';
-                      const bgColor = isBlocker ? 'bg-rose-50' : 'bg-amber-50';
-                      const borderColor = isBlocker ? 'border-rose-200' : 'border-amber-200';
-                      const hoverColor = isBlocker ? 'hover:bg-rose-50' : 'hover:bg-amber-100';
-                      const badgeBgColor = isBlocker ? 'bg-rose-50' : 'bg-amber-100';
-                      const badgeTextColor = isBlocker ? 'text-rose-700' : 'text-amber-700';
-                      const linkColor = isBlocker ? 'text-rose-700' : 'text-amber-700';
-                      const linkHoverColor = isBlocker ? 'hover:text-rose-800' : 'hover:text-amber-900';
-
-                      return (
-                        <div
-                          key={issue.id}
-                          onClick={() => navigateToSection(section.id)}
-                          className={`p-3 rounded border ${bgColor} ${borderColor} cursor-pointer ${hoverColor} transition-colors`}
-                        >
-                          <div className="flex items-start gap-2 mb-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                <span className={`text-xs px-1.5 py-0.5 rounded ${badgeBgColor} ${badgeTextColor}`}>
-                                  {isBlocker ? 'Blocker' : 'Warning'}
-                                </span>
-                                {issue.raisedBy?.toLowerCase().includes('system') && (
-                                  <span className="text-xs text-slate-500">AI Regulatory Review</span>
-                                )}
-                              </div>
-                              <div className="text-xs text-slate-900 mb-1">{issue.subsection || 'Issue'}</div>
-                              <p className="text-xs text-slate-600 leading-relaxed mb-2">
-                                {issue.description}
-                              </p>
-
-                              <div className={`pt-2 border-t ${borderColor} space-y-1.5`}>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs text-slate-500">Affected section</span>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
-                                    className={`text-xs ${linkColor} ${linkHoverColor} hover:underline`}
-                                  >
-                                    {section.number}
-                                  </button>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs text-slate-500">Section owner</span>
-                                  <span className="text-xs text-slate-700">{section.owner}</span>
-                                </div>
-                                {issue.dueDate && (
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-slate-500">Due in</span>
-                                    <span className="text-xs text-slate-700 font-medium">{issue.dueDate}</span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between mt-2">
-                            <div
-                              onClick={(e) => { e.stopPropagation(); navigateToSection(section.id); }}
-                              className={`text-xs ${linkColor} ${linkHoverColor} flex items-center gap-1 font-medium cursor-pointer`}
-                            >
-                              <span>Navigate to Section {section.number}</span>
-                              <ChevronRight className="w-3 h-3" />
-                            </div>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setRightPanelWontFixModal({ sectionId: section.id, issueId: issue.id }); setRightPanelWontFixComment(''); }}
-                              className="text-xs text-slate-400 hover:text-slate-600 transition-colors ml-2"
-                            >
-                              Won't fix
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    });
+                    );
                   })}
 
                   {(filteredSections.some(s => s.analysisStatus === 'failed') || synopsisConsistencyStatus === 'failed') && (
@@ -1355,7 +1337,7 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  {!aiAnalysisInProgress && filteredSections.every(s => s.analysisStatus === 'succeeded' && (s.issues || []).filter((i: any) => i.status === 'open').length === 0) && synopsisConsistencyStatus === 'succeeded' && (
+                  {!aiAnalysisInProgress && visibleIssuesCount === 0 && filteredSections.every(s => s.analysisStatus === 'succeeded') && synopsisConsistencyStatus === 'succeeded' && (
                     <div className="p-6 text-center">
                       <CheckCircle2 className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                       <p className="text-sm text-slate-700 mb-1">No issues found</p>

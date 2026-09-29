@@ -6,6 +6,8 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import App from '/src/modules/Makeprotokoll/App.tsx';
+import ReviewPage from '/src/modules/Protocolreview/app/pages/ReviewPageCopy.tsx';
+import '/src/styles/index.css';
 
 // Exercise the real Save and Won't fix handlers without AI calls or database writes.
 const errors = [];
@@ -15,14 +17,25 @@ const issue = (id, severity, status = 'open') => ({ id, severity, status,
   description: `Finding ${id}`, subsection: 'Eligibility', raisedBy: 'System', raisedDate: '2026-09-27' });
 const blocker = issue('blocker', 'blocker');
 const warning = issue('warning', 'warning');
+const severityLabels = {
+  blocker: 'Blocker', warning: 'Warning', cross_reference: 'Cross-reference',
+  recommendation: 'Recommendation', human_decision_required: 'Human decision required',
+};
+const allSeverities = Object.keys(severityLabels);
+const openFindings = [blocker, warning, ...allSeverities.slice(2).map(severity => issue(severity, severity))];
+openFindings.forEach(finding => { finding.raisedBy = 'Writer'; });
+const synopsisCount = new URLSearchParams(location.search).has('synopsis') ? 1 : 0;
+const synopsisFinding = { severity: 'warning', description: 'Synopsis discrepancy' };
 const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['admin'] };
 const section = { id: '1', title: 'Subject Eligibility Criteria', content: '<p>Eligibility criteria.</p>',
   status: 'draft', aiGenerated: true, analysisStatus: 'succeeded',
-  issues: [blocker, warning, issue('resolved', 'blocker', 'resolved')],
+  issues: [...openFindings,
+    ...allSeverities.flatMap(severity => [issue(`resolved-${severity}`, severity, 'resolved'), issue(`dismissed-${severity}`, severity, 'wont-fix')])],
   requiredElements: ['Inclusion', 'Exclusion', 'Screening', 'Recruitment'].map((name, i) => ({
     id: String(i), name, reference: 'ISO 14155', status: i < 2 ? 'complete' : 'partial',
   })) };
-const project = { id: 'fixture', targetMarkets: ['EU'], data: { projectData: {}, protocol: { sections: [section] } }, roles: [] };
+const otherSection = { ...section, id: '2', title: 'Study Design', issues: allSeverities.map(severity => issue(`other-${severity}`, severity)) };
+const project = { id: 'fixture', targetMarkets: ['EU'], data: { projectData: {}, protocol: { sections: [section, otherSection] } }, roles: [] };
 let releaseAnalysis;
 let patchCalls = 0;
 let releaseDismissal;
@@ -41,7 +54,7 @@ window.fetch = async (input, init = {}) => {
     project.data.protocol = body.data.protocol;
   } else if (url.endsWith('/projects/fixture')) payload = project;
   else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
-  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: [] };
+  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: synopsisCount ? [synopsisFinding] : [] };
   else if (url.endsWith('/workflow')) payload = { steps: {} };
   else if (url.endsWith('/milestones')) payload = { milestones: [] };
   return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -66,13 +79,34 @@ const setReason = () => {
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, 'Regression verification');
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
 };
-const checkCounts = (blockers, warnings) => {
-  for (const [severity, expected] of [['blocker', blockers], ['warning', warnings]]) {
-    assert(list().querySelectorAll(`[data-finding-severity="${severity}"]`).length === expected, `${severity} cards mismatch`);
-    const label = severity === 'blocker' ? 'Blocker' : 'Warning';
+const checkCounts = (expectedCounts) => {
+  for (const [severity, label] of Object.entries(severityLabels)) {
+    const expected = expectedCounts[severity] || 0;
+    const cards = list().querySelectorAll(`[data-finding-severity="${severity}"]`);
+    assert(cards.length === expected, `${severity} cards mismatch`);
     const badge = [...(summary()?.querySelectorAll('button') || [])].find(b => b.textContent.includes(label));
-    assert(expected ? badge?.textContent.trim() === `${expected} ${label}${expected > 1 ? 's' : ''}` : !badge, `${severity} counter mismatch`);
+    assert(expected ? badge?.textContent.trim() === `${expected} ${label}` : !badge, `${severity} counter mismatch`);
+    for (const card of cards) assert(card.querySelector('span').textContent.trim() === label, `${severity} label mismatch`);
   }
+};
+const panelCards = () => document.querySelectorAll('[data-issues-panel-list] [data-panel-finding-severity]');
+const filterButton = prefix => [...document.querySelectorAll('button')].find(b => b.textContent.trim().startsWith(prefix));
+const checkPanel = (sectionCount, myCount) => {
+  const expected = sectionCount + synopsisCount;
+  assert(panelCards().length === expected, `Panel list: expected ${expected}, got ${panelCards().length}`);
+  assert(document.querySelector('[data-issues-panel-count]').textContent === `Issues & Consistency (${expected})`, 'Panel header and list disagree');
+  assert(filterButton('My issues').textContent.replace(/\s+/g, '') === `Myissues(${myCount + synopsisCount})`, 'My issues count wrong');
+  assert(filterButton('All issues').textContent.replace(/\s+/g, '') === `Allissues(${myCount + 5 + synopsisCount})`, 'All issues count wrong');
+  assert(!document.querySelector('[data-issues-panel-list]').textContent.includes('No issues found') || expected === 0, 'False empty state with visible findings');
+};
+const checkDistinctStyles = cards => {
+  const styles = allSeverities.map(severity => {
+    const card = [...cards].find(card => (card.dataset.findingSeverity || card.dataset.panelFindingSeverity || card.dataset.reviewFindingSeverity) === severity);
+    assert(card, `Missing ${severity} card`);
+    assert(card.textContent.includes(severityLabels[severity]), `Missing ${severity} label`);
+    return getComputedStyle(card).backgroundColor;
+  });
+  assert(new Set(styles).size === 5, `Severities must have five distinct backgrounds: ${styles.join(', ')}`);
 };
 const save = async () => {
   button('Edit').click();
@@ -87,8 +121,31 @@ const save = async () => {
   await waitFor(() => releaseAnalysis);
 };
 try {
-  await waitFor(() => list()?.querySelectorAll('[data-finding-id]').length === 2);
-  checkCounts(1, 1);
+  await waitFor(() => list()?.querySelectorAll('[data-finding-id]').length === 5);
+  checkCounts(Object.fromEntries(allSeverities.map(severity => [severity, 1])));
+  await waitFor(() => panelCards().length === 5 + synopsisCount);
+  checkPanel(5, 5);
+  checkDistinctStyles(list().querySelectorAll('[data-finding-id]'));
+  checkDistinctStyles(panelCards());
+  filterButton('All issues').click();
+  await waitFor(() => panelCards().length === 10 + synopsisCount);
+  checkPanel(10, 5);
+  checkDistinctStyles(panelCards());
+  filterButton('My issues').click();
+  await waitFor(() => panelCards().length === 5 + synopsisCount);
+  checkPanel(5, 5);
+
+  // The live Protocol Review page must preserve severities from saved AI issues.
+  const reviewContainer = document.createElement('div');
+  document.body.append(reviewContainer);
+  const reviewRoot = createRoot(reviewContainer);
+  reviewRoot.render(el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
+    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(ReviewPage) }))));
+  await waitFor(() => reviewContainer.querySelectorAll('[data-review-finding-severity]').length === 10);
+  checkDistinctStyles(reviewContainer.querySelectorAll('[data-review-finding-severity]'));
+  assert(reviewContainer.textContent.includes('Regulatory Findings (10)'), 'Protocol Review count mismatch');
+  reviewRoot.unmount();
+  reviewContainer.remove();
   assert(document.body.textContent.includes('these statuses are not blocker or warning severities'), 'Checklist scope unclear');
   assert(list().textContent.includes('counted in the section header'), 'Finding scope unclear');
 
@@ -96,10 +153,12 @@ try {
   // resolves the blocker and immediately updates both the list and summary.
   await save();
   await waitFor(() => !summary());
-  checkCounts(0, 0);
+  checkCounts({});
+  checkPanel(0, 0);
   releaseAnalysis({ issues: [warning], requiredElements: section.requiredElements });
   await waitFor(() => list().querySelector('[data-finding-id="warning"]'));
-  checkCounts(0, 1);
+  checkCounts({ warning: 1 });
+  checkPanel(1, 1);
   assert(patchCalls === 1, 'Save did not persist the section exactly once');
 
   list().querySelector('[data-finding-id="warning"] button').click();
@@ -108,16 +167,18 @@ try {
   await waitFor(() => !button('Confirm').disabled);
   button('Confirm').click();
   await waitFor(() => !summary() && releaseDismissal);
-  checkCounts(0, 0); // Must update even before the persistence request finishes.
+  checkCounts({});
+  checkPanel(0, 0); // Must update even before the persistence request finishes.
   releaseDismissal();
 
   // A later review must not bring the dismissed warning back into the counts.
   await save();
   releaseAnalysis({ issues: [warning], requiredElements: section.requiredElements });
   await waitFor(() => list().textContent.includes('No open findings.'));
-  checkCounts(0, 0);
+  checkCounts({});
+  checkPanel(0, 0);
   assert(errors.length === 0, errors.join('; '));
-  document.getElementById('result').textContent = 'PASS: shared severity/counts, visible findings, separate coverage checklist, Save resolution, immediate Won\'t fix, and reanalysis suppression';
+  document.getElementById('result').textContent = `PASS: five distinct severity styles and labels, My/All/header counts, closed findings excluded, Protocol Review, Save, Won't fix, reanalysis (synopsis=${synopsisCount})`;
 } catch (error) {
   document.getElementById('result').textContent = `FAIL: ${error.message}`;
 }
