@@ -184,7 +184,7 @@ export function ReportContent({
                   {/* Findings count badge */}
                   {(() => {
                     const sf = findings.filter((f) => f.sectionId === section.id && !f.acceptedRisk);
-                    return countIssueSeverities(sf).map(({ severity, count, label, plural, badge, border }) => (
+                    return countIssueSeverities(sf).filter(({ count }) => count > 0).map(({ severity, count, label, plural, badge, border }) => (
                       <span key={severity} className={`px-2 py-0.5 rounded border text-xs font-medium ${badge} ${border}`}>
                         {count} {count === 1 ? label : plural}
                       </span>

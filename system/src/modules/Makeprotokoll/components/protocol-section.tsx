@@ -249,7 +249,7 @@ function ProtocolSectionComponent(
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
   const openIssues = (section.issues || []).filter(isOpenIssue);
-  const severityCounts = countIssueSeverities(openIssues);
+  const severityCounts = countIssueSeverities(openIssues).filter(({ count }) => count > 0);
   const totalIssues = openIssues.length;
   const isBlocked = openIssues.some(issue => issue.severity === 'blocker');
   const analysisBlocksApproval = section.aiGenerated && analysisStatus !== 'succeeded';

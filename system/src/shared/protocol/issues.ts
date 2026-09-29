@@ -27,5 +27,5 @@ export function countIssueSeverities(issues: readonly { severity: IssueSeverity 
     severity,
     count: issues.filter(issue => issue.severity === severity).length,
     ...getIssuePresentation(severity),
-  })).filter(item => item.count > 0);
+  }));
 }

@@ -21,6 +21,10 @@ const severityLabels = {
   blocker: 'Blocker', warning: 'Warning', cross_reference: 'Cross-reference',
   recommendation: 'Recommendation', human_decision_required: 'Human decision required',
 };
+const severityPlurals = {
+  blocker: 'Blockers', warning: 'Warnings', cross_reference: 'Cross-references',
+  recommendation: 'Recommendations', human_decision_required: 'Human decisions required',
+};
 const allSeverities = Object.keys(severityLabels);
 const openFindings = [blocker, warning, ...allSeverities.slice(2).map(severity => issue(severity, severity))];
 openFindings.forEach(finding => { finding.raisedBy = 'Writer'; });
@@ -95,6 +99,15 @@ const checkPanel = (sectionCount, myCount) => {
   const expected = sectionCount + synopsisCount;
   assert(panelCards().length === expected, `Panel list: expected ${expected}, got ${panelCards().length}`);
   assert(document.querySelector('[data-issues-panel-count]').textContent === `Issues & Consistency (${expected})`, 'Panel header and list disagree');
+  const counters = document.querySelectorAll('[data-severity-count]');
+  assert(counters.length === 5, 'Expected one header counter for each severity');
+  for (const severity of allSeverities) {
+    const counter = document.querySelector(`[data-severity-count="${severity}"]`);
+    const cards = [...panelCards()].filter(card => card.dataset.panelFindingSeverity === severity);
+    assert(Number(counter.dataset.count) === cards.length, `${severity} header counter disagrees with the list`);
+    assert(counter.textContent.trim() === `${cards.length} ${cards.length === 1 ? severityLabels[severity] : severityPlurals[severity]}`, `${severity} header label or count mismatch`);
+  }
+  assert([...counters].reduce((sum, counter) => sum + Number(counter.dataset.count), 0) === expected, 'Severity counts disagree with panel total');
   assert(filterButton('My issues').textContent.replace(/\s+/g, '') === `Myissues(${myCount + synopsisCount})`, 'My issues count wrong');
   assert(filterButton('All issues').textContent.replace(/\s+/g, '') === `Allissues(${myCount + 5 + synopsisCount})`, 'All issues count wrong');
   assert(!document.querySelector('[data-issues-panel-list]').textContent.includes('No issues found') || expected === 0, 'False empty state with visible findings');

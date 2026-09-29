@@ -24,7 +24,7 @@ import {
   type ProtocolAttachment,
 } from '@/shared/api/documents';
 import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
-import { getIssuePresentation, isOpenIssue } from '@/shared/protocol/issues';
+import { countIssueSeverities, getIssuePresentation, isOpenIssue } from '@/shared/protocol/issues';
 
 
 
@@ -808,8 +808,9 @@ export default function App() {
   const allSectionIssues = protocolSections.flatMap(section =>
     section.issues.filter(isOpenIssue).map(issue => ({ section, issue }))
   );
-  const totalBlockers = allSectionIssues.filter(({ issue }) => issue.severity === 'blocker').length;
-  const totalWarnings = allSectionIssues.filter(({ issue }) => issue.severity === 'warning').length;
+  const allSectionSeverityCounts = countIssueSeverities(allSectionIssues.map(({ issue }) => issue));
+  const totalBlockers = allSectionSeverityCounts.find(({ severity }) => severity === 'blocker')!.count;
+  const totalWarnings = allSectionSeverityCounts.find(({ severity }) => severity === 'warning')!.count;
   const allOpenIssuesCount = allSectionIssues.length + synopsisConsistencyIssues.length;
   const allSectionsComplete = protocolSections.length > 0 && protocolSections.every(s =>
     s.approvalStatus === 'approved' || s.status === 'approved'
@@ -851,7 +852,11 @@ export default function App() {
   // Synopsis findings are project-wide and appear in both filter states.
   const myIssuesCount = mySectionIssues.length + synopsisConsistencyIssues.length;
   const visibleSectionIssues = issueFilter === 'all-issues' ? allSectionIssues : mySectionIssues;
-  const visibleIssuesCount = visibleSectionIssues.length + synopsisConsistencyIssues.length;
+  const visibleSeverityCounts = countIssueSeverities([
+    ...visibleSectionIssues.map(({ issue }) => issue),
+    ...synopsisConsistencyIssues,
+  ]);
+  const visibleIssuesCount = visibleSeverityCounts.reduce((count, severity) => count + severity.count, 0);
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
@@ -1219,6 +1224,18 @@ export default function App() {
               <div className="p-4 border-b border-slate-200 flex-shrink-0 sticky top-0 bg-white z-10">
                 <h3 className="text-sm font-semibold text-slate-900 mb-1" data-issues-panel-count={visibleIssuesCount}>Issues & Consistency ({visibleIssuesCount})</h3>
                 <p className="text-xs text-slate-500 mb-3">System-detected inconsistencies and review flags</p>
+                <div className="flex flex-wrap gap-1.5 mb-3" aria-label="Open issues by severity">
+                  {visibleSeverityCounts.map(({ severity, count, label, plural, badge, border }) => (
+                    <span
+                      key={severity}
+                      data-severity-count={severity}
+                      data-count={count}
+                      className={`px-2 py-0.5 rounded border text-xs font-medium ${badge} ${border}`}
+                    >
+                      {count} {count === 1 ? label : plural}
+                    </span>
+                  ))}
+                </div>
 
                 {aiAnalysisInProgress && (
                   <div role="status" aria-live="polite" className="mb-3 rounded border border-blue-200 bg-blue-50 p-3 text-blue-900">
