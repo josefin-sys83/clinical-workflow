@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AuditService, type AuditActor, type RecordAuditEvent } from '../audit/audit.service';
+import { protocolIssueSeverity } from './protocol-issue-severity';
 
 type Db = { query: PoolClient['query'] };
 type ProtocolAuditEvent = Omit<RecordAuditEvent, 'projectId' | 'actor'>;
@@ -861,7 +862,7 @@ export class ProtocolsService {
         [
           sectionId,
           key,
-          issue.severity || 'warning',
+          issue.severity,
           issue.subsection || null,
           issue.description || '',
           issue.reference || null,
@@ -1173,6 +1174,13 @@ export class ProtocolsService {
       for (const key of ['issues', 'requiredElements', 'comments']) {
         if (section[key] !== undefined && !Array.isArray(section[key])) {
           throw new BadRequestException(`Protocol section ${key} must be an array`);
+        }
+      }
+      for (const issue of section.issues || []) {
+        if (!protocolIssueSeverity.safeParse(issue?.severity).success) {
+          throw new BadRequestException(
+            `Protocol issue severity must be one of: ${protocolIssueSeverity.options.join(', ')}`,
+          );
         }
       }
       assertUnique(
