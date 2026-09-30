@@ -41,4 +41,17 @@ const resplit = splitDraft(different, 3, true);
 assert.deepEqual(resplit[1].content.headers, ['Different', '']);
 assert.deepEqual(resplit[1].content.rows, [['D', '']]);
 assert.equal(resplit[1].sourceFilename, 'second.csv');
+const aiInput = { ...input, titleOrigin: 'ai', descriptionOrigin: 'ai', sectionOrigin: 'ai', reportSectionKey: 'section-8' };
+for (const part of splitDraft(aiInput, 1, false)) {
+  assert.equal(part.description, '', 'Split retained stale AI description');
+  assert.equal(part.reportSectionId, null, 'Split retained stale AI placement');
+  assert.equal(part.reportSectionKey, undefined);
+  assert.equal(part.titleOrigin, undefined, 'Split marked stale title as AI suggested');
+}
+assert.equal(mergeDrafts([aiInput, aiInput]).description, '', 'Merge retained stale AI description');
+const humanInput = { ...input, descriptionOrigin: 'human', originalReference: 'Table 2' };
+const mixedOrigins = mergeDrafts([{ ...aiInput, originalReference: 'Table 1' }, humanInput]);
+assert.equal(mixedOrigins.description, humanInput.description, 'Merge lost human description');
+assert.equal(mixedOrigins.descriptionOrigin, 'human', 'Merge allowed AI to overwrite human description');
+assert.equal(mixedOrigins.originalReference, null, 'Merged results retained only the first reference');
 console.log('PASS: split, header promotion, merge, unequal headers, multiple sources, re-split, and provenance preservation');

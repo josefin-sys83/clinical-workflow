@@ -15,6 +15,7 @@ class PromptSpec:
     user: str
     max_tokens: int = 2000
     temperature: float = 0.3
+    image_data_url: str | None = None
 
     @classmethod
     def from_parts(

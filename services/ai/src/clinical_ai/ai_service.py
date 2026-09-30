@@ -8,6 +8,7 @@ from clinical_ai.modules.protocol.service import ProtocolService
 from clinical_ai.modules.report.service import ReportService
 from clinical_ai.modules.scope.service import ScopeService
 from clinical_ai.modules.synopsis.service import SynopsisService
+from clinical_ai.modules.study_results.service import ResultsService
 
 
 class AiService:
@@ -20,6 +21,7 @@ class AiService:
         self.protocol = ProtocolService(llm)
         self.report = ReportService(llm)
         self.consistency = ConsistencyService(llm)
+        self.results = ResultsService(llm)
 
     async def analyzeSynopsis(self, text: str, targetMarkets: list[str] | None = None):
         return await self.synopsis.analyze(text, targetMarkets)

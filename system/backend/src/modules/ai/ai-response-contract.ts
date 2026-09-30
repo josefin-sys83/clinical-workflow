@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { protocolIssueSeverity } from '../protocols/protocol-issue-severity';
 
 const text = z.string().refine(value => value.trim().length > 0);
+const suggestionText = (max: number) => z.string().max(max).refine(value => value.trim().length > 0 && !value.includes('\0')).nullable();
 const element = z.object({ id: text, name: text, reference: text });
 const reviewedElement = element.extend({ status: z.enum(['complete', 'partial', 'missing']) });
 const issue = z.object({ description: text, severity: z.enum(['blocker', 'warning']) }).passthrough();
@@ -29,6 +30,19 @@ const generatedProtocol = z.object({
 }).passthrough();
 
 const contracts: Record<string, z.ZodTypeAny> = {
+  '/v1/ai/suggest-result': z.object({
+    title: suggestionText(1000),
+    reportSectionKey: suggestionText(200),
+    description: suggestionText(20000),
+    limitation: suggestionText(2000),
+    alternativeSectionKeys: z.array(suggestionText(200).unwrap()).optional(),
+  }).strict().refine(value =>
+    !!value.limitation || [value.title, value.reportSectionKey, value.description].every(v => v !== null))
+    .refine(value => !value.alternativeSectionKeys?.length || (
+      value.reportSectionKey === null && value.title !== null && value.description !== null &&
+      value.alternativeSectionKeys.length >= 2 &&
+      new Set(value.alternativeSectionKeys).size === value.alternativeSectionKeys.length
+    )),
   '/v1/ai/analyze-synopsis': z.array(z.object({
     id: text, criterion: text, status: z.enum(['complete', 'missing', 'not-applicable']), reason: text,
   }).passthrough()),
