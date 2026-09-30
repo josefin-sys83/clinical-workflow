@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { getPool } from '../../db/pg';
 import { ProtocolsService } from './protocols.service';
 
@@ -15,6 +15,42 @@ describe('protocol write transactions', () => {
     (getPool as jest.Mock).mockReturnValue({ connect: jest.fn().mockResolvedValue(client) });
     audit = { record: jest.fn().mockResolvedValue(undefined) };
     service = new ProtocolsService(audit);
+  });
+
+  it.each(['blocker', 'warning', 'cross_reference', 'recommendation', 'human_decision_required'])(
+    'saves the exact protocol issue severity %s', async severity => {
+      await service.save('project', {
+        sections: [{ id: '1', issues: [{ id: 'finding', severity, description: 'Finding', status: 'open' }] }],
+      }, actor, client);
+
+      const writes = client.query.mock.calls.filter(([sql]: [string]) => sql.includes('insert into protocol_section_issue'));
+      expect(writes).toHaveLength(1);
+      expect(writes[0][1][2]).toBe(severity);
+    },
+  );
+
+  it.each([undefined, null, '', 'info', 'high', 'Blocker', ' warning ', 'cross-reference', 1, {}, ['warning']])(
+    'rejects invalid severity %p before writing any part of the protocol', async severity => {
+      await expect(service.save('project', {
+        sections: [
+          { id: '1', issues: [{ id: 'valid', severity: 'warning' }] },
+          { id: '2', issues: [{ id: 'invalid', severity }] },
+        ],
+      }, actor, client)).rejects.toBeInstanceOf(BadRequestException);
+      expect(client.query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an invalid severity from completed analysis and rolls back the transaction', async () => {
+    jest.spyOn(service, 'getByProject').mockResolvedValue({
+      sections: [{ id: '1', issues: [], analysisRequestId: 'request', analysisStatus: 'running' }],
+    });
+    await expect(service.finishSectionAnalysis('project', '1', 'request', {
+      issues: [{ id: 'finding', severity: 'info' }],
+    }, null, actor)).rejects.toBeInstanceOf(BadRequestException);
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes('insert into protocol_section_issue'))).toBe(false);
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('reads the current protocol under the project lock and commits its amendment and audit together', async () => {

@@ -1,5 +1,6 @@
 import { BadGatewayException } from '@nestjs/common';
 import { z } from 'zod';
+import { protocolIssueSeverity } from '../protocols/protocol-issue-severity';
 
 const text = z.string().refine(value => value.trim().length > 0);
 const element = z.object({ id: text, name: text, reference: text });
@@ -9,7 +10,7 @@ const issue = z.object({ description: text, severity: z.enum(['blocker', 'warnin
 // Mirrors clinical_ai/modules/protocol/models.py and readme_schema.md.
 const protocolIssue = z.object({
   id: text,
-  severity: z.enum(['blocker', 'warning', 'cross_reference', 'recommendation', 'human_decision_required']),
+  severity: protocolIssueSeverity,
   subsection: text,
   description: text,
   source: text.nullable(),

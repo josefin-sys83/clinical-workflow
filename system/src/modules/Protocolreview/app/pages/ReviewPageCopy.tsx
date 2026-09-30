@@ -1,3 +1,4 @@
+import { isOpenIssue } from '@/shared/protocol/issues';
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ReviewHeader } from '../components/ReviewHeader';
@@ -15,7 +16,7 @@ import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBa
 function deriveSectionStatus(section: any): ReportSection['status'] {
   if (section.approvalStatus === 'approved') return 'approved';
   const openIssues: any[] = (section.issues || []).filter(
-    (i: any) => i.status === 'open' || !i.status,
+    isOpenIssue,
   );
   if (openIssues.some((i) => i.severity === 'blocker')) return 'blocked';
   if (openIssues.some((i) => i.severity === 'warning')) return 'warning';
@@ -114,14 +115,15 @@ export default function ReviewPageCopy() {
 
     protocol.sections.forEach((section: any) => {
       const openIssues = (section.issues || []).filter(
-        (i: any) => i.status === 'open' || !i.status,
+        isOpenIssue,
       );
 
       openIssues.forEach((issue: any) => {
         derivedFindings.push({
           id: issue.id,
           sectionId: section.id,
-          severity: issue.severity === 'blocker' ? 'blocker' : 'warning',
+          severity: issue.severity,
+          source: 'system',
           description: issue.description || '',
           location: issue.subsection || section.title || '',
           sectionOwner,
