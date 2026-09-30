@@ -11,6 +11,18 @@ export type ResultInput = {
   sourceFilename: string;
   sourceLocation?: string;
   reportSectionId?: string | null;
+  reportSectionKey?: string;
+  originalReference?: string | null;
+  titleOrigin?: 'ai' | 'human';
+  sectionOrigin?: 'ai' | 'human';
+  descriptionOrigin?: 'ai' | 'human';
+};
+export type ResultSuggestion = {
+  title: string | null;
+  reportSectionKey: string | null;
+  description: string | null;
+  limitation: string | null;
+  alternativeSectionKeys?: string[];
 };
 export type StudyResult = ResultInput & {
   id: string;
@@ -42,11 +54,28 @@ export type ResultsWorkspace = {
   results: StudyResult[];
   supportingDocuments: SupportingDocument[];
   sections: { id: string; title: string }[];
+  sectionOptions?: { id: string | null; key: string; title: string }[];
   locked: boolean;
 };
 
 const base = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}/results`;
+export const suggestResult = (
+  projectId: string,
+  input: ResultInput,
+  signal?: AbortSignal,
+) =>
+  apiFetch<ResultSuggestion>(`${base(projectId)}/suggest`, {
+    method: 'POST',
+    signal,
+    body: JSON.stringify({
+      type: input.type,
+      content: input.content,
+      sourceFilename: input.sourceFilename,
+      sourceLocation: input.sourceLocation,
+      originalReference: input.originalReference,
+    }),
+  });
 export const getResultsWorkspace = (projectId: string) =>
   apiFetch<ResultsWorkspace>(`${base(projectId)}/workspace`, {
     cache: 'no-store',
