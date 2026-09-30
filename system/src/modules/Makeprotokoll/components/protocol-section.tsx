@@ -3,6 +3,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
 import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
+import { SaveStatus } from '@/shared/editor/SaveStatus';
+import { apiErrorMessage } from '@/shared/api/http';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
@@ -84,6 +86,7 @@ interface ProtocolSectionProps {
     amended?: boolean;
     amendmentId?: string;
     amendmentNumber?: number;
+    revision?: number;
   };
   targetMarkets?: string[];
   deviceCategory?: string;
@@ -92,6 +95,7 @@ interface ProtocolSectionProps {
   isHighlighted?: boolean;
   isReviewMode?: boolean;
   onSaved?: (newContent: string, previousContent: string, reason: string) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
   onWontFix?: (issueId: string, comment: string) => void;
   onAddComment?: (content: string, type: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -213,7 +217,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [] }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, onDirtyChange, attachments = [] }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -227,7 +231,14 @@ function ProtocolSectionComponent(
   const [isEditing, setIsEditing] = useState(false);
   const [editorFindings, setEditorFindings] = useState<ReviewFinding[]>([]);
   const [isSaving, setIsSaving] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Lets the page warn before navigation while this section has unsaved edits.
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [changeReason, setChangeReason] = useState('');
   const [wontFixModal, setWontFixModal] = useState<string | null>(null); // issueId or null
@@ -429,7 +440,7 @@ function ProtocolSectionComponent(
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    const findings = analysisStatus === 'running' || isAnalyzing ? [] : section.issues;
+    const findings = analysisStatus === 'running' ? [] : section.issues;
     if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), findings);
     // Legacy markdown fallback
     let h = content
@@ -998,8 +1009,9 @@ function ProtocolSectionComponent(
                       {/* ── WYSIWYG contentEditable editor ── */}
                       <div
                         ref={editorRef}
-                        contentEditable
+                        contentEditable={!isSaving}
                         suppressContentEditableWarning
+                        onInput={() => setIsDirty(true)}
                         onKeyUp={updateActiveFormats}
                         onMouseUp={updateActiveFormats}
                         onSelect={updateActiveFormats}
@@ -1007,23 +1019,43 @@ function ProtocolSectionComponent(
                         style={{ width: '100%', minHeight: '200px', fontSize: '0.9rem', lineHeight: '1.7', padding: '0.75rem', border: '2px solid #3b82f6', borderTop: 'none', borderRadius: '0 0 0.375rem 0.375rem', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', overflowY: 'auto' }}
                       />
                       {/* ── Save / Cancel ── */}
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <button onClick={() => { setChangeReason(''); setShowReasonModal(true); }} style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Save</button>
-                        <button onClick={() => setIsEditing(false)} style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', alignItems: 'center' }}>
+                        <button
+                          disabled={!isDirty || isSaving}
+                          onClick={() => { setChangeReason(''); setShowReasonModal(true); }}
+                          style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', fontSize: '0.875rem', cursor: !isDirty || isSaving ? 'not-allowed' : 'pointer', opacity: !isDirty || isSaving ? 0.5 : 1 }}
+                        >Save</button>
+                        <button
+                          disabled={isSaving}
+                          onClick={() => {
+                            if (isDirty && !window.confirm('Discard your unsaved changes?')) return;
+                            setIsDirty(false);
+                            setSaveError(null);
+                            setIsEditing(false);
+                          }}
+                          style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: isSaving ? 'not-allowed' : 'pointer', fontSize: '0.875rem' }}
+                        >Cancel</button>
+                        <SaveStatus
+                          state={isSaving ? 'saving' : saveError ? 'failed' : isDirty ? 'dirty' : 'saved'}
+                          updatedAt={section.updated}
+                          revision={section.revision}
+                          error={saveError}
+                        />
                       </div>
                     </div>
                   );
                 }
                 const editButton = (
-                  <div key="edit-button" style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
+                  <div key="edit-button" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem'}}>
+                    <SaveStatus state="saved" updatedAt={section.updated} revision={section.revision} />
                     <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
                   </div>
                 );
                 return (
                   <div key="section-view">
                     {editButton}
-                    <div className="relative min-h-24" aria-busy={analysisStatus === 'running' || isAnalyzing}>
-                      {(analysisStatus === 'running' || isAnalyzing) && <SectionAnalysisOverlay />}
+                    <div className="relative min-h-24" aria-busy={analysisStatus === 'running'}>
+                      {analysisStatus === 'running' && <SectionAnalysisOverlay />}
                       <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
                     </div>
                   </div>
@@ -1127,24 +1159,25 @@ function ProtocolSectionComponent(
               <button
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
+                  if (!onSaved) return;
                   const prevContent = section.content || '';
                   const newContent = stripReviewHighlights(editorRef.current?.innerHTML || '');
                   const reason = changeReason.trim();
-                  // Close the modal and editing state immediately for responsive UX
-                  setIsSaving(true);
                   setShowReasonModal(false);
-                  setIsEditing(false);
-                  // Delegate persist + audit to the parent — it owns user context and
-                  // is the single source of truth for every content-change audit entry.
-                  if (onSaved) {
-                    setIsAnalyzing(true);
-                    try {
-                      await onSaved(newContent, prevContent, reason);
-                    } finally {
-                      setIsAnalyzing(false);
-                    }
+                  setSaveError(null);
+                  setIsSaving(true);
+                  try {
+                    // The editor stays open until the server confirms. On failure the
+                    // user's text is still here and can be saved again. The parent owns
+                    // persistence and the audit entry.
+                    await onSaved(newContent, prevContent, reason);
+                    setIsDirty(false);
+                    setIsEditing(false);
+                  } catch (error) {
+                    setSaveError(apiErrorMessage(error, 'The server did not confirm the save.'));
+                  } finally {
+                    setIsSaving(false);
                   }
-                  setIsSaving(false);
                 }}
                 style={{padding: '0.5rem 1rem', backgroundColor: changeReason.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: changeReason.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
               >

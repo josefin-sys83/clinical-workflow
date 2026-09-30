@@ -32,7 +32,7 @@ describe('protocol write transactions', () => {
   });
 
   it('rolls back a section edit if its audit write fails', async () => {
-    jest.spyOn(service, 'updateSectionContent').mockResolvedValue({ title: 'Study Design', content: '<p>Edited</p>', updatedAt: '2026-09-15T00:00:00Z' });
+    jest.spyOn(service, 'updateSectionContent').mockResolvedValue({ title: 'Study Design', content: '<p>Edited</p>', updatedAt: '2026-09-15T00:00:00Z', revision: 2 });
     audit.record.mockRejectedValue(new Error('Audit unavailable'));
     await expect(service.updateSection('project', 'section-4', { content: '<p>Edited</p>', reason: 'Correction' }, actor))
       .rejects.toThrow('Audit unavailable');
@@ -47,7 +47,7 @@ describe('protocol write transactions', () => {
   it('returns the exact saved content for subsequent analysis', async () => {
     client.query.mockImplementation(async (sql: string, params?: any[]) => {
       if (sql.includes('update protocol_section set')) {
-        return { rows: [{ title: 'Overview', content: params?.[2], updated_at: '2026-09-24T00:00:00Z' }] };
+        return { rows: [{ title: 'Overview', content: params?.[2], updated_at: '2026-09-24T00:00:00Z', revision: 3 }] };
       }
       return { rows: [{ id: 'project', data: {} }] };
     });
@@ -55,7 +55,7 @@ describe('protocol write transactions', () => {
       content: '<p>First<br>Second</p>', reason: 'Clarification',
     }, actor);
 
-    expect(response).toMatchObject({ ok: true, content: '<p>First<br />Second</p>' });
+    expect(response).toMatchObject({ ok: true, content: '<p>First<br />Second</p>', revision: 3 });
     expect(client.query).toHaveBeenLastCalledWith('COMMIT');
   });
 

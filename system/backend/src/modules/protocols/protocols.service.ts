@@ -210,7 +210,7 @@ export class ProtocolsService {
       approvedAt?: string;
     },
     actor?: AuditActor,
-  ): Promise<{ ok: true; content: string; updatedAt: string }> {
+  ): Promise<{ ok: true; content: string; updatedAt: string; revision: number }> {
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -255,6 +255,7 @@ export class ProtocolsService {
           sectionId,
           sectionTitle: result.title,
           updatedAt: result.updatedAt,
+          revision: result.revision,
           editedBy: actor?.name ?? "Unknown user",
           reason: values.reason || "",
           previousContent,
@@ -263,7 +264,7 @@ export class ProtocolsService {
       }, client);
 
       await client.query("COMMIT");
-      return { ok: true, content: result.content, updatedAt: result.updatedAt };
+      return { ok: true, content: result.content, updatedAt: result.updatedAt, revision: result.revision };
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
@@ -491,6 +492,7 @@ export class ProtocolsService {
       analysisStatus: row.analysis_status,
       analysisError: row.analysis_error,
       analysisRequestId: row.analysis_request_id,
+      revision: row.revision,
       approvalStatus: row.approval_status,
       approvedBy: row.approved_by_name,
       approvedAt: iso(row.approved_at),
@@ -761,6 +763,8 @@ export class ProtocolsService {
            amendment_number, created_at, updated_at, analysis_status, analysis_error, analysis_request_id
          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          on conflict (protocol_id, section_key) do update set
+           revision = case when protocol_section.content is distinct from excluded.content
+             then protocol_section.revision + 1 else protocol_section.revision end,
            section_number = excluded.section_number,
            position = excluded.position,
            title = excluded.title,
@@ -1092,7 +1096,7 @@ export class ProtocolsService {
     },
     actor: AuditActor | undefined,
     client: PoolClient,
-  ): Promise<{ title: string; content: string; updatedAt: string }> {
+  ): Promise<{ title: string; content: string; updatedAt: string; revision: number }> {
     const protocolId = await this.ensureForProject(projectId, client);
     const previous = await client.query('select content from protocol_section where protocol_id=$1 and section_key=$2', [protocolId, sectionKey]);
     if (previous.rows[0] && values.previousContent !== undefined &&
@@ -1103,6 +1107,7 @@ export class ProtocolsService {
     const approvedBy = values.approvedBy ?? null;
     const { rows } = await client.query(
       `update protocol_section set
+         revision = case when content is distinct from $3 then revision + 1 else revision end,
          content = $3,
          approval_status = coalesce($4, approval_status),
          approved_by_user_id = coalesce($6, approved_by_user_id),
@@ -1110,7 +1115,7 @@ export class ProtocolsService {
          approved_at = coalesce($7, approved_at),
          updated_at = $8
        where protocol_id = $1 and section_key = $2
-       returning title, content, updated_at`,
+       returning title, content, updated_at, revision`,
       [
         protocolId,
         sectionKey,
@@ -1132,6 +1137,7 @@ export class ProtocolsService {
       title: rows[0].title,
       content: rows[0].content,
       updatedAt: iso(rows[0].updated_at) || now,
+      revision: rows[0].revision,
     };
   }
 
