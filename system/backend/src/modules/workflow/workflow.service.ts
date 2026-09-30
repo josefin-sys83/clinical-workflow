@@ -63,10 +63,20 @@ const ALLOWED_FROM_STATES: Record<TransitionAction, StepLifecycleState[]> = {
   // frontend/backend naming was aligned on `ready_for_review`.
   mark_ready: ['draft', 'input_needed', 'blocked', 'ready'],
   start_review: ['ready', 'ready_for_review'],
-  request_changes: ['in_review'],
+  // `signed` is the signing phase: a signer may still send the document back.
+  request_changes: ['in_review', 'signed'],
   approve: ['in_review'],
   sign: ['approved'],
   finalize: ['signed'],
+};
+
+// A signature approves one specific version of a document, so sending a document
+// back for changes invalidates the signatures already given on it. Add a step here
+// to apply the same rule to another signed document.
+const INVALIDATE_SIGNATURES_ON_CHANGES: Record<string, string> = {
+  'protocol-pdf': `update protocol_signature set invalidated_at = now(), invalidated_reason = $2
+    where invalidated_at is null and protocol_id in (select id from protocol where project_id = $1)
+    returning role_title, signed_by_name, signed_at, document_hash`,
 };
 
 function assertValidTransition(
@@ -184,6 +194,24 @@ export class WorkflowService {
         entityLabel: stepId,
         metadata: { action, from: current, to: next, reason: reason ?? null },
       }, client);
+
+      const invalidateSql = action === 'request_changes' ? INVALIDATE_SIGNATURES_ON_CHANGES[stepId] : undefined;
+      if (invalidateSql) {
+        const { rows: invalidated } = await client.query(invalidateSql, [projectId, reason ?? 'Changes requested']);
+        if (invalidated.length > 0) {
+          await this.audit.record({
+            projectId,
+            stepId,
+            type: 'signatures.invalidated',
+            message: `${invalidated.length} signature(s) invalidated because changes were requested`,
+            actor: actor ?? { name: 'System' },
+            entityType: 'workflow_step',
+            entityId: stepId,
+            entityLabel: stepId,
+            metadata: { reason: reason ?? null, signatures: invalidated },
+          }, client);
+        }
+      }
 
       if (ownsTransaction) await client.query('COMMIT');
     } catch (err) {

@@ -23,9 +23,15 @@ export class DocumentWorkflowService {
   async assertDocumentNotSigned(projectId: string, pdfStepId: 'protocol-pdf' | 'report-pdf') {
     const snapshot = await this.workflow.getSnapshot(projectId);
     const state = snapshot.steps?.[pdfStepId]?.state;
-    if (state === 'signed' || state === 'final') {
+    const document = pdfStepId === 'protocol-pdf' ? 'protocol' : 'report';
+    if (state === 'signed') {
       throw new BadRequestException(
-        `This ${pdfStepId === 'protocol-pdf' ? 'protocol' : 'report'} has already been finalized and signed and can no longer be changed. Use an amendment instead.`,
+        `This ${document} is out for signature and can't be changed. Use Request Changes on the signing page to send it back — signatures already given will be cleared.`,
+      );
+    }
+    if (state === 'final') {
+      throw new BadRequestException(
+        `This ${document} has been finalized and signed and can no longer be changed. Use an amendment instead.`,
       );
     }
   }

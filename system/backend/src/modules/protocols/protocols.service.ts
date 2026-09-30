@@ -599,7 +599,7 @@ export class ProtocolsService {
               s.timezone, s.ip_address, s.document_hash
        from protocol_signature s
        join protocol p on p.id = s.protocol_id
-       where p.project_id = $1
+       where p.project_id = $1 and s.invalidated_at is null
        order by s.role_key, s.signed_at desc, s.id desc`,
       [projectId],
     );
