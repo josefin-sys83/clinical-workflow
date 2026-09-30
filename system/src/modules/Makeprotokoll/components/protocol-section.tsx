@@ -1021,7 +1021,9 @@ function ProtocolSectionComponent(
                 const editButton = (
                   <div key="edit-button" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem'}}>
                     <SaveStatus state="saved" updatedAt={section.updated} revision={section.revision} />
-                    <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
+                    {!section.locked && (
+                      <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
+                    )}
                   </div>
                 );
                 return (

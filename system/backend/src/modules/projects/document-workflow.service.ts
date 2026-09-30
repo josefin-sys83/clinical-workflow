@@ -25,7 +25,7 @@ export class DocumentWorkflowService {
     const state = snapshot.steps?.[pdfStepId]?.state;
     if (state === 'signed' || state === 'final') {
       throw new BadRequestException(
-        `This ${pdfStepId === 'protocol-pdf' ? 'protocol' : 'report'} has already been finalized and signed and can no longer be regenerated or re-analyzed.`,
+        `This ${pdfStepId === 'protocol-pdf' ? 'protocol' : 'report'} has already been finalized and signed and can no longer be changed. Use an amendment instead.`,
       );
     }
   }

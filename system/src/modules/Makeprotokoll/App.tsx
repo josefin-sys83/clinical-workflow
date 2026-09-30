@@ -737,6 +737,9 @@ export default function App() {
       ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))
   );
 
+  // Same rule the backend enforces: a signed protocol changes only by amendment.
+  const protocolSigned = ['signed', 'final'].includes(snapshot?.steps?.['protocol-pdf']?.state ?? '');
+
   const protocolSections = protocol?.sections?.map((s: any, idx: number) => ({
     id: s.id || String(idx + 1),
     number: s.id || String(idx + 1),
@@ -748,7 +751,7 @@ export default function App() {
     comments: s.comments || [],
     aiGenerated: s.aiGenerated !== false,
     reviewStatus: null,
-    locked: false,
+    locked: protocolSigned,
     reviewCycle: 0,
     reviewer: roles.find((r: any) => r.title === 'Medical Writer')?.assignedTo?.[0]?.name || '',
     approver: roles.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name || '',

@@ -63,6 +63,7 @@ export class ProtocolsController {
     @Body() body: UpdateSectionContentDto,
     @Req() req: any,
   ) {
+    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     return this.protocols.updateSection(
       projectId,
       sectionId,
