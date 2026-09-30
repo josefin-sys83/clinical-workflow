@@ -1,4 +1,4 @@
-import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, HttpException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
+import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards, BadRequestException, HttpException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -88,6 +88,28 @@ export class ProtocolsController {
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
     return this.protocols.addComment(projectId, sectionId, body, req.user);
+  }
+
+  @Post('/:projectId/protocol/sections/:sectionId/risk-acceptances')
+  async acceptRisk(
+    @Param('projectId') projectId: string,
+    @Param('sectionId') sectionId: string,
+    @Body() body: { description?: string; reason?: string },
+    @Req() req: any,
+  ) {
+    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    return this.protocols.acceptRisk(projectId, sectionId, body, req.user);
+  }
+
+  @Delete('/:projectId/protocol/sections/:sectionId/risk-acceptances/:acceptanceId')
+  async revokeRiskAcceptance(
+    @Param('projectId') projectId: string,
+    @Param('sectionId') sectionId: string,
+    @Param('acceptanceId', ParseUUIDPipe) acceptanceId: string,
+    @Req() req: any,
+  ) {
+    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    return this.protocols.revokeRiskAcceptance(projectId, sectionId, acceptanceId, req.user);
   }
 
   @Get('/:projectId/generate-protocol/progress')

@@ -11,7 +11,6 @@ import { buildWorkflowPath } from '@/shared/workflow/steps';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
-import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 import { apiErrorMessage, apiFetch } from '@/shared/api/http';
 
 /** Derive a section status from approval state + open issues */
@@ -67,10 +66,6 @@ export default function ReviewPageCopy() {
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // ── Signed-in user ─────────────────────────────────────────────────────────
-  const { user: sessionUser } = useCurrentUser();
-  const currentUser = sessionUser?.name || 'Unknown';
-
   // ── Helper: look up a section owner from roles ────────────────────────────
   const sectionOwner = useMemo(() => {
     const lead = roles.find((r: any) => r.title === 'Protocol Lead')?.assignedTo?.[0]?.name;
@@ -108,16 +103,26 @@ export default function ReviewPageCopy() {
       const openIssues = (section.issues || []).filter(
         isOpenIssue,
       );
+      const acceptances: any[] = section.riskAcceptances || [];
 
       openIssues.forEach((issue: any) => {
+        const description = (issue.description || '').trim();
+        // Saved decisions are matched to findings by description, because findings
+        // are recreated each time a section is analysed.
+        const acceptance = acceptances.find((a) => a.description === description);
         derivedFindings.push({
           id: issue.id,
           sectionId: section.id,
           severity: issue.severity,
           source: 'system',
-          description: issue.description || '',
+          description,
           location: issue.subsection || section.title || '',
           sectionOwner,
+          acceptedRisk: Boolean(acceptance),
+          acceptanceId: acceptance?.id,
+          acceptanceReason: acceptance?.reason,
+          acceptedBy: acceptance?.acceptedBy,
+          acceptedAt: acceptance ? new Date(acceptance.acceptedAt) : undefined,
         });
 
         const raisedByLower = (issue.raisedBy || '').toLowerCase();
@@ -139,15 +144,7 @@ export default function ReviewPageCopy() {
       });
     });
 
-    // The list is rebuilt whenever the protocol changes (including when a comment
-    // is added), so carry over risks the reviewer has already accepted.
-    setFindings((prev) => {
-      const accepted = new Map(prev.filter((f) => f.acceptedRisk).map((f) => [f.id, f]));
-      return derivedFindings.map((f) => {
-        const a = accepted.get(f.id);
-        return a ? { ...f, acceptedRisk: true, acceptedBy: a.acceptedBy, acceptedAt: a.acceptedAt } : f;
-      });
-    });
+    setFindings(derivedFindings);
     setAIFindings(derivedAI);
   }, [protocol, sectionOwner]);
 
@@ -184,6 +181,12 @@ export default function ReviewPageCopy() {
   // Comments have their own endpoint: the server records the signed-in user as
   // author and writes the audit entry. Only this section's comments are replaced
   // here, so nothing else on the page is written back.
+  const updateSection = (sectionId: string, changes: Record<string, unknown>) =>
+    setProtocol((prev: any) => !prev ? prev : ({
+      ...prev,
+      sections: prev.sections.map((s: any) => (s.id === sectionId ? { ...s, ...changes } : s)),
+    }));
+
   const postComment = async (
     sectionId: string,
     body: { content: string; type?: string; parentCommentKey?: string },
@@ -194,10 +197,7 @@ export default function ReviewPageCopy() {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      setProtocol((prev: any) => !prev ? prev : ({
-        ...prev,
-        sections: prev.sections.map((s: any) => (s.id === sectionId ? { ...s, comments } : s)),
-      }));
+      updateSection(sectionId, { comments });
     } catch (error) {
       window.alert(apiErrorMessage(error, 'The comment could not be saved. Please try again.'));
       throw error;
@@ -230,19 +230,35 @@ export default function ReviewPageCopy() {
     );
   };
 
-  const handleAcceptRisk = (findingId: string) => {
-    setFindings((prev) =>
-      prev.map((finding) => {
-        if (finding.id !== findingId) return finding;
+  // Risk decisions are saved with a reason and audited, so they survive leaving the
+  // page and re-analysis of the section.
+  const handleAcceptRisk = async (findingId: string, reason: string) => {
+    const finding = findings.find((f) => f.id === findingId);
+    if (!finding || !projectId) return;
+    try {
+      const riskAcceptances = await apiFetch<any[]>(
+        `/projects/${projectId}/protocol/sections/${finding.sectionId}/risk-acceptances`,
+        { method: 'POST', body: JSON.stringify({ description: finding.description, reason }) },
+      );
+      updateSection(finding.sectionId, { riskAcceptances });
+    } catch (error) {
+      window.alert(apiErrorMessage(error, 'The risk could not be accepted. Please try again.'));
+      throw error;
+    }
+  };
 
-        return {
-          ...finding,
-          acceptedRisk: true,
-          acceptedBy: currentUser,
-          acceptedAt: new Date(),
-        };
-      }),
-    );
+  const handleRevokeRisk = async (findingId: string) => {
+    const finding = findings.find((f) => f.id === findingId);
+    if (!finding?.acceptanceId || !projectId) return;
+    try {
+      const riskAcceptances = await apiFetch<any[]>(
+        `/projects/${projectId}/protocol/sections/${finding.sectionId}/risk-acceptances/${finding.acceptanceId}`,
+        { method: 'DELETE' },
+      );
+      updateSection(finding.sectionId, { riskAcceptances });
+    } catch (error) {
+      window.alert(apiErrorMessage(error, 'The risk acceptance could not be withdrawn. Please try again.'));
+    }
   };
 
   const handleApproveReport = async (reason: string) => {
@@ -346,7 +362,8 @@ export default function ReviewPageCopy() {
             aiFindings={aiFindings}
             onFindingClick={handleFindingClick}
             onDismissAIFinding={handleDismissAIFinding}
-            onAcceptRisk={handleAcceptRisk}
+            onAcceptRisk={protocolFinalized ? undefined : handleAcceptRisk}
+            onRevokeRisk={protocolFinalized ? undefined : handleRevokeRisk}
             onAddComment={protocolFinalized ? undefined : handleAddComment}
             onAddReply={protocolFinalized ? undefined : handleAddReply}
             activeSectionTitle={sections.find((s) => s.id === activeSection)?.title}

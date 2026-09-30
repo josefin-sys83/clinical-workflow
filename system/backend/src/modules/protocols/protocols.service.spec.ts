@@ -86,6 +86,31 @@ describe('protocol write transactions', () => {
     expect(client.query).toHaveBeenCalledWith('COMMIT');
   });
 
+  it('requires a reason to accept a risk', async () => {
+    await expect(service.acceptRisk('project', '1', { description: 'Missing SAP', reason: '  ' }, actor))
+      .rejects.toThrow('Reason cannot be empty');
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  it('records an accepted risk against the signed-in user, with its reason, in the audit trail', async () => {
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('select id, name from users')) return { rows: [{ id: 'writer', name: 'Emanuel Lundberg' }] };
+      if (sql.includes('from protocol_section where')) return { rows: [{ id: 'section-row', title: 'Overview' }] };
+      if (sql.includes('insert into protocol (')) return { rows: [{ id: 'protocol' }] };
+      return { rows: [] };
+    });
+    jest.spyOn(service, 'getByProject').mockResolvedValue({ sections: [{ id: '1', riskAcceptances: [] }] });
+
+    await service.acceptRisk('project', '1', { description: 'Missing SAP', reason: 'SAP follows in v2' }, actor);
+
+    const insert = client.query.mock.calls.find(([sql]: [string]) => sql.includes('insert into protocol_risk_acceptance'));
+    expect(insert[1]).toEqual(['section-row', 'Missing SAP', 'SAP follows in v2', 'writer', 'Emanuel Lundberg']);
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'protocol.risk.accepted', metadata: { finding: 'Missing SAP', reason: 'SAP follows in v2' },
+    }), client);
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+  });
+
   it('rolls back a section edit if its audit write fails', async () => {
     jest.spyOn(service, 'updateSectionContent').mockResolvedValue({ title: 'Study Design', content: '<p>Edited</p>', updatedAt: '2026-09-15T00:00:00Z', revision: 2 });
     audit.record.mockRejectedValue(new Error('Audit unavailable'));

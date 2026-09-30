@@ -274,28 +274,26 @@ export class ProtocolsService {
     }
   }
 
-  // Adds a review comment, or a reply when parentCommentKey is given. The author is
-  // always the signed-in user, never a name supplied by the client.
-  async addComment(
+  // Runs a write against one protocol section as the signed-in user, in a single
+  // transaction with its audit entry, and returns the section as read back.
+  private async writeSection(
     projectId: string,
     sectionKey: string,
-    body: { content?: string; type?: string; parentCommentKey?: string },
     actor: AuditActor,
-  ): Promise<any[]> {
-    const content = typeof body.content === 'string' ? body.content.trim() : '';
-    if (!content) throw new BadRequestException('Comment cannot be empty');
-    if (content.length > 10000) throw new BadRequestException('Comment is too long');
-    const type = ['general', 'issue', 'approval-request'].includes(body.type ?? '') ? body.type : 'general';
-    const isReply = Boolean(body.parentCommentKey);
-
+    write: (context: {
+      client: PoolClient;
+      section: { id: string; title: string };
+      user: { id: string; name: string; role: string | null };
+    }) => Promise<Omit<RecordAuditEvent, 'projectId' | 'actor'>>,
+  ): Promise<any> {
     const client = await getPool().connect();
     try {
       await client.query('BEGIN');
-      const author = (await client.query('select id, name from users where id = $1', [actor?.userId])).rows[0];
-      if (!author) throw new ForbiddenException('Authenticated user not found');
+      const user = (await client.query('select id, name from users where id = $1', [actor?.userId])).rows[0];
+      if (!user) throw new ForbiddenException('Authenticated user not found');
       const role = (await client.query(
         'select role_title from project_members where project_id = $1 and user_id = $2 order by created_at limit 1',
-        [projectId, author.id],
+        [projectId, user.id],
       )).rows[0]?.role_title ?? null;
 
       const protocolId = await this.ensureForProject(projectId, client);
@@ -305,6 +303,32 @@ export class ProtocolsService {
       )).rows[0];
       if (!section) throw new NotFoundException('Protocol section not found');
 
+      const event = await write({ client, section, user: { ...user, role } });
+      await this.audit.record({ ...event, projectId, actor }, client);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    const protocol = await this.getByProject(projectId);
+    return protocol?.sections?.find((s: any) => s.id === sectionKey);
+  }
+
+  // Adds a review comment, or a reply when parentCommentKey is given. The author is
+  // always the signed-in user, never a name supplied by the client.
+  async addComment(
+    projectId: string,
+    sectionKey: string,
+    body: { content?: string; type?: string; parentCommentKey?: string },
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const content = requiredText(body.content, 'Comment');
+    const type = ['general', 'issue', 'approval-request'].includes(body.type ?? '') ? body.type : 'general';
+    const isReply = Boolean(body.parentCommentKey);
+
+    const updated = await this.writeSection(projectId, sectionKey, actor, async ({ client, section, user }) => {
       if (isReply) {
         const parent = (await client.query(
           'select id from protocol_section_comment where section_id = $1 and comment_key = $2',
@@ -314,37 +338,89 @@ export class ProtocolsService {
         await client.query(
           `insert into protocol_section_comment_reply (comment_id, reply_key, author_user_id, author_name, author_role, content)
            values ($1, $2, $3, $4, $5, $6)`,
-          [parent.id, `r-${randomUUID()}`, author.id, author.name, role, content],
+          [parent.id, `r-${randomUUID()}`, user.id, user.name, user.role, content],
         );
       } else {
         await client.query(
           `insert into protocol_section_comment (section_id, comment_key, author_user_id, author_name, author_role, content, comment_type)
            values ($1, $2, $3, $4, $5, $6, $7)`,
-          [section.id, `c-${randomUUID()}`, author.id, author.name, role, content, type],
+          [section.id, `c-${randomUUID()}`, user.id, user.name, user.role, content, type],
         );
       }
-
-      await this.audit.record({
-        projectId,
+      return {
         stepId: 'protocol-review',
         type: isReply ? 'protocol.comment.replied' : 'protocol.comment.added',
         message: `${isReply ? 'Reply' : 'Comment'} added to section "${section.title}"`,
         entityType: 'protocol_section',
         entityId: sectionKey,
         entityLabel: section.title,
-        actor,
         metadata: { content, type: isReply ? 'reply' : type },
-      }, client);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
+      };
+    });
+    return updated?.comments ?? [];
+  }
 
-    const protocol = await this.getByProject(projectId);
-    return protocol?.sections?.find((s: any) => s.id === sectionKey)?.comments ?? [];
+  // Records a reviewer's decision to accept the risk of an open finding. Findings are
+  // recreated whenever a section is analysed, so the decision is matched back to its
+  // finding by description — the same rule "won't fix" uses.
+  async acceptRisk(
+    projectId: string,
+    sectionKey: string,
+    body: { description?: string; reason?: string },
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const description = requiredText(body.description, 'Finding description');
+    const reason = requiredText(body.reason, 'Reason');
+
+    const updated = await this.writeSection(projectId, sectionKey, actor, async ({ client, section, user }) => {
+      const existing = await client.query(
+        'select 1 from protocol_risk_acceptance where section_id = $1 and finding_description = $2 and revoked_at is null',
+        [section.id, description],
+      );
+      if (existing.rows.length) throw new ConflictException('This risk has already been accepted');
+      await client.query(
+        `insert into protocol_risk_acceptance (section_id, finding_description, reason, accepted_by_user_id, accepted_by_name)
+         values ($1, $2, $3, $4, $5)`,
+        [section.id, description, reason, user.id, user.name],
+      );
+      return {
+        stepId: 'protocol-review',
+        type: 'protocol.risk.accepted',
+        message: `Risk accepted on section "${section.title}"`,
+        entityType: 'protocol_section',
+        entityId: sectionKey,
+        entityLabel: section.title,
+        metadata: { finding: description, reason },
+      };
+    });
+    return updated?.riskAcceptances ?? [];
+  }
+
+  async revokeRiskAcceptance(
+    projectId: string,
+    sectionKey: string,
+    acceptanceId: string,
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const updated = await this.writeSection(projectId, sectionKey, actor, async ({ client, section, user }) => {
+      const revoked = (await client.query(
+        `update protocol_risk_acceptance set revoked_at = now(), revoked_by_user_id = $3, revoked_by_name = $4
+         where id = $1 and section_id = $2 and revoked_at is null
+         returning finding_description, reason`,
+        [acceptanceId, section.id, user.id, user.name],
+      )).rows[0];
+      if (!revoked) throw new NotFoundException('Risk acceptance not found');
+      return {
+        stepId: 'protocol-review',
+        type: 'protocol.risk.revoked',
+        message: `Risk acceptance withdrawn on section "${section.title}"`,
+        entityType: 'protocol_section',
+        entityId: sectionKey,
+        entityLabel: section.title,
+        metadata: { finding: revoked.finding_description, reason: revoked.reason },
+      };
+    });
+    return updated?.riskAcceptances ?? [];
   }
 
   async ensureForProject(projectId: string, client: PoolClient): Promise<string> {
@@ -368,7 +444,7 @@ export class ProtocolsService {
     if (!protocolRow) return null;
 
     const [sectionsResult, issuesResult, elementsResult, commentsResult, repliesResult, amendmentsResult,
-      amendmentSectionsResult, reportSectionsResult, approvalsResult] = await Promise.all([
+      amendmentSectionsResult, reportSectionsResult, approvalsResult, acceptancesResult] = await Promise.all([
       db.query(
         `select ps.*, pa.amendment_key
          from protocol_section ps
@@ -428,7 +504,26 @@ export class ProtocolsService {
          where a.protocol_id = $1 order by x.role_key`,
         [protocolRow.id],
       ),
+      db.query(
+        `select a.* from protocol_risk_acceptance a
+         join protocol_section s on s.id = a.section_id
+         where s.protocol_id = $1 and a.revoked_at is null order by a.accepted_at`,
+        [protocolRow.id],
+      ),
     ]);
+
+    const acceptancesBySection = new Map<string, any[]>();
+    for (const row of acceptancesResult.rows) {
+      const values = acceptancesBySection.get(row.section_id) ?? [];
+      values.push({
+        id: row.id,
+        description: row.finding_description,
+        reason: row.reason,
+        acceptedBy: row.accepted_by_name,
+        acceptedAt: iso(row.accepted_at),
+      });
+      acceptancesBySection.set(row.section_id, values);
+    }
 
     const issuesBySection = new Map<string, any[]>();
     for (const row of issuesResult.rows) {
@@ -576,6 +671,7 @@ export class ProtocolsService {
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
       comments: commentsBySection.get(row.id) ?? [],
+      riskAcceptances: acceptancesBySection.get(row.id) ?? [],
       issues: issuesBySection.get(row.id) ?? [],
       requiredElements: elementsBySection.get(row.id) ?? [],
     }));
@@ -1286,4 +1382,11 @@ export class ProtocolsService {
       }
     }
   }
+}
+
+function requiredText(value: unknown, label: string): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) throw new BadRequestException(`${label} cannot be empty`);
+  if (text.length > 10000) throw new BadRequestException(`${label} is too long`);
+  return text;
 }
