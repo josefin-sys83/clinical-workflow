@@ -67,6 +67,25 @@ describe('protocol write transactions', () => {
     expect(client.release).toHaveBeenCalled();
   });
 
+  it('records the signed-in user as comment author, ignoring any name in the request', async () => {
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('select id, name from users')) return { rows: [{ id: 'writer', name: 'Emanuel Lundberg' }] };
+      if (sql.includes('from project_members')) return { rows: [{ role_title: 'Medical Writer' }] };
+      if (sql.includes('from protocol_section where')) return { rows: [{ id: 'section-row', title: 'Overview' }] };
+      if (sql.includes('insert into protocol (')) return { rows: [{ id: 'protocol' }] };
+      return { rows: [] };
+    });
+    jest.spyOn(service, 'getByProject').mockResolvedValue({ sections: [{ id: '1', comments: [] }] });
+
+    await service.addComment('project', '1', { content: 'Please clarify', author: 'Dr. Elin' } as any, actor);
+
+    const insert = client.query.mock.calls.find(([sql]: [string]) => sql.includes('insert into protocol_section_comment'));
+    expect(insert[1]).toEqual(expect.arrayContaining(['writer', 'Emanuel Lundberg', 'Medical Writer', 'Please clarify']));
+    expect(insert[1]).not.toContain('Dr. Elin');
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ type: 'protocol.comment.added', actor }), client);
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+  });
+
   it('rolls back a section edit if its audit write fails', async () => {
     jest.spyOn(service, 'updateSectionContent').mockResolvedValue({ title: 'Study Design', content: '<p>Edited</p>', updatedAt: '2026-09-15T00:00:00Z', revision: 2 });
     audit.record.mockRejectedValue(new Error('Audit unavailable'));

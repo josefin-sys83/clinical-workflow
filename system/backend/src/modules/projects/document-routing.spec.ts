@@ -31,6 +31,7 @@ describe('project document routing', () => {
   it.each([
     [ProtocolsController, [
       'PATCH /api/projects/:projectId/protocol/sections/:sectionId',
+      'POST /api/projects/:projectId/protocol/sections/:sectionId/comments',
       'GET /api/projects/:projectId/generate-protocol/progress',
       'POST /api/projects/:projectId/generate-protocol',
       'POST /api/projects/:projectId/analyze-section',
@@ -64,7 +65,7 @@ describe('project document routing', () => {
 
   it('registers each route once and preserves generation throttling, upload roles and metadata caching', () => {
     const all = [ProjectsController, ProtocolsController, ReportsController].flatMap(routes);
-    expect(all).toHaveLength(42);
+    expect(all).toHaveLength(43);
     expect(new Set(all.map(r => r.key)).size).toBe(all.length);
     for (const handler of [
       ProtocolsController.prototype.generateProtocol,

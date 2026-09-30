@@ -61,10 +61,12 @@ export function FindingsPanel({
     setReplySubmitting(true);
     try {
       await onAddReply?.(commentId, replyText.trim());
-    } finally {
-      setReplySubmitting(false);
       setReplyingTo(null);
       setReplyText('');
+    } catch {
+      // The page has shown the error; keep the text so it can be sent again.
+    } finally {
+      setReplySubmitting(false);
     }
   };
 
@@ -82,6 +84,8 @@ export function FindingsPanel({
       setCommentModalOpen(false);
       setCommentText('');
       setCommentType('general');
+    } catch {
+      // The page has shown the error; keep the comment open so it can be sent again.
     } finally {
       setSubmitting(false);
     }
@@ -314,7 +318,7 @@ export function FindingsPanel({
                           </button>
                         </div>
                       </div>
-                    ) : (
+                    ) : onAddReply && (
                       <button
                         onClick={() => setReplyingTo(comment.id)}
                         className="text-sm px-3 py-1.5 text-blue-600 border border-blue-200 rounded hover:bg-blue-50 cursor-pointer transition-colors font-medium"
@@ -328,13 +332,15 @@ export function FindingsPanel({
             ))}
           </div>
 
-          <button
-            onClick={handleOpenCommentModal}
-            className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md border border-neutral-300 bg-white text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
-          >
-            <MessageSquare className="h-4 w-4" />
-            Add New Comment
-          </button>
+          {onAddComment && (
+            <button
+              onClick={handleOpenCommentModal}
+              className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md border border-neutral-300 bg-white text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Add New Comment
+            </button>
+          )}
         </div>
       </div>
 

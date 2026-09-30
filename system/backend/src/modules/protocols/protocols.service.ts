@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
@@ -272,6 +272,79 @@ export class ProtocolsService {
     } finally {
       client.release();
     }
+  }
+
+  // Adds a review comment, or a reply when parentCommentKey is given. The author is
+  // always the signed-in user, never a name supplied by the client.
+  async addComment(
+    projectId: string,
+    sectionKey: string,
+    body: { content?: string; type?: string; parentCommentKey?: string },
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const content = typeof body.content === 'string' ? body.content.trim() : '';
+    if (!content) throw new BadRequestException('Comment cannot be empty');
+    if (content.length > 10000) throw new BadRequestException('Comment is too long');
+    const type = ['general', 'issue', 'approval-request'].includes(body.type ?? '') ? body.type : 'general';
+    const isReply = Boolean(body.parentCommentKey);
+
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const author = (await client.query('select id, name from users where id = $1', [actor?.userId])).rows[0];
+      if (!author) throw new ForbiddenException('Authenticated user not found');
+      const role = (await client.query(
+        'select role_title from project_members where project_id = $1 and user_id = $2 order by created_at limit 1',
+        [projectId, author.id],
+      )).rows[0]?.role_title ?? null;
+
+      const protocolId = await this.ensureForProject(projectId, client);
+      const section = (await client.query(
+        'select id, title from protocol_section where protocol_id = $1 and section_key = $2',
+        [protocolId, sectionKey],
+      )).rows[0];
+      if (!section) throw new NotFoundException('Protocol section not found');
+
+      if (isReply) {
+        const parent = (await client.query(
+          'select id from protocol_section_comment where section_id = $1 and comment_key = $2',
+          [section.id, body.parentCommentKey],
+        )).rows[0];
+        if (!parent) throw new NotFoundException('Comment not found');
+        await client.query(
+          `insert into protocol_section_comment_reply (comment_id, reply_key, author_user_id, author_name, author_role, content)
+           values ($1, $2, $3, $4, $5, $6)`,
+          [parent.id, `r-${randomUUID()}`, author.id, author.name, role, content],
+        );
+      } else {
+        await client.query(
+          `insert into protocol_section_comment (section_id, comment_key, author_user_id, author_name, author_role, content, comment_type)
+           values ($1, $2, $3, $4, $5, $6, $7)`,
+          [section.id, `c-${randomUUID()}`, author.id, author.name, role, content, type],
+        );
+      }
+
+      await this.audit.record({
+        projectId,
+        stepId: 'protocol-review',
+        type: isReply ? 'protocol.comment.replied' : 'protocol.comment.added',
+        message: `${isReply ? 'Reply' : 'Comment'} added to section "${section.title}"`,
+        entityType: 'protocol_section',
+        entityId: sectionKey,
+        entityLabel: section.title,
+        actor,
+        metadata: { content, type: isReply ? 'reply' : type },
+      }, client);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const protocol = await this.getByProject(projectId);
+    return protocol?.sections?.find((s: any) => s.id === sectionKey)?.comments ?? [];
   }
 
   async ensureForProject(projectId: string, client: PoolClient): Promise<string> {

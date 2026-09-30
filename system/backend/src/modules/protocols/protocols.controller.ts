@@ -79,6 +79,17 @@ export class ProtocolsController {
     );
   }
 
+  @Post('/:projectId/protocol/sections/:sectionId/comments')
+  async addComment(
+    @Param('projectId') projectId: string,
+    @Param('sectionId') sectionId: string,
+    @Body() body: { content?: string; type?: string; parentCommentKey?: string },
+    @Req() req: any,
+  ) {
+    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    return this.protocols.addComment(projectId, sectionId, body, req.user);
+  }
+
   @Get('/:projectId/generate-protocol/progress')
   getGenerateProtocolProgress(@Param('projectId') projectId: string) {
     const entry = this.generationProgress.get(`protocol:${projectId}`);

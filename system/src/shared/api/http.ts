@@ -39,7 +39,7 @@ async function parseJsonSafe(res: Response) {
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   // Lazy import avoids circular deps; token module has no React imports
-  const { getToken, clearToken } = await import('../auth/token');
+  const { getToken } = await import('../auth/token');
   const token = getToken();
   const { headers: callerHeaders, ...restInit } = init ?? {};
   const res = await fetch(path.startsWith('/api') ? path : `/api${path}`, {
@@ -52,13 +52,6 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (!res.ok) {
-    // A 401 on a request that carried a token means the session has expired or
-    // been revoked. Every further action would fail, so send the user to sign in
-    // rather than leave a page that looks usable.
-    if (res.status === 401 && token && window.location.pathname !== '/login') {
-      clearToken();
-      window.location.assign('/login?expired=1');
-    }
     const payload = await parseJsonSafe(res);
     throw new ApiError(`API request failed: ${res.status} ${res.statusText}`, res.status, payload);
   }
