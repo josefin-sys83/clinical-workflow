@@ -77,7 +77,7 @@ export class ResultsService {
         [projectId],
       ),
       getPool().query(
-        `select s.id,s.title from report_section s join report r on r.id=s.report_id
+        `select s.id,s.title,s.section_key as key from report_section s join report r on r.id=s.report_id
         where r.project_id=$1 order by s.position,s.id`,
         [projectId],
       ),
@@ -91,8 +91,31 @@ export class ResultsService {
       results,
       supportingDocuments: documents.rows,
       sections: sections.rows,
+      sectionOptions: await this.sectionOptions(projectId, sections.rows),
       locked: locked.rows.length > 0,
     };
+  }
+
+  // Preview destinations are read-only; their UUIDs are created by the existing save transaction.
+  private async sectionOptions(
+    projectId: string,
+    existing: { id: string; key: string; title: string }[],
+  ) {
+    const { rows } = await getPool().query(
+      `select p.data->'scope' as scope,
+       array(select m.code from project_markets pm join markets m on m.id=pm.market_id
+         where pm.project_id=p.id order by m.code) as markets from projects p where p.id=$1`,
+      [projectId],
+    );
+    const definitions = getReportSectionDefinitions(
+      resolveReportMarkets(rows[0]?.markets ?? [], rows[0]?.scope),
+    );
+    return [
+      ...existing,
+      ...definitions
+        .filter(section => !existing.some(saved => saved.key === section.id))
+        .map(section => ({ id: null, key: section.id, title: section.title })),
+    ];
   }
 
   async uploadSupportingDocument(
@@ -250,6 +273,17 @@ export class ResultsService {
       const reportId = reports[0].id;
       await this.ensureSections(client, projectId, reportId);
       const data = this.fields(body);
+      if (body.reportSectionKey) {
+        if (body.reportSectionId)
+          throw new BadRequestException('Choose a section ID or key, not both.');
+        const section = await client.query(
+          'select id from report_section where report_id=$1 and section_key=$2',
+          [reportId, body.reportSectionKey],
+        );
+        if (!section.rows.length)
+          throw new BadRequestException('Report section is no longer available.');
+        data.report_section_id = section.rows[0].id;
+      }
       const state = {
         status: 'draft',
         placement: 'unplaced',

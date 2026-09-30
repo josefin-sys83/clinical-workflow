@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, PartialType, PickType } from '@nestjs/swagger';
 import {
   IsIn,
   IsInt,
@@ -99,10 +99,30 @@ export class ResultFieldsDto {
 }
 
 export class CreateResultDto extends ResultFieldsDto {
+  @ApiPropertyOptional({ description: 'Stable report section key for an unsaved import preview.' })
+  @IsOptional()
+  @IsString()
+  @Matches(/\S/)
+  @MaxLength(200)
+  @NoNullBytes()
+  reportSectionKey?: string;
+
   @ApiProperty({ enum: RESULT_TYPES })
   @IsIn(RESULT_TYPES)
   type!: ResultType;
 }
+
+export class SuggestResultDto extends PickType(CreateResultDto, [
+  'type', 'content', 'sourceFilename', 'sourceLocation', 'originalReference',
+] as const) {}
+
+export type ResultSuggestion = {
+  title: string | null;
+  reportSectionKey: string | null;
+  description: string | null;
+  limitation: string | null;
+  alternativeSectionKeys?: string[];
+};
 
 // Undefined means unchanged; null only clears explicitly nullable fields.
 export class UpdateResultDto extends PartialType(ResultFieldsDto, {

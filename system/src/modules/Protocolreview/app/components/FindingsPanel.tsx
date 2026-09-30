@@ -1,3 +1,4 @@
+import { getIssuePresentation } from '@/shared/protocol/issues';
 import { useState } from 'react';
 import { AlertTriangle, XCircle, MessageSquare, Sparkles, X, ChevronRight, Send } from 'lucide-react';
 import type { RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
@@ -121,86 +122,84 @@ export function FindingsPanel({
         {/* Regulatory Findings */}
         <div className="p-4 bg-white">
           <h3 className="text-sm font-medium text-neutral-900 mb-3">
-            Regulatory Findings
+            Regulatory Findings ({findings.length})
           </h3>
           <div className="space-y-3">
-            {findings.map((finding) => (
-              <div
-                key={finding.id}
-                className={`p-4 rounded-md border ${
-                  finding.acceptedRisk
-                    ? 'bg-neutral-50 border-neutral-300'
-                    : finding.severity === 'blocker'
-                    ? 'bg-rose-50 border-rose-200'
-                    : 'bg-yellow-50 border-yellow-200'
-                }`}
-              >
-                <div className="mb-2">
-                  <span
-                    className={`inline-block text-xs font-medium px-2 py-0.5 rounded ${
-                      finding.acceptedRisk
-                        ? 'bg-neutral-200 text-neutral-700'
-                        : finding.severity === 'blocker'
-                        ? 'bg-rose-50 text-rose-800'
-                        : 'bg-yellow-100 text-yellow-800'
-                    }`}
-                  >
-                    {finding.acceptedRisk ? 'Risk Accepted' : finding.severity === 'blocker' ? 'Blocker' : 'Warning'}
-                  </span>
-                </div>
-                
-                <h4 className="text-sm font-semibold text-neutral-900 mb-2">
-                  {finding.location}
-                </h4>
-                
-                <p className="text-sm text-neutral-900 mb-4 leading-relaxed">
-                  {finding.description}
-                </p>
-                
-                {finding.acceptedRisk && finding.acceptedBy && finding.acceptedAt && (
-                  <div className="mb-4 p-2 bg-neutral-100 rounded text-xs text-neutral-600">
-                    <div>Risk accepted by <span className="font-medium">{finding.acceptedBy}</span></div>
-                    <div>{formatTimestamp(finding.acceptedAt)}</div>
-                  </div>
-                )}
-                
-                <div className="flex items-center justify-between text-xs text-neutral-600 mb-1">
-                  <span>Affected section</span>
-                  <span className="font-medium">{finding.sectionId.replace('section-', '')}</span>
-                </div>
-                
-                {finding.sectionOwner && (
-                  <div className="flex items-center justify-between text-xs text-neutral-600 mb-3">
-                    <span>Section owner</span>
-                    <span className="font-medium">{finding.sectionOwner}</span>
-                  </div>
-                )}
-                
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => onFindingClick(finding.sectionId)}
-                    className={`text-sm font-medium hover:underline ${
-                      finding.acceptedRisk
-                        ? 'text-neutral-700'
-                        : finding.severity === 'blocker'
-                        ? 'text-rose-700'
-                        : 'text-yellow-800'
-                    }`}
-                  >
-                    Navigate to Section {finding.sectionId.replace('section-', '')} &gt;
-                  </button>
-                  
-                  {!finding.acceptedRisk && (
-                    <button
-                      onClick={() => onAcceptRisk(finding.id)}
-                      className="ml-auto text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-1 border border-neutral-300 rounded hover:bg-neutral-100"
+            {findings.map((finding) => {
+              const presentation = getIssuePresentation(finding.severity);
+              return (
+                <div
+                  key={`${finding.sectionId}-${finding.id}`}
+                  data-review-finding-severity={finding.severity}
+                  className={`p-4 rounded-md border ${
+                    finding.acceptedRisk
+                      ? 'bg-neutral-50 border-neutral-300'
+                      : `${presentation.badge} ${presentation.border}`
+                  }`}
+                >
+                  <div className="mb-2">
+                    <span
+                      className={`inline-block text-xs font-medium px-2 py-0.5 rounded ${
+                        finding.acceptedRisk
+                          ? 'bg-neutral-200 text-neutral-700'
+                          : presentation.badge
+                      }`}
                     >
-                      Accept Risk
-                    </button>
+                      {presentation.label}{finding.acceptedRisk ? ' · Risk Accepted' : ''}
+                    </span>
+                  </div>
+
+                  <h4 className="text-sm font-semibold text-neutral-900 mb-2">
+                    {finding.location}
+                  </h4>
+
+                  <p className="text-sm text-neutral-900 mb-4 leading-relaxed">
+                    {finding.description}
+                  </p>
+
+                  {finding.acceptedRisk && finding.acceptedBy && finding.acceptedAt && (
+                    <div className="mb-4 p-2 bg-neutral-100 rounded text-xs text-neutral-600">
+                      <div>Risk accepted by <span className="font-medium">{finding.acceptedBy}</span></div>
+                      <div>{formatTimestamp(finding.acceptedAt)}</div>
+                    </div>
                   )}
+
+                  <div className="flex items-center justify-between text-xs text-neutral-600 mb-1">
+                    <span>Affected section</span>
+                    <span className="font-medium">{finding.sectionId.replace('section-', '')}</span>
+                  </div>
+
+                  {finding.sectionOwner && (
+                    <div className="flex items-center justify-between text-xs text-neutral-600 mb-3">
+                      <span>Section owner</span>
+                      <span className="font-medium">{finding.sectionOwner}</span>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onFindingClick(finding.sectionId)}
+                      className={`text-sm font-medium hover:underline ${
+                        finding.acceptedRisk
+                          ? 'text-neutral-700'
+                          : presentation.text
+                      }`}
+                    >
+                      Navigate to Section {finding.sectionId.replace('section-', '')} &gt;
+                    </button>
+
+                    {!finding.acceptedRisk && (
+                      <button
+                        onClick={() => onAcceptRisk(finding.id)}
+                        className="ml-auto text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-1 border border-neutral-300 rounded hover:bg-neutral-100"
+                      >
+                        Accept Risk
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

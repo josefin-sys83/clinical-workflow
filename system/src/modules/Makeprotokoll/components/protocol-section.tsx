@@ -8,7 +8,7 @@ import { apiErrorMessage } from '@/shared/api/http';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
-import { InlineIssueMarker } from './inline-issue-marker';
+import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueSeverity } from '@/shared/protocol/issues';
 import { CommentsModal } from './comments-modal';
 import { SectionCompletenessIndicator } from './section-completeness-indicator';
 import { AmendmentWarning } from './amendment-warning';
@@ -27,7 +27,7 @@ import {
 
 interface ProtocolIssue {
   id: string;
-  severity: 'blocker' | 'warning';
+  severity: IssueSeverity;
   subsection: string;
   description: string;
   reference?: string;
@@ -259,14 +259,10 @@ function ProtocolSectionComponent(
   const isApproved = section.approvalStatus === 'approved';
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
-  // Count open issues by severity
-  const openIssues = (section.issues || []).filter(i => i.status === 'open' || !i.status);
-  const { blocker: blockerCount, warning: warningCount } = openIssues.reduce(
-    (counts, issue) => ({ ...counts, [issue.severity]: counts[issue.severity] + 1 }),
-    { blocker: 0, warning: 0 },
-  );
+  const openIssues = (section.issues || []).filter(isOpenIssue);
+  const severityCounts = countIssueSeverities(openIssues).filter(({ count }) => count > 0);
   const totalIssues = openIssues.length;
-  const isBlocked = blockerCount > 0;
+  const isBlocked = openIssues.some(issue => issue.severity === 'blocker');
   const analysisBlocksApproval = section.aiGenerated && analysisStatus !== 'succeeded';
 
   // ─── contentEditable rich text editor ───────────────────────────────────
@@ -530,36 +526,23 @@ function ProtocolSectionComponent(
               )}
               {/* Issue Count Badges - clickable, expand issues list */}
               {totalIssues > 0 && (
-                <span className="inline-flex items-center gap-2" aria-label="Open findings summary" aria-live="polite" data-section-findings-summary={section.id}>
+                <span className="inline-flex flex-wrap items-center gap-2" aria-label="Open findings summary" aria-live="polite" data-section-findings-summary={section.id}>
                   <span className="text-xs text-slate-600">Open findings:</span>
-                  {blockerCount > 0 && (
+                  {severityCounts.map(({ severity, count, label, plural, badge, border }) => (
                     <button
+                      key={severity}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!isExpanded) onToggle();
                         setIssuesExpanded(true);
                         setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
                       }}
-                      className="px-2 py-0.5 bg-rose-50 text-xs rounded border border-rose-300 hover:bg-red-200 hover:border-red-400 transition-colors cursor-pointer" style={{color: '#991b1b'}}
-                      title="Open blockers in the findings list; completeness checks are counted separately"
+                      className={`px-2 py-0.5 text-xs rounded border hover:brightness-95 transition-colors cursor-pointer ${badge} ${border}`}
+                      title={`Open ${label.toLowerCase()} findings; completeness checks are counted separately`}
                     >
-                      {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
+                      {count} {count === 1 ? label : plural}
                     </button>
-                  )}
-                  {warningCount > 0 && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!isExpanded) onToggle();
-                        setIssuesExpanded(true);
-                        setTimeout(() => issuesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), isExpanded ? 50 : 300);
-                      }}
-                      className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded border border-amber-200 hover:bg-amber-100 hover:border-amber-300 transition-colors cursor-pointer"
-                      title="Open warnings in the findings list; completeness checks are counted separately"
-                    >
-                      {warningCount} Warning{warningCount > 1 ? 's' : ''}
-                    </button>
-                  )}
+                  ))}
                 </span>
               )}
             </div>
@@ -891,22 +874,12 @@ function ProtocolSectionComponent(
                   onClick={() => setIssuesExpanded(v => !v)}
                   className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors text-left cursor-pointer"
                 >
-                  <div className="flex items-center gap-3">
-                    {blockerCount > 0 && (
-                      <span className="flex items-center gap-1.5 text-xs font-medium" style={{color: '#991b1b'}}>
-                        <span className="w-2 h-2 rounded-full bg-red-600 flex-shrink-0" />
-                        {blockerCount} Blocker{blockerCount > 1 ? 's' : ''}
+                  <div className="flex flex-wrap items-center gap-3">
+                    {severityCounts.map(({ severity, count, label, plural, text }) => (
+                      <span key={severity} className={`text-xs font-medium ${text}`}>
+                        {count} {count === 1 ? label : plural}
                       </span>
-                    )}
-                    {blockerCount > 0 && warningCount > 0 && (
-                      <span className="text-slate-300 text-xs select-none">·</span>
-                    )}
-                    {warningCount > 0 && (
-                      <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700">
-                        <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
-                        {warningCount} Warning{warningCount > 1 ? 's' : ''}
-                      </span>
-                    )}
+                    ))}
                   </div>
                   <ChevronDown
                     className={`w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform ${issuesExpanded ? '' : '-rotate-90'}`}
@@ -916,7 +889,7 @@ function ProtocolSectionComponent(
 
                 {/* Issue cards */}
                 {openIssues.map((issue) => {
-                  const isBlockerIssue = issue.severity === 'blocker';
+                  const presentation = getIssuePresentation(issue.severity);
                   const showCard = issuesExpanded;
                   if (!showCard) return null;
                   return (
@@ -924,18 +897,18 @@ function ProtocolSectionComponent(
                       key={issue.id}
                       data-finding-id={issue.id}
                       data-finding-severity={issue.severity}
-                      className={`border-l-4 rounded p-3 ${isBlockerIssue ? 'bg-rose-50 border-rose-500' : 'bg-amber-50 border-amber-500'}`}
+                      className={`border-l-4 rounded p-3 ${presentation.badge} ${presentation.border}`}
                     >
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${isBlockerIssue ? 'bg-rose-50' : 'bg-amber-100 text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
-                          {issue.severity}
+                        <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${presentation.badge}`}>
+                          {presentation.label}
                         </span>
                         {issue.raisedBy?.toLowerCase().includes('system') && (
                           <span className="text-xs text-slate-500">AI Regulatory Review</span>
                         )}
                         <span className="text-xs font-medium text-slate-900">{issue.subsection}</span>
                       </div>
-                      <p className={`text-xs leading-relaxed mb-1 ${isBlockerIssue ? '' : 'text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
+                      <p className={`text-xs leading-relaxed mb-1 ${presentation.text}`}>
                         {issue.description}
                       </p>
                       {issue.reference && (
