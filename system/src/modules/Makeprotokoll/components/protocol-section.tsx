@@ -5,7 +5,8 @@ import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type Rev
 import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
 import { SaveStatus } from '@/shared/editor/SaveStatus';
 import { apiErrorMessage } from '@/shared/api/http';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2, List, ListOrdered } from 'lucide-react';
+import { editTable, tableCellAt, TABLE_ACTIONS, type TableAction } from '@/shared/editor/table-editing';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueSeverity } from '@/shared/protocol/issues';
@@ -245,6 +246,7 @@ function ProtocolSectionComponent(
   const [wontFixComment, setWontFixComment] = useState('');
   const [hoveredRoleTerm, setHoveredRoleTerm] = useState<'reviewer' | 'approver' | null>(null);
   const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set(['normal']));
+  const [inTable, setInTable] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const editorSelectionRef = useRef<Range | null>(null);
 
@@ -274,6 +276,8 @@ function ProtocolSectionComponent(
       // on entry so toolbar updates cannot replace the user's in-progress edits.
       editorRef.current.innerHTML = renderContent(section.content || '') || '<p><br></p>';
       editorRef.current.focus();
+      // Enter starts a new paragraph in every browser, instead of a <div> or <br>.
+      document.execCommand('defaultParagraphSeparator', false, 'p');
       return trackReviewEditor(editorRef.current, openIssues, setEditorFindings);
     }
   }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -297,12 +301,15 @@ function ProtocolSectionComponent(
       if (document.queryCommandState('bold'))      active.add('bold');
       if (document.queryCommandState('italic'))    active.add('italic');
       if (document.queryCommandState('underline')) active.add('underline');
+      if (document.queryCommandState('insertUnorderedList')) active.add('ul');
+      if (document.queryCommandState('insertOrderedList'))   active.add('ol');
       const block = document.queryCommandValue('formatBlock').toLowerCase().replace(/[^a-z0-9]/g, '');
       if      (block === 'h1') active.add('h1');
       else if (block === 'h2') active.add('h2');
       else                     active.add('normal');
     } catch { active.add('normal'); }
     setActiveFormats(active);
+    setInTable(Boolean(tableCellAt(editorRef.current)));
     rememberEditorSelection();
   };
 
@@ -340,6 +347,17 @@ function ProtocolSectionComponent(
   const handleH1        = () => execFmt('formatBlock', 'h1');
   const handleH2        = () => execFmt('formatBlock', 'h2');
   const handleNormal    = () => execFmt('formatBlock', 'p');
+  const handleBulletList   = () => execFmt('insertUnorderedList');
+  const handleNumberedList = () => execFmt('insertOrderedList');
+
+  const handleTable = (action: TableAction) => {
+    const cell = tableCellAt(editorRef.current);
+    if (!cell) return;
+    editTable(cell, action);
+    setIsDirty(true); // structural edits don't fire the editor's input event
+    editorRef.current?.focus();
+    updateActiveFormats();
+  };
 
   const handleInsertTable = () => {
     const th = (n: number) =>
@@ -955,6 +973,10 @@ function ProtocolSectionComponent(
                         <button title="Heading 2" style={activeFormats.has('h2') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('h2')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleH2}><Heading2 size={13} /></button>
                         <button title="Normal text" style={activeFormats.has('normal') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('normal')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleNormal}><Type size={13} /></button>
                         {divider}
+                        {/* List group */}
+                        <button title="Bulleted list" style={activeFormats.has('ul') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('ul')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleBulletList}><List size={13} /></button>
+                        <button title="Numbered list" style={activeFormats.has('ol') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('ol')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleNumberedList}><ListOrdered size={13} /></button>
+                        {divider}
                         {/* Insert group */}
                         <button title="Insert table" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleInsertTable}><Table2 size={13} /></button>
                         <button title="Insert image" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleImageInsert}><Image size={13} /></button>
@@ -979,6 +1001,22 @@ function ProtocolSectionComponent(
                           </select>
                         )}
                       </div>
+                      {/* ── Table tools, shown while the caret is in a table ── */}
+                      {inTable && (
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, padding: '4px 6px', backgroundColor: '#f1f5f9', borderLeft: '2px solid #3b82f6', borderRight: '2px solid #3b82f6', fontSize: 12, color: '#475569' }}>
+                          <span style={{ marginRight: 4 }}>Table</span>
+                          {TABLE_ACTIONS.map(([action, label]) => (
+                            <button
+                              key={action}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => handleTable(action)}
+                              style={{ padding: '2px 8px', border: '1px solid #cbd5e1', borderRadius: 4, background: 'white', cursor: 'pointer', color: action === 'deleteTable' ? '#b91c1c' : '#334155' }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       {/* ── WYSIWYG contentEditable editor ── */}
                       <div
                         ref={editorRef}
