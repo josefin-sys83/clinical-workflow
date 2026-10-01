@@ -1,3 +1,4 @@
+import { FindingRequirement } from '@/shared/protocol/FindingRequirement';
 import { AlertTriangle, ChevronRight, Download, CheckCircle2 } from 'lucide-react';
 import { ReportSection, User } from '../types';
 import { useState } from 'react';
@@ -52,6 +53,7 @@ export function QualitySystemPanel({
 
   // Collect real AI-analyzed issues across all sections
   interface FlatIssue {
+    requirementId?: string | null;
     id: string;
     rawIssueId?: string;
     type: 'blocker' | 'warning';
@@ -81,6 +83,7 @@ export function QualitySystemPanel({
       allFindings.push({
         id: `${sec.id}-${issue.id || Math.random()}`,
         rawIssueId: issue.id,
+        requirementId: issue.requirementId,
         type: issue.severity === 'blocker' ? 'blocker' : 'warning',
         title: issue.subsection || (issue.description?.substring(0, 60) ?? 'Issue'),
         description: issue.description || '',
@@ -201,6 +204,7 @@ export function QualitySystemPanel({
                     <p className="text-xs text-slate-600 leading-relaxed mb-2">
                       {finding.description}
                     </p>
+                    <FindingRequirement requirementId={finding.requirementId} />
                     <div className={`pt-2 border-t ${borderColor} space-y-1.5`}>
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-slate-500">Affected section</span>

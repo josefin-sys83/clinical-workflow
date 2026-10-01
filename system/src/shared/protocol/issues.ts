@@ -7,6 +7,7 @@ export const ISSUE_SEVERITIES = [
 export type IssueSeverity = typeof ISSUE_SEVERITIES[number];
 
 export interface IssueMetadata {
+  requirementId?: string | null;
   source?: string | null;
   targetSection?: string | null;
   remediation?: string | null;

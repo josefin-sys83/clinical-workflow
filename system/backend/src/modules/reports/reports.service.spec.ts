@@ -37,6 +37,26 @@ describe('relational reports', () => {
     expect(release).toHaveBeenCalled();
   });
 
+  it('stores a valid requirement link and rejects unknown links before replacing findings', async () => {
+    const original = query.getMockImplementation()!;
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes('select p.data from projects p')) return { rows: [{ data: { scope: { requirements: [
+        { id: 'req-1', status: 'accepted' },
+      ] } } }] };
+      return original(sql);
+    });
+    await (service as any).replaceSectionIssues('section', [
+      { id: 'finding', severity: 'warning', requirementId: 'req-1' },
+    ], client);
+    const insert = query.mock.calls.find(([sql]) => sql.startsWith('insert into report_section_issue('))!;
+    expect(insert[1][13]).toBe('req-1');
+    query.mockClear();
+    await expect((service as any).replaceSectionIssues('section', [
+      { id: 'finding', severity: 'warning', requirementId: 'foreign-project' },
+    ], client)).rejects.toThrow('accepted requirement in this project');
+    expect(query.mock.calls.some(([sql]) => sql.startsWith('delete from report_section_issue'))).toBe(false);
+  });
+
   it('rolls back a report write if its audit cannot be stored', async () => {
     jest.spyOn(service, 'getByProject').mockResolvedValue({ sections: {} });
     audit.record.mockRejectedValue(new Error('audit unavailable'));
@@ -78,6 +98,7 @@ describe('relational reports', () => {
 
   it('returns saved evidence and nested comments from relational rows', async () => {
     const rows: Record<string, any[]> = {
+      report_section_issue: [{ section_id: 'section', issue_key: 'finding', requirement_id: 'req-1' }],
       report_section_comment: [
         { id: 'parent', section_id: 'section', comment_key: 'c1', parent_comment_id: null, author_name: 'Writer', content: 'Comment', position: 1 },
         { id: 'reply', section_id: 'section', comment_key: 'c2', parent_comment_id: 'parent', author_name: 'Reviewer', content: 'Reply', position: 1 },
@@ -92,6 +113,7 @@ describe('relational reports', () => {
     });
     const report = await service.getByProject('project');
     expect(report.sections.safety.content).toBe('Saved');
+    expect(report.sections.safety.issues[0].requirementId).toBe('req-1');
     expect(report.sections.safety.comments[0].replies[0].text).toBe('Reply');
     expect(report.sections.safety.completenessElements[0].isoReference).toBe('Requirement 1');
     expect(report.crossConsistencyChecked).toBe(true);
@@ -179,7 +201,7 @@ describe('relational reports', () => {
     expect(sql).toBe('update report_section set updated_at=now(),updated_by_user_id=$2,title=$3,content=$4,status=$5,user_edited=$6,analysis_status=\'not-run\',analysis_error=null,analysis_request_id=null where id=$1');
     expect(values).toEqual(['section', actor.userId, 'Safety', '<p>Saved</p>', 'draft', true]);
     const issueInsert = query.mock.calls.find(([sql]) => sql.startsWith('insert into report_section_issue('))!;
-    expect(issueInsert[1]).toEqual(['section', 'issue', 1, 'info', undefined, undefined, 'Legacy description', undefined, undefined, null, 'open', undefined, undefined]);
+    expect(issueInsert[1]).toEqual(['section', 'issue', 1, 'info', undefined, undefined, 'Legacy description', undefined, undefined, null, 'open', undefined, undefined, null]);
     expect(query.mock.calls.filter(([sql]) => sql.startsWith('insert into report_section_issue_dismissal'))).toHaveLength(1);
     expect(audit.record.mock.calls[0][0].metadata.dismissedDescriptions).toEqual(['Not applicable', 'Not applicable']);
   });

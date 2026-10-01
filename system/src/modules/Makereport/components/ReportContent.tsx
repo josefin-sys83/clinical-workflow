@@ -1,3 +1,4 @@
+import { FindingRequirement } from '@/shared/protocol/FindingRequirement';
 import { SectionAnalysisOverlay } from '@/shared/editor/SectionAnalysisOverlay';
 import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
@@ -816,6 +817,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                             <p className={`text-xs leading-relaxed mb-1 ${isBlockerIssue ? '' : 'text-amber-800'}`} style={isBlockerIssue ? {color: '#991b1b'} : undefined}>
                               {issue.description}
                             </p>
+                            <FindingRequirement requirementId={issue.requirementId} />
                             {issue.reference && (
                               <div className="text-xs text-slate-500 italic mb-1">{issue.reference}</div>
                             )}

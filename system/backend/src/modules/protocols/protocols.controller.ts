@@ -24,7 +24,8 @@ import { Roles } from '../auth/roles.decorator';
 import { PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
 import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
-import { acceptedRequirementsText, buildGenerationMetadataLog, buildProtocolGenerationContext, sourceSynopsisText } from '../projects/project-generation-context';
+import { buildGenerationMetadataLog, buildProtocolGenerationContext, sourceSynopsisText } from '../projects/project-generation-context';
+import { findingRequirementsText, validateFindingRequirements } from '../projects/finding-requirements';
 import { ConflictException } from '@nestjs/common';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -268,7 +269,8 @@ export class ProtocolsController {
       .filter((s: any) => ['Study Design', 'Study Rationale & Objectives'].includes(s.title) && s.title !== sectionTitle && s.content)
       .map((s: any) => ({ title: s.title, content: s.content }));
 
-    const acceptedRequirements = acceptedRequirementsText(project?.data?.scope?.requirements);
+    const requirements = project?.data?.scope?.requirements;
+    const acceptedRequirements = findingRequirementsText(requirements);
     const synopsisExcerpt = sourceSynopsisText(project?.data?.synopsis);
 
     const protocolAttachments = await this.protocols.listAttachmentsForAnalysis(project.id);
@@ -311,7 +313,7 @@ export class ProtocolsController {
     // integration is configured. Once fixed, the normal AI review runs below.
     if (attachmentIssues.length > 0) {
       return {
-        issues: mergeIssues(ruleIssues, attachmentIssues),
+        issues: validateFindingRequirements(mergeIssues(ruleIssues, attachmentIssues), requirements),
         requiredElements: requiredElements || [],
         analysisSource: 'deterministic',
       };
@@ -323,7 +325,10 @@ export class ProtocolsController {
 
     // Deterministic rule-based checks always run alongside the AI analysis, so
     // regulatory-reference and specificity gaps are caught even if the AI misses them.
-    result.issues = mergeIssues(mergeIssues(result.issues || [], ruleIssues), attachmentIssues);
+    result.issues = validateFindingRequirements(mergeIssues(
+      mergeIssues(validateFindingRequirements(result.issues || [], requirements, 'ai'), ruleIssues),
+      attachmentIssues,
+    ), requirements);
     return result;
   }
 

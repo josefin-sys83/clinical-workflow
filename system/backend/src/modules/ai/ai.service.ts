@@ -261,6 +261,7 @@ export class AiService {
     intendedUse: string,
     appendicesList?: string[],
     amendmentContext?: { number: number; title: string; reason: string; description: string } | null,
+    acceptedRequirements?: string,
   ): Promise<any> {
     return this.post('/v1/ai/analyze-report-section', {
       sectionTitle,
@@ -270,6 +271,7 @@ export class AiService {
       intendedUse,
       appendicesList,
       amendmentContext,
+      acceptedRequirements,
     });
   }
 

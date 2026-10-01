@@ -63,6 +63,7 @@ export interface RegulatoryFinding {
   source: FindingSource;
   /** Requirement or clause returned as source by section analysis. */
   requirementSource?: string | null;
+  requirementId?: string | null;
   targetSection?: string | null;
   remediation?: string | null;
   sectionOwner?: string;

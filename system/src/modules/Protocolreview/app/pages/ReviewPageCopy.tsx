@@ -125,6 +125,7 @@ export default function ReviewPageCopy() {
           severity: issue.severity,
           source: 'system',
           requirementSource: issue.source,
+          requirementId: issue.requirementId,
           reference: issue.reference,
           targetSection: issue.targetSection,
           remediation: issue.remediation,

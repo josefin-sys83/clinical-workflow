@@ -7,13 +7,14 @@ const element = z.object({ id: text, name: text, reference: text });
 const reviewedElement = element.extend({ status: z.enum(['complete', 'partial', 'missing']) });
 const issue = z.object({ description: text, severity: z.enum(['blocker', 'warning']) }).passthrough();
 
-// Mirrors clinical_ai/modules/protocol/models.py and readme_schema.md.
+// The AI service must also expose requirementId in its structured response model.
 const protocolIssue = z.object({
   id: text,
   severity: protocolIssueSeverity,
   subsection: text,
   description: text,
   source: text.nullable(),
+  requirementId: z.string().nullable(),
   targetSection: text.nullable(),
   remediation: text.nullable(),
   raisedBy: z.literal('AI Regulatory Review'),

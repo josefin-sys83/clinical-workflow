@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { validateFindingRequirements } from '../projects/finding-requirements';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
@@ -443,6 +444,15 @@ export class ReportsService {
 
   private async replaceSectionIssues(sectionId: string, issues: any, client: PoolClient) {
     const items = list(issues, 'issues');
+    if (items.some(issue => issue?.requirementId != null && issue.requirementId !== '')) {
+      const { rows } = await client.query(
+        `select p.data from projects p
+         join report r on r.project_id=p.id
+         join report_section s on s.report_id=r.id
+         where s.id=$1 for update of p`, [sectionId],
+      );
+      validateFindingRequirements(items, rows[0]?.data?.scope?.requirements);
+    }
     const dismissals = await client.query(
       'select description from report_section_issue_dismissal where section_id=$1', [sectionId],
     );
@@ -454,8 +464,8 @@ export class ReportsService {
       // Keep the existing exact-description dismissal rule across reanalysis and reload.
       if (suppressed.has(issue.description ?? issue.message ?? '')) continue;
       await client.query(
-        `insert into report_section_issue(section_id,issue_key,position,severity,title,subsection,description,reference,raised_by,raised_date,status,due_date,text_quote)
-              values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        `insert into report_section_issue(section_id,issue_key,position,severity,title,subsection,description,reference,raised_by,raised_date,status,due_date,text_quote,requirement_id)
+              values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           sectionId,
           issue.id ?? randomUUID(),
@@ -470,6 +480,7 @@ export class ReportsService {
           issue.status ?? 'open',
           issue.dueDate,
           issue.textQuote,
+          issue.requirementId || null,
         ],
       );
     }

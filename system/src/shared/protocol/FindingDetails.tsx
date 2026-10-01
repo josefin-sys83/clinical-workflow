@@ -7,6 +7,12 @@ export function FindingDetails({ finding }: { finding: IssueMetadata }) {
   const remediation = findingText(finding.remediation);
   return (
     <dl className="my-2 space-y-2 text-xs text-slate-700" data-finding-details>
+      {findingText(finding.requirementId) && (
+        <div>
+          <dt className="font-medium text-slate-900">Requirement</dt>
+          <dd className="break-words">{finding.requirementId}</dd>
+        </div>
+      )}
       <div>
         <dt className="font-medium text-slate-900">Source</dt>
         <dd className="whitespace-pre-wrap break-words">{source || reference || 'Not specified'}</dd>
