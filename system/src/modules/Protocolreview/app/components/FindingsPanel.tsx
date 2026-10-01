@@ -1,4 +1,5 @@
 import { getIssuePresentation } from '@/shared/protocol/issues';
+import { FindingDetails } from '@/shared/protocol/FindingDetails';
 import { useState } from 'react';
 import { AlertTriangle, XCircle, MessageSquare, Sparkles, X, ChevronRight, Send } from 'lucide-react';
 import type { RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
@@ -156,6 +157,7 @@ export function FindingsPanel({
                   <p className="text-sm text-neutral-900 mb-4 leading-relaxed">
                     {finding.description}
                   </p>
+                  <FindingDetails finding={{ ...finding, source: finding.requirementSource }} />
 
                   {finding.acceptedRisk && finding.acceptedBy && finding.acceptedAt && (
                     <div className="mb-4 p-2 bg-neutral-100 rounded text-xs text-neutral-600">

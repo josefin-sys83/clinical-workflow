@@ -25,6 +25,7 @@ import {
 } from '@/shared/api/documents';
 import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
 import { countIssueSeverities, getIssuePresentation, isOpenIssue } from '@/shared/protocol/issues';
+import { FindingDetails } from '@/shared/protocol/FindingDetails';
 
 
 
@@ -1302,6 +1303,7 @@ export default function App() {
                             <p className="text-xs text-slate-600 leading-relaxed mb-2">
                               {issue.description}
                             </p>
+                            <FindingDetails finding={issue} />
 
                             <div className={`pt-2 border-t ${presentation.border} space-y-1.5`}>
                               <div className="flex items-center justify-between">

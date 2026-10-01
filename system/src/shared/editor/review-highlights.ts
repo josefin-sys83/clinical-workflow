@@ -1,3 +1,5 @@
+import { ISSUE_SEVERITIES, type IssueSeverity } from '@/shared/protocol/issues';
+
 // Ranges exist only during an edit session. Saved findings are rendered from textQuote.
 type ReviewAnchor = { status: 'attached' | 'orphaned' | 'ambiguous'; start: number | null; end: number | null };
 type AnchorUpdate = { id: string; anchor: ReviewAnchor };
@@ -25,9 +27,37 @@ export interface ReviewFinding {
   status?: string;
   description?: string;
   message?: string;
+  remediation?: string | null;
+  acceptedRisk?: boolean;
 }
 
 const decorationSelector = 'mark[data-review-highlight]';
+
+const severityHighlight = {
+  blocker: { background: '#fee2e2', border: '#ef4444' },
+  warning: { background: '#fef9c3', border: '#f59e0b' },
+  cross_reference: { background: '#dbeafe', border: '#3b82f6' },
+  recommendation: { background: '#ccfbf1', border: '#14b8a6' },
+  human_decision_required: { background: '#f3e8ff', border: '#a855f7' },
+} satisfies Record<IssueSeverity, { background: string; border: string }>;
+
+function styleFindingHighlight(mark: HTMLElement, findings: ReviewFinding[]) {
+  const severities = ISSUE_SEVERITIES.filter(severity =>
+    findings.some(finding => !finding.acceptedRisk && finding.severity === severity));
+  if (!severities.length) {
+    mark.style.backgroundColor = '#f5f5f5';
+    mark.style.backgroundImage = 'none';
+    mark.style.borderBottom = '2px solid #d4d4d4';
+    return;
+  }
+  const colors = severities.map(severity => severityHighlight[severity]);
+  mark.style.backgroundColor = colors[0].background;
+  mark.style.backgroundImage = colors.length > 1
+    ? `repeating-linear-gradient(135deg, ${colors.map((color, index) =>
+      `${color.background} ${index * 8}px ${(index + 1) * 8}px`).join(', ')})`
+    : 'none';
+  mark.style.borderBottom = `2px solid ${colors[0].border}`;
+}
 
 /** Remove only our visual annotations, preserving edited text and user formatting. */
 export function stripReviewHighlights(html: string): string {
@@ -182,9 +212,7 @@ function captureReviewAnchors(root: HTMLElement, findings: ReviewFinding[], prev
       changed = true;
     }
     const active = findings.filter(finding => remaining.includes(finding.id!));
-    const blocker = active.some(finding => finding.severity === 'blocker');
-    mark.style.backgroundColor = blocker ? '#fee2e2' : '#fef9c3';
-    mark.style.borderBottom = `2px solid ${blocker ? '#ef4444' : '#f59e0b'}`;
+    styleFindingHighlight(mark, active);
   });
   if (changed) restoreSelection(root, selection);
   return updates;
@@ -224,15 +252,14 @@ export function highlightReviewHtml(html: string, findings: ReviewFinding[] = []
       const active = matches.filter(a => a.start < right && a.end > left);
       if (!active.length) { fragment.append(part); continue; }
       const issues = active.flatMap(a => a.finding ? [a.finding] : []);
-      const blocker = issues.some(issue => issue.severity === 'blocker');
       const mark = document.createElement('mark');
       mark.dataset.reviewHighlight = issues.length ? 'finding' : 'placeholder';
       if (issues.length) mark.dataset.reviewFindingIds = JSON.stringify([...new Set(issues.map(issue => issue.id).filter(Boolean))]);
-      mark.style.backgroundColor = issues.length ? (blocker ? '#fee2e2' : '#fef9c3') : '#fed7aa';
+      if (issues.length) styleFindingHighlight(mark, issues);
+      else mark.style.backgroundColor = '#fed7aa';
       mark.style.color = issues.length ? 'inherit' : '#9a3412';
       mark.style.borderRadius = '2px';
       if (issues.length) {
-        mark.style.borderBottom = `2px solid ${blocker ? '#ef4444' : '#f59e0b'}`;
         mark.title = [...new Set(issues.map(issue => issue.description || issue.message || '').filter(Boolean))].join('\n');
       }
       mark.append(part);

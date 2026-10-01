@@ -7,6 +7,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import App from '/src/modules/Makeprotokoll/App.tsx';
 import ReviewPage from '/src/modules/Protocolreview/app/pages/ReviewPageCopy.tsx';
+import { highlightReviewHtml } from '/src/shared/editor/review-highlights.ts';
 import '/src/styles/index.css';
 
 // Exercise the real Save and Won't fix handlers without AI calls or database writes.
@@ -26,12 +27,34 @@ const severityPlurals = {
   recommendation: 'Recommendations', human_decision_required: 'Human decisions required',
 };
 const allSeverities = Object.keys(severityLabels);
+const highlightColors = {
+  blocker: ['rgb(254, 226, 226)', 'rgb(239, 68, 68)'],
+  warning: ['rgb(254, 249, 195)', 'rgb(245, 158, 11)'],
+  cross_reference: ['rgb(219, 234, 254)', 'rgb(59, 130, 246)'],
+  recommendation: ['rgb(204, 251, 241)', 'rgb(20, 184, 166)'],
+  human_decision_required: ['rgb(243, 232, 255)', 'rgb(168, 85, 247)'],
+};
 const openFindings = [blocker, warning, ...allSeverities.slice(2).map(severity => issue(severity, severity))];
-openFindings.forEach(finding => { finding.raisedBy = 'Writer'; });
+const quotes = ['Eligibility criteria.', 'Safety monitoring.', 'Statistical methods.', 'Statistical methods.', 'Expert assessment.'];
+openFindings.forEach((finding, index) => {
+  Object.assign(finding, {
+    raisedBy: 'Writer', textQuote: quotes[index],
+    source: `Standard ${finding.severity} § 1`, targetSection: '9. Statistical Analysis',
+    remediation: `Suggested fix for ${finding.severity}.\nVerify the assumptions.`,
+  });
+});
+blocker.reference = 'EU MDR Annex XV § 2.1';
+// Null is intentional for a human decision; old or blank values also display cleanly.
+openFindings[4].source = null;
+openFindings[4].targetSection = null;
+openFindings[4].remediation = null;
+warning.source = '   ';
+warning.targetSection = '';
+warning.remediation = '   ';
 const synopsisCount = new URLSearchParams(location.search).has('synopsis') ? 1 : 0;
 const synopsisFinding = { severity: 'warning', description: 'Synopsis discrepancy' };
 const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['admin'] };
-const section = { id: '1', title: 'Subject Eligibility Criteria', content: '<p>Eligibility criteria.</p>',
+const section = { id: '1', title: 'Subject Eligibility Criteria', content: '<p>Eligibility <strong>criteria.</strong></p><p>Safety monitoring.</p><p>Statistical methods.</p><p>Expert assessment.</p>',
   status: 'draft', aiGenerated: true, analysisStatus: 'succeeded',
   issues: [...openFindings,
     ...allSeverities.flatMap(severity => [issue(`resolved-${severity}`, severity, 'resolved'), issue(`dismissed-${severity}`, severity, 'wont-fix')])],
@@ -68,12 +91,13 @@ createRoot(document.getElementById('root')).render(el(CurrentUserProvider, { use
   el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
     el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(App) })))));
 const assert = (value, message) => { if (!value) throw new Error(message); };
+let stage = 'initial render';
 const waitFor = async (predicate) => {
   for (let i = 0; i < 160; i++) {
     if (predicate()) return;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  throw new Error(`Timed out: ${errors.join('; ')}`);
+  throw new Error(`Timed out at ${stage}: ${errors.join('; ')}`);
 };
 const list = () => document.querySelector('[data-section-findings="1"]');
 const summary = () => document.querySelector('[data-section-findings-summary="1"]');
@@ -121,6 +145,37 @@ const checkDistinctStyles = cards => {
   });
   assert(new Set(styles).size === 5, `Severities must have five distinct backgrounds: ${styles.join(', ')}`);
 };
+const checkDetails = (card, finding) => {
+  const details = card.querySelector('[data-finding-details]');
+  assert(details, `Missing finding details for ${finding.id}`);
+  const fields = Object.fromEntries([...details.children].map(row =>
+    [row.querySelector('dt').textContent.trim(), row.querySelector('dd').textContent.trim()]));
+  assert(fields.Source === (finding.source?.trim() || finding.reference?.trim() || 'Not specified'), 'Source missing or wrong');
+  assert(fields.Reference === (finding.source?.trim() && finding.reference?.trim() || undefined), 'Reference missing or wrong');
+  assert(fields['Target section'] === (finding.targetSection?.trim() || 'Not specified'), 'Target section missing or wrong');
+  assert(fields['Suggested remediation'] === (finding.remediation?.trim() || 'No suggestion available'), 'Remediation missing or wrong');
+};
+const showRemediation = async (mark, expected) => {
+  stage = `popup for ${expected.map(finding => finding.id).join(', ')}`;
+  assert(mark, 'Missing quoted text highlight');
+  mark.scrollIntoView({ block: 'center' });
+  mark.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
+  await waitFor(() => document.querySelector('[data-review-remediation]'));
+  const popup = document.querySelector('[data-review-remediation]');
+  for (const finding of expected) {
+    const item = popup.querySelector(`[data-remediation-finding-id="${finding.id}"]`);
+    assert(item?.textContent.includes(finding.remediation?.trim() || 'No remediation'), `Popup remediation wrong for ${finding.id}`);
+  }
+  assert(popup.querySelectorAll('[data-remediation-finding-id]').length === expected.length, 'Overlap lost or added a finding');
+  await waitFor(() => popup.getBoundingClientRect().width > 0);
+  return popup;
+};
+const closeRemediation = async mark => {
+  stage = 'closing remediation popup';
+  mark.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await waitFor(() => !document.querySelector('[data-review-remediation]'));
+  await new Promise(requestAnimationFrame);
+};
 const save = async () => {
   button('Edit').click();
   await waitFor(() => document.querySelector('[contenteditable="true"]'));
@@ -134,12 +189,84 @@ const save = async () => {
   await waitFor(() => releaseAnalysis);
 };
 try {
+  const palette = document.createElement('div');
+  palette.innerHTML = highlightReviewHtml(`<p>${allSeverities.join(' ')}</p>`,
+    allSeverities.map(severity => ({ id: `palette-${severity}`, severity, textQuote: severity })));
+  document.body.append(palette);
+  for (const severity of allSeverities) {
+    const mark = [...palette.querySelectorAll('mark[data-review-finding-ids]')]
+      .find(candidate => JSON.parse(candidate.dataset.reviewFindingIds).includes(`palette-${severity}`));
+    assert(mark, `Missing ${severity} highlight`);
+    const style = getComputedStyle(mark);
+    assert(style.backgroundColor === highlightColors[severity][0], `${severity} highlight background mismatch`);
+    assert(style.borderBottomColor === highlightColors[severity][1], `${severity} highlight border mismatch`);
+  }
+  palette.remove();
   await waitFor(() => list()?.querySelectorAll('[data-finding-id]').length === 5);
   checkCounts(Object.fromEntries(allSeverities.map(severity => [severity, 1])));
   await waitFor(() => panelCards().length === 5 + synopsisCount);
   checkPanel(5, 5);
   checkDistinctStyles(list().querySelectorAll('[data-finding-id]'));
   checkDistinctStyles(panelCards());
+  for (const finding of openFindings) {
+    checkDetails(list().querySelector(`[data-finding-id="${finding.id}"]`), finding);
+    checkDetails([...panelCards()].find(card => card.textContent.includes(finding.description)), finding);
+  }
+  const sectionElement = document.querySelector('[data-protocol-section="1"]');
+  const highlight = id => [...sectionElement.querySelectorAll('mark[data-review-finding-ids]')]
+    .find(mark => JSON.parse(mark.dataset.reviewFindingIds).includes(id));
+  for (const finding of openFindings) {
+    const mark = highlight(finding.id);
+    const expected = openFindings.filter(f => JSON.parse(mark.dataset.reviewFindingIds).includes(f.id));
+    if (expected.length > 1) assert(getComputedStyle(mark).backgroundImage.includes('gradient'), 'Overlapping severities lost their striped highlight');
+    const popup = await showRemediation(mark, expected);
+    await waitFor(() => {
+      stage = `popup placement for ${finding.id}: side=${popup.dataset.side}, popup=${JSON.stringify(popup.getBoundingClientRect().toJSON())}, mark=${JSON.stringify(mark.getBoundingClientRect().toJSON())}`;
+      return popup.dataset.side === 'top' && popup.getBoundingClientRect().bottom <= mark.getBoundingClientRect().top;
+    });
+    // Moving into the popup keeps long suggestions available for reading and selection.
+    mark.dispatchEvent(new PointerEvent('pointerout', { bubbles: true }));
+    popup.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 220));
+    assert(document.querySelector('[data-review-remediation]'), 'Popup closed while reading remediation');
+    await closeRemediation(mark);
+  }
+  const keyboardMark = highlight('blocker');
+  stage = 'keyboard popup';
+  keyboardMark.blur();
+  keyboardMark.focus();
+  await waitFor(() => {
+    stage = 'keyboard popup';
+    return document.querySelector('[data-review-remediation]');
+  });
+  assert(document.activeElement === keyboardMark, 'Popup stole keyboard focus');
+  await closeRemediation(keyboardMark);
+  button('Edit').click();
+  stage = 'entering editor';
+  await waitFor(() => document.querySelector('[contenteditable="true"] mark'));
+  const editor = document.querySelector('[contenteditable="true"]');
+  const editorMark = editor.querySelector('mark');
+  const range = document.createRange();
+  range.selectNodeContents(editorMark);
+  range.collapse(false);
+  window.getSelection().removeAllRanges();
+  window.getSelection().addRange(range);
+  const caretNode = window.getSelection().anchorNode;
+  const caretOffset = window.getSelection().anchorOffset;
+  await showRemediation(editorMark, [blocker]);
+  assert(editor.contains(document.activeElement), 'Popup stole editor focus');
+  assert(window.getSelection().anchorNode === caretNode && window.getSelection().anchorOffset === caretOffset, 'Hover moved the caret');
+  assert(!editor.innerHTML.includes('Suggested fix') && !editor.querySelector('[data-review-remediation]'), 'Popup entered document HTML');
+  // Input dismisses the popup and existing anchor tracking continues to run.
+  editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+  await waitFor(() => !document.querySelector('[data-review-remediation]'));
+  assert(editor.querySelector('strong'), 'Popup damaged document formatting');
+  const editorHighlight = id => [...editor.querySelectorAll('mark[data-review-finding-ids]')]
+    .find(mark => JSON.parse(mark.dataset.reviewFindingIds).includes(id));
+  assert(getComputedStyle(editorHighlight(warning.id)).backgroundColor === highlightColors.warning[0], 'Editing changed the warning highlight color');
+  assert(getComputedStyle(editorHighlight('recommendation')).backgroundImage.includes('gradient'), 'Editing lost overlapping severity colors');
+  button('Cancel').click();
+  await waitFor(() => !document.querySelector('[contenteditable="true"]'));
   filterButton('All issues').click();
   await waitFor(() => panelCards().length === 10 + synopsisCount);
   checkPanel(10, 5);
@@ -157,6 +284,30 @@ try {
   await waitFor(() => reviewContainer.querySelectorAll('[data-review-finding-severity]').length === 10);
   checkDistinctStyles(reviewContainer.querySelectorAll('[data-review-finding-severity]'));
   assert(reviewContainer.textContent.includes('Regulatory Findings (10)'), 'Protocol Review count mismatch');
+  for (const finding of openFindings) {
+    checkDetails([...reviewContainer.querySelectorAll('[data-review-finding-severity]')].find(card =>
+      card.dataset.reviewFindingSeverity === finding.severity), finding);
+  }
+  const reviewMark = reviewContainer.querySelector('section[id="1"] mark');
+  await showRemediation(reviewMark, [blocker]);
+  await closeRemediation(reviewMark);
+  const blockerCard = [...reviewContainer.querySelectorAll('[data-review-finding-severity]')]
+    .find(card => card.textContent.includes(blocker.description));
+  blockerCard.querySelector('button').nextElementSibling.click();
+  stage = 'accepted-risk highlight';
+  await waitFor(() => blockerCard.textContent.includes('Risk Accepted'));
+  const acceptedMark = [...reviewContainer.querySelectorAll('section[id="1"] mark[data-review-finding-ids]')]
+    .find(mark => JSON.parse(mark.dataset.reviewFindingIds).includes(blocker.id));
+  assert(acceptedMark, 'Accepted finding lost its inline location');
+  assert(getComputedStyle(acceptedMark).backgroundColor === 'rgb(245, 245, 245)', 'Accepted finding is not neutral');
+  assert(!acceptedMark.hasAttribute('aria-haspopup'), 'Accepted finding advertises an inactive popup');
+  acceptedMark.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert(!document.querySelector('[data-review-remediation]'), 'Accepted finding opened remediation popup');
+  const activeReviewMark = [...reviewContainer.querySelectorAll('section[id="1"] mark[data-review-finding-ids]')]
+    .find(mark => JSON.parse(mark.dataset.reviewFindingIds).includes(warning.id));
+  await showRemediation(activeReviewMark, [warning]);
+  await closeRemediation(activeReviewMark);
   reviewRoot.unmount();
   reviewContainer.remove();
   assert(document.body.textContent.includes('these statuses are not blocker or warning severities'), 'Checklist scope unclear');
@@ -191,7 +342,7 @@ try {
   checkCounts({});
   checkPanel(0, 0);
   assert(errors.length === 0, errors.join('; '));
-  document.getElementById('result').textContent = `PASS: five distinct severity styles and labels, My/All/header counts, closed findings excluded, Protocol Review, Save, Won't fix, reanalysis (synopsis=${synopsisCount})`;
+  document.getElementById('result').textContent = `PASS: severity highlight colors and overlaps, finding metadata, reference and nulls, popup above every severity, accepted-risk highlight, keyboard and editor caret, Protocol Review, severity counts, Save, Won't fix, reanalysis (synopsis=${synopsisCount})`;
 } catch (error) {
   document.getElementById('result').textContent = `FAIL: ${error.message}`;
 }

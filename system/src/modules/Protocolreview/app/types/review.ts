@@ -61,6 +61,10 @@ export interface RegulatoryFinding {
   reference?: string;
   /** 'regulatory' = manually added by RA role; 'system' = auto-detected from protocol issues */
   source: FindingSource;
+  /** Requirement or clause returned as source by section analysis. */
+  requirementSource?: string | null;
+  targetSection?: string | null;
+  remediation?: string | null;
   sectionOwner?: string;
   addedBy?: string;
   addedAt?: string;

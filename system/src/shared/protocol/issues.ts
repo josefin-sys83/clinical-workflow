@@ -6,6 +6,17 @@ export const ISSUE_SEVERITIES = [
 
 export type IssueSeverity = typeof ISSUE_SEVERITIES[number];
 
+export interface IssueMetadata {
+  source?: string | null;
+  targetSection?: string | null;
+  remediation?: string | null;
+  reference?: string | null;
+}
+
+export function findingText(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 const severityPresentation = {
   blocker: { label: 'Blocker', plural: 'Blockers', badge: theme.status.error, border: theme.border.error, text: theme.text.error },
   warning: { label: 'Warning', plural: 'Warnings', badge: theme.status.warning, border: theme.border.warning, text: theme.text.warning },

@@ -3,10 +3,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
 import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
+import { ReviewRemediation } from '@/shared/editor/ReviewRemediation';
+import { FindingDetails } from '@/shared/protocol/FindingDetails';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
-import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueSeverity } from '@/shared/protocol/issues';
+import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueMetadata, type IssueSeverity } from '@/shared/protocol/issues';
 import { CommentsModal } from './comments-modal';
 import { SectionCompletenessIndicator } from './section-completeness-indicator';
 import { AmendmentWarning } from './amendment-warning';
@@ -23,7 +25,7 @@ import {
   AlertDialogTitle,
 } from '@/shared/ui/alert-dialog';
 
-interface ProtocolIssue {
+interface ProtocolIssue extends IssueMetadata {
   id: string;
   severity: IssueSeverity;
   subsection: string;
@@ -900,9 +902,7 @@ function ProtocolSectionComponent(
                       <p className={`text-xs leading-relaxed mb-1 ${presentation.text}`}>
                         {issue.description}
                       </p>
-                      {issue.reference && (
-                        <div className="text-xs text-slate-500 italic mb-1">{issue.reference}</div>
-                      )}
+                      <FindingDetails finding={issue} />
                       <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 mt-1.5">
                         <span className="text-xs text-slate-500">
                           {issue.raisedBy} · {issue.raisedDate}
@@ -924,6 +924,7 @@ function ProtocolSectionComponent(
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
+              <ReviewRemediation findings={analysisStatus === 'running' || isAnalyzing ? [] : (isEditing ? editorFindings : openIssues)}>
               {section.content ? (() => {
                 if (isEditing) {
                   const btnBase: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 4, border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', flexShrink: 0 };
@@ -1002,6 +1003,7 @@ function ProtocolSectionComponent(
                   </div>
                 );
               })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
+              </ReviewRemediation>
             </ProtocolTextSeparator>
 
             {/* 7. SECTION ACTIONS */}
