@@ -22,7 +22,6 @@ window.fetch = async (url, init = {}) => {
   const path = String(url), method = init.method || 'GET'; calls.push([method, path]);
   if (path.endsWith('/milestones')) return response({ complexity: 'low', complexityLabel: 'Low', complexityPoints: 0, warnings: [], milestones: [{ stepId: 'study-results', stepName: 'Study Results', responsibleRole: 'Statistician', responsibleName: 'Statistician', deadline: '2026-09-25', daysUntil: 6, status: 'urgent', anchorLabel: 'Regulatory Submission', anchorDate: '2027-01-01' }] });
   if (path.endsWith('/workspace')) return response(state);
-  if (path.endsWith('/suggest')) return response({ message: 'AI unavailable in this manual-fallback fixture.' }, 503);
   if (path.endsWith('/audit')) return response([]);
   if (path.endsWith('/parse-table')) return response({ headers: ['Group', 'N'], rows: [['Treatment', '42']] }, 201);
   if (path.endsWith('/preview')) {

@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { acceptedRequirementsText } from '../projects/project-generation-context';
 import { validateAiResponse } from './ai-response-contract';
-import type { ResultSuggestion, SuggestResultDto } from '../results/dto';
 
 export const PROTOCOL_SECTION_TITLES = [
   'Protocol Overview',
@@ -75,10 +74,6 @@ export class AiService {
 
   async analyzeSynopsis(text: string, targetMarkets: string[] = []): Promise<any[]> {
     return this.post('/v1/ai/analyze-synopsis', { text, targetMarkets }, true);
-  }
-
-  async suggestResult(input: SuggestResultDto, sections: { key: string; title: string }[]): Promise<ResultSuggestion> {
-    return this.post('/v1/ai/suggest-result', { ...input, sections }, true);
   }
 
   async deriveScopeFromSynopsis(text: string): Promise<{ deviceCategory: string; intendedUse: string; confidence: 'high' | 'medium' | 'low' }> {

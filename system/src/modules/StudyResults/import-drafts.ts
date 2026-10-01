@@ -1,4 +1,4 @@
-import type { ResultInput, ResultSuggestion } from '@/shared/api/results';
+import type { ResultInput } from '@/shared/api/results';
 
 export type SourceCellRange = {
   filename: string;
@@ -9,31 +9,7 @@ export type SourceCellRange = {
   columnEnd: number;
 };
 type Provenance = { header: SourceCellRange[]; rows: SourceCellRange[][] };
-export type ImportDraft = {
-  key: string;
-  input: ResultInput;
-  aiStatus?: 'loading' | 'done' | 'error';
-  suggestion?: ResultSuggestion;
-  aiError?: string;
-};
-
-function withoutStaleSuggestions(input: ResultInput): ResultInput {
-  const clean = { ...input };
-  if (input.titleOrigin === 'ai') {
-    clean.title = input.sourceFilename;
-    clean.titleOrigin = undefined;
-  }
-  if (input.descriptionOrigin === 'ai') {
-    clean.description = '';
-    clean.descriptionOrigin = undefined;
-  }
-  if (input.sectionOrigin === 'ai') {
-    clean.reportSectionId = null;
-    clean.reportSectionKey = undefined;
-    clean.sectionOrigin = undefined;
-  }
-  return clean;
-}
+export type ImportDraft = { key: string; input: ResultInput };
 
 function table(input: ResultInput) {
   const { headers, rows, provenance } = input.content;
@@ -104,7 +80,7 @@ function withTable(
       'Too many source ranges for one result. Keep these detections separate.',
     );
   return {
-    ...withoutStaleSuggestions(input),
+    ...input,
     sourceFilename,
     sourceLocation,
     content: { ...input.content, headers, rows, provenance },
@@ -148,7 +124,6 @@ export function splitDraft(
 export function mergeDrafts(inputs: ResultInput[]): ResultInput {
   if (inputs.length < 2)
     throw new Error('Select at least two detections to merge.');
-  inputs = inputs.map(withoutStaleSuggestions);
   const tables = inputs.map(table);
   const width = Math.max(...tables.map((t) => t.headers.length));
   const pad = (row: unknown[]) => [
@@ -177,20 +152,5 @@ export function mergeDrafts(inputs: ResultInput[]): ResultInput {
     throw new Error(
       'Combined descriptions are too long. Keep these detections separate.',
     );
-  const descriptionOrigin = inputs.some(
-    (input) => input.descriptionOrigin === 'human' && input.description,
-  )
-    ? 'human'
-    : undefined;
-  const originalReference = inputs.every(
-    (input) => input.originalReference === inputs[0].originalReference,
-  )
-    ? inputs[0].originalReference
-    : null;
-  return withTable(
-    { ...inputs[0], description, descriptionOrigin, originalReference },
-    headers,
-    rows,
-    provenance,
-  );
+  return withTable({ ...inputs[0], description }, headers, rows, provenance);
 }

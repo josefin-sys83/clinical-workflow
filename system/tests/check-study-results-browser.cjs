@@ -9,7 +9,7 @@ try {
     '--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
     `--user-data-dir=${profile}`, '--dump-dom', '--virtual-time-budget=20000',
     ...(process.env.RESULTS_TEST_SCREENSHOT ? [`--screenshot=${process.env.RESULTS_TEST_SCREENSHOT}`, '--window-size=1280,1800'] : []),
-    `${process.env.RESULTS_TEST_ORIGIN || 'http://localhost:5175'}/tests/${process.env.RESULTS_TEST_PAGE || 'study-results.html'}`,
+    `${process.env.RESULTS_TEST_ORIGIN || 'http://localhost:5175'}/tests/study-results.html`,
   ], { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
   const status = result.stdout?.match(/<pre id="result"[^>]*>([^<]*)<\/pre>/)?.[1];
   if (result.error || result.status !== 0 || !status?.startsWith('PASS:')) {

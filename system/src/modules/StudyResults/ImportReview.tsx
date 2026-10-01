@@ -1,10 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import {
-  suggestResult,
-  type ResultInput,
-  type ResultsWorkspace,
-} from '@/shared/api/results';
-import { apiErrorMessage } from '@/shared/api/http';
+import { useCallback, useState } from 'react';
+import type { ResultInput, ResultsWorkspace } from '@/shared/api/results';
 import { ResultEditor, buttonClass, inputClass } from './ResultEditor';
 import { mergeDrafts, splitDraft, type ImportDraft } from './import-drafts';
 
@@ -25,60 +20,6 @@ export function ImportReview({
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [activeDraft, setActiveDraft] = useState<ImportDraft | null>(null);
-  // One object at a time. Editing metadata does not restart or duplicate requests.
-  useEffect(() => {
-    if (activeDraft || busy) return;
-    const next = drafts.find((d) => !d.aiStatus);
-    if (next) {
-      setActiveDraft(next);
-      setDrafts((previous) =>
-        previous.map((draft) =>
-          draft.key === next.key ? { ...draft, aiStatus: 'loading' } : draft,
-        ),
-      );
-    }
-  }, [drafts, activeDraft, busy, setDrafts]);
-  useEffect(() => {
-    if (!activeDraft) return;
-    const draftToAnalyze = activeDraft;
-    const controller = new AbortController();
-    async function generateSuggestion() {
-      try {
-        const suggestion = await suggestResult(
-          projectId,
-          draftToAnalyze.input,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        // A removed, saved, split or merged draft no longer has this key.
-        setDrafts((previous) =>
-          previous.map((draft) =>
-            draft.key === draftToAnalyze.key
-              ? { ...draft, aiStatus: 'done', suggestion }
-              : draft,
-          ),
-        );
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        const aiError = apiErrorMessage(
-          error,
-          'AI suggestions are unavailable. Try again or fill in the fields manually.',
-        );
-        setDrafts((previous) =>
-          previous.map((draft) =>
-            draft.key === draftToAnalyze.key
-              ? { ...draft, aiStatus: 'error', aiError }
-              : draft,
-          ),
-        );
-      } finally {
-        if (!controller.signal.aborted) setActiveDraft(null);
-      }
-    }
-    void generateSuggestion();
-    return () => controller.abort();
-  }, [activeDraft, projectId, setDrafts]);
   const updateDraft = useCallback(
     (key: string, input: ResultInput) => {
       setDrafts((previous) =>
@@ -140,34 +81,6 @@ export function ImportReview({
       )}
       {drafts.map((draft) => (
         <div key={draft.key} className="space-y-2 rounded-xl border p-3">
-          <p role="status" className="text-sm text-slate-600">
-            {!draft.aiStatus
-              ? 'AI suggestions queued. You can edit and save meanwhile.'
-              : draft.aiStatus === 'loading'
-                ? 'Preparing AI suggestions. You can edit and save meanwhile.'
-                : draft.aiStatus === 'error'
-                  ? `${draft.aiError} Your imported data is still available.`
-                  : draft.suggestion?.limitation ||
-                    'AI suggestions ready. Review all fields before saving.'}
-          </p>
-          {draft.aiStatus === 'error' && (
-            <button
-              type="button"
-              className={buttonClass}
-              disabled={busy}
-              onClick={() =>
-                setDrafts((previous) =>
-                  previous.map((d) =>
-                    d.key === draft.key
-                      ? { ...d, aiStatus: undefined, aiError: undefined }
-                      : d,
-                  ),
-                )
-              }
-            >
-              Retry AI suggestions
-            </button>
-          )}
           {Array.isArray(draft.input.content.rows) && (
             <>
               <label className="flex items-center gap-2 text-sm">
@@ -212,7 +125,6 @@ export function ImportReview({
           <ResultEditor
             projectId={projectId}
             initial={draft.input}
-            suggestion={draft.suggestion}
             mode="upload"
             sections={sections}
             busy={busy}

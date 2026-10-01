@@ -1,8 +1,5 @@
 import {
   Body,
-  BadGatewayException,
-  BadRequestException,
-  ForbiddenException,
   Controller,
   Delete,
   Get,
@@ -41,11 +38,8 @@ import {
   SupportingDocumentDto,
   ParseTableDto,
   AssignResultSectionDto,
-  SuggestResultDto,
 } from './dto';
 import { ResultsService } from './results.service';
-import { AiService } from '../ai/ai.service';
-import { validateFigureContent } from './figure-image';
 
 const input = new ValidationPipe({
   whitelist: true,
@@ -58,34 +52,7 @@ const input = new ValidationPipe({
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
 @Controller('/api/projects/:projectId/results')
 export class ResultsController {
-  constructor(
-    private readonly results: ResultsService,
-    private readonly ai: AiService,
-  ) {}
-
-  @Post('suggest')
-  @HttpCode(200)
-  @Roles('author', 'admin')
-  async suggest(
-    @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Body(input) body: SuggestResultDto,
-  ) {
-    validateFigureContent(body.content);
-    const workspace = await this.results.workspace(projectId);
-    if (workspace.locked) throw new ForbiddenException('The report is locked.');
-    const sections = workspace.sectionOptions.map(({ key, title }) => ({ key, title }));
-    const { image: _image, provenance: _provenance, ...textContent } = body.content;
-    if (JSON.stringify({ ...body, content: textContent, sections }).length > 60000)
-      throw new BadRequestException(
-        'Result is too large for AI suggestions. Split it or enter the fields manually.',
-      );
-    const suggestion = await this.ai.suggestResult(body, sections);
-    const suggestedKeys = [...(suggestion.alternativeSectionKeys ?? [])];
-    if (suggestion.reportSectionKey !== null) suggestedKeys.push(suggestion.reportSectionKey);
-    if (suggestedKeys.some(key => !sections.some(section => section.key === key)))
-      throw new BadGatewayException('AI suggested an unavailable report section.');
-    return suggestion;
-  }
+  constructor(private readonly results: ResultsService) {}
 
   @Get('workspace')
   @Header('Cache-Control', 'no-store')
