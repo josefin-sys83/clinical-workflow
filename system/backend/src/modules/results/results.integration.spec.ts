@@ -13,7 +13,6 @@ import { AuditService } from '../audit/audit.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ResultsController } from './results.controller';
 import { ResultsService } from './results.service';
-import { AiService } from '../ai/ai.service';
 
 jest.mock('../../db/pg', () => ({ getPool: jest.fn() }));
 
@@ -75,7 +74,7 @@ describeDatabase('results HTTP API and PostgreSQL constraints', () => {
     (getPool as jest.Mock).mockReturnValue({ ...db, connect: async () => db });
     const module = await Test.createTestingModule({
       controllers: [ResultsController],
-      providers: [ResultsService, AuditService, { provide: AiService, useValue: { suggestResult: jest.fn() } }],
+      providers: [ResultsService, AuditService],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({
@@ -201,40 +200,6 @@ describeDatabase('results HTTP API and PostgreSQL constraints', () => {
         )
       ).rows[0],
     ).toEqual({ content: null, status: 'draft' });
-  });
-
-  it('offers preview keys without creating a report and resolves the key only on save', async () => {
-    await client.query('delete from report where id=$1', [reportId]);
-    const preview = (await http().get(`${path()}/workspace`).set('Authorization', 'Bearer test').expect(200)).body;
-    const option = preview.sectionOptions.find((s: any) => s.title === 'Safety Analysis');
-    expect(option.id).toBeNull();
-    expect((await client.query('select id from report where project_id=$1', [projectId])).rows).toHaveLength(0);
-    const saved = await create({ reportSectionId: null, reportSectionKey: option.key,
-      description: 'Eight events were reported.', sectionOrigin: 'ai', descriptionOrigin: 'ai' });
-    expect(saved).toMatchObject({ titleOrigin: 'ai', sectionOrigin: 'ai', descriptionOrigin: 'ai', status: 'draft', version: 1 });
-    expect((await client.query('select section_key from report_section where id=$1', [saved.reportSectionId])).rows[0].section_key).toBe(option.key);
-    const edited = (await http().patch(`${path()}/${saved.id}`).set('Authorization', 'Bearer test')
-      .send({ expectedVersion: 1, title: 'Human title' }).expect(200)).body;
-    expect(edited).toMatchObject({ titleOrigin: 'human', sectionOrigin: 'ai', descriptionOrigin: 'ai', version: 2, updatedByUserId: userId });
-    const events = (await client.query("select metadata,actor_user_id from audit_event where entity_id=$1 and type='result.updated'", [saved.id])).rows;
-    expect(events[0].actor_user_id).toBe(userId);
-    expect(events[0].metadata.changedFields).toContain('title');
-  });
-
-  it('rejects invalid or ambiguous preview destinations without saving a result', async () => {
-    for (const extra of [{ reportSectionKey: 'unknown', reportSectionId: null }, { reportSectionKey: 'section-8', reportSectionId: sectionId }]) {
-      await http().post(path()).set('Authorization', 'Bearer test').send({ ...input(), ...extra }).expect(400);
-    }
-    expect((await http().get(path()).set('Authorization', 'Bearer test').expect(200)).body).toEqual([]);
-  });
-
-  it('protects the suggestion endpoint by project access and author role', async () => {
-    const suggestionInput = { type: 'table', content: { rows: [[42]] }, sourceFilename: 'test.xlsx' };
-    await http().post(`${path()}/suggest`).send(suggestionInput).expect(401);
-    roles = ['reviewer'];
-    await http().post(`${path()}/suggest`).set('Authorization', 'Bearer test').send(suggestionInput).expect(403);
-    roles = ['author'];
-    await http().post(`/api/projects/${randomUUID()}/results/suggest`).set('Authorization', 'Bearer test').send(suggestionInput).expect(404);
   });
 
   it('stores SAP/TFL separately, downloads exact bytes, and audits upload/removal', async () => {

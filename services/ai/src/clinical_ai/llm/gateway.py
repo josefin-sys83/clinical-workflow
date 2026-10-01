@@ -22,8 +22,7 @@ def _prepare_json_schema(value: Any) -> Any:
     if isinstance(value, dict):
         prepared: dict[str, Any] = {}
         for key, item in value.items():
-            # Remove schema annotations, not an actual property named "title".
-            if key == "title" and isinstance(item, str):
+            if key == "title":
                 continue
             if key == "const":
                 prepared["enum"] = [item]
@@ -160,11 +159,6 @@ class LLMGateway:
                 {"role": "user", "content": spec.user},
             ]
             prompt_text = spec.system + "\n" + spec.user
-            if spec.image_data_url:
-                messages[1]["content"] = [
-                    {"type": "text", "text": spec.user},
-                    {"type": "image_url", "image_url": {"url": spec.image_data_url, "detail": "high"}},
-                ]
         else:
             messages = [{"role": "user", "content": spec}]
             prompt_text = spec

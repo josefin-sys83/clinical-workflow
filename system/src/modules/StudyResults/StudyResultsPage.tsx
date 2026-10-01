@@ -29,9 +29,7 @@ import {
 import { ProtocolAttachmentsSection } from '@/modules/Makeprotokoll/components/protocol-attachments-section';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
-import {
-  ResultEditor, SuggestionOrigin, buttonClass, inputClass,
-} from './ResultEditor';
+import { ResultEditor, buttonClass, inputClass } from './ResultEditor';
 import { ResultViewer } from './ResultViewer';
 import { ImportReview } from './ImportReview';
 import type { ImportDraft } from './import-drafts';
@@ -536,15 +534,10 @@ export default function StudyResultsPage() {
           )}
           {!!drafts.length && canEdit && (
             <ImportReview
-              key={projectId}
               drafts={drafts}
               setDrafts={setDrafts}
               projectId={projectId}
-              sections={
-                workspace.sectionOptions?.map(section => ({
-                  id: `key:${section.key}`, title: section.title,
-                })) ?? workspace.sections
-              }
+              sections={workspace.sections}
               busy={busy}
               onSave={saveDraft}
             />
@@ -622,7 +615,7 @@ export default function StudyResultsPage() {
               <div>
                 <p className="text-xs text-slate-500">
                   Title{' '}
-                  <SuggestionOrigin origin={selected.titleOrigin} field="title" />
+                  {selected.titleOrigin === 'ai' ? '(AI suggested)' : '(human)'}
                 </p>
                 <h2 className="mt-1 text-lg font-semibold">{selected.title}</h2>
               </div>
@@ -634,8 +627,8 @@ export default function StudyResultsPage() {
                   className="text-xs text-slate-500"
                 >
                   Report section{' '}
+                  {selected.sectionOrigin === 'ai' ? '— AI suggested' : ''}
                 </label>
-                {' '}<SuggestionOrigin origin={selected.sectionOrigin} field="report section" />
                 <select
                   id="review-report-section"
                   className={`${inputClass} mt-1`}
@@ -674,7 +667,6 @@ export default function StudyResultsPage() {
                     ? 'AI description'
                     : 'Description'}{' '}
                   — states only what is in the data
-                  {' '}<SuggestionOrigin origin={selected.descriptionOrigin} field="description" />
                 </p>
                 <p
                   className={`whitespace-pre-wrap rounded-lg border p-3 text-sm ${selected.descriptionOrigin === 'ai' ? 'border-violet-200 bg-violet-50' : 'border-slate-200 bg-stone-50'}`}
