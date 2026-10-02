@@ -489,7 +489,11 @@ export default function StudyResultsPage() {
               key={mode}
               projectId={projectId}
               mode={mode}
-              sections={workspace.sections}
+              sections={
+                workspace.sectionOptions?.map(section => ({
+                  id: `key:${section.key}`, title: section.title,
+                })) ?? workspace.sections
+              }
               busy={busy}
               onCancel={() => setMode(null)}
               onSave={(input) => saveDraft(input)}
