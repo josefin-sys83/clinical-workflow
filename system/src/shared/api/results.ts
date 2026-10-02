@@ -18,6 +18,7 @@ export type ResultInput = {
   descriptionOrigin?: 'ai' | 'human';
 };
 export type ResultSuggestion = {
+  placementBasisLabel: 'Using TFL mapping' | 'no TFL, based on content' | null;
   title: string | null;
   reportSectionKey: string | null;
   description: string | null;

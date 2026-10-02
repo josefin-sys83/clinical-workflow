@@ -63,6 +63,8 @@ export default function StudyResultsPage() {
   const listRef = useRef<HTMLElement>(null);
   const [mode, setMode] = useState<'manual' | 'paste' | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [tflRevision, setTflRevision] = useState(0);
+  const tflDocumentIds = useRef<string[] | null>(null);
   const [editing, setEditing] = useState<StudyResult | null>(null);
   const [reason, setReason] = useState('');
   const [both, setBoth] = useState(false);
@@ -94,6 +96,10 @@ export default function StudyResultsPage() {
     try {
       const next = await getResultsWorkspace(projectId);
       if (request === requestNumber.current) {
+        const ids = next.supportingDocuments.filter(doc => doc.type === 'tfl').map(doc => doc.id).sort();
+        if (tflDocumentIds.current !== null && JSON.stringify(tflDocumentIds.current) !== JSON.stringify(ids))
+          setTflRevision(revision => revision + 1);
+        tflDocumentIds.current = ids;
         setWorkspace(next);
         setError('');
       }
@@ -287,7 +293,12 @@ export default function StudyResultsPage() {
   ) {
     try {
       await mutate(async () => {
-        await uploadSupportingDocument(projectId, type, file, description);
+        const uploaded = await uploadSupportingDocument(projectId, type, file, description);
+        if (type === 'tfl') {
+          setTflRevision(revision => revision + 1);
+          // Keep the known set even if refresh fails, so later external changes are still detected.
+          tflDocumentIds.current = [...(tflDocumentIds.current ?? []), uploaded.id].sort();
+        }
         setNotice(`${type.toUpperCase()} attached as a supporting document.`);
         await refresh();
       });
@@ -302,6 +313,10 @@ export default function StudyResultsPage() {
       return;
     await mutate(async () => {
       await removeSupportingDocument(projectId, document.id);
+      if (document.type === 'tfl') {
+        setTflRevision(revision => revision + 1);
+        tflDocumentIds.current = (tflDocumentIds.current ?? []).filter(id => id !== document.id);
+      }
       await refresh();
     }).catch(() => {});
   }
@@ -540,6 +555,7 @@ export default function StudyResultsPage() {
               drafts={drafts}
               setDrafts={setDrafts}
               projectId={projectId}
+              tflRevision={tflRevision}
               sections={
                 workspace.sectionOptions?.map(section => ({
                   id: `key:${section.key}`, title: section.title,

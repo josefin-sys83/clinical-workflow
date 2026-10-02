@@ -15,6 +15,8 @@ export type ImportDraft = {
   aiStatus?: 'loading' | 'done' | 'error';
   suggestion?: ResultSuggestion;
   aiError?: string;
+  suggestionTflRevision?: number;
+  placementOnly?: boolean;
 };
 
 function withoutStaleSuggestions(input: ResultInput): ResultInput {

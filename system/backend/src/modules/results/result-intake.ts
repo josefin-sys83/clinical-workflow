@@ -8,7 +8,7 @@ const MAX_CELLS = 100000;
 
 // Some standards-compliant generators prefix SpreadsheetML elements with `x:`.
 // ExcelJS only recognises the same namespace when it is the default namespace.
-async function normalizeSpreadsheetNamespace(buffer: Buffer) {
+export async function normalizeSpreadsheetNamespace(buffer: Buffer) {
   const zip = await JSZip.loadAsync(buffer);
   const names = Object.keys(zip.files).filter(
     (name) => name.endsWith('.xml') && !zip.files[name].dir,
@@ -39,6 +39,12 @@ async function normalizeSpreadsheetNamespace(buffer: Buffer) {
   return changed
     ? Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }))
     : buffer;
+}
+
+export async function extractDocumentText(extension: string, buffer: Buffer): Promise<string> {
+  if (extension === 'docx') return (await require('mammoth').extractRawText({ buffer })).value;
+  if (extension === 'pdf') return (await require('pdf-parse')(buffer)).text;
+  return buffer.toString('utf8');
 }
 
 // Preserve quoted commas, tabs, newlines, and escaped quotes from spreadsheet paste/CSV.
@@ -330,12 +336,8 @@ export async function previewResultFile(file: {
       return { drafts, issues };
     }
     let text = '';
-    if (extension === 'docx')
-      text = (await require('mammoth').extractRawText({ buffer: file.buffer }))
-        .value;
-    else if (extension === 'pdf')
-      text = (await require('pdf-parse')(file.buffer)).text;
-    else if (extension === 'txt') text = file.buffer.toString('utf8');
+    if (extension === 'docx' || extension === 'pdf' || extension === 'txt')
+      text = await extractDocumentText(extension, file.buffer);
     else
       throw new BadRequestException(
         'Use CSV, TSV, XLSX, PDF, DOCX, TXT, PNG, or JPEG files',
