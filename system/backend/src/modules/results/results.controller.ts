@@ -46,6 +46,7 @@ import {
 import { ResultsService } from './results.service';
 import { AiService } from '../ai/ai.service';
 import { validateFigureContent } from './figure-image';
+import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
 
 const input = new ValidationPipe({
   whitelist: true,
@@ -64,6 +65,7 @@ export class ResultsController {
   ) {}
 
   @Post('suggest')
+  @UseGuards(AiThrottlerGuard)
   @HttpCode(200)
   @Roles('author', 'admin')
   async suggest(
