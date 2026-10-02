@@ -1,5 +1,7 @@
 Clinical workflow system
-• - AI/Python: Receives the result and TFL content in the same AI call and suggests a report section. Returns supporting
+
+
+  - AI/Python: Receives the result and TFL content in the same AI call and suggests a report section. Returns supporting
     quotes from the TFL. Without a TFL, placement is based on the result content.
 
   - Backend: Reads the project’s TFL files in XLSX, PDF, DOCX and TXT formats. Sends the content to AI, validates the
