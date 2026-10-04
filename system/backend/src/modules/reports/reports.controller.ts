@@ -13,6 +13,7 @@ import { ReportsService } from './reports.service';
 import { UpdateReportSectionsDto } from './dto';
 import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
 import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
+import { findingRequirementsText, validateFindingRequirements } from '../projects/finding-requirements';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
@@ -285,8 +286,10 @@ export class ReportsController {
     const content = sanitizeSectionHtml(body.sectionContent);
     const requestId = await this.reports.beginSectionAnalysis(projectId, body.sectionId, content, req.user);
     try {
-      const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext);
+      const requirements = project?.data?.scope?.requirements;
+      const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext, findingRequirementsText(requirements));
       if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
+      result.issues = validateFindingRequirements(result.issues, requirements, 'ai');
       const savedSection = await this.reports.finishSectionAnalysis(projectId, body.sectionId, requestId, result, null, req.user);
       return { ...result, issues: savedSection.issues, section: savedSection };
     } catch (error) {

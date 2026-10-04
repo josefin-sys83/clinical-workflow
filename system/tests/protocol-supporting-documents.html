@@ -1,0 +1,135 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import App from '/src/modules/Makeprotokoll/App.tsx';
+
+const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['author'] };
+const finding = { id: 'i-1', requirementId: 'req-1', severity: 'blocker', status: 'open', description: 'Missing PMCF plan', raisedBy: 'Writer' };
+const section = { id: '1', title: 'Protocol Overview', content: '<p>Follow-up is specified in Appendix 4.</p>',
+  status: 'draft', aiGenerated: true, analysisStatus: 'succeeded', issues: [finding], requiredElements: [] };
+const protocol = { status: 'draft', sections: [section] };
+const project = { id: 'fixture', targetMarkets: [], roles: [{ title: 'Protocol Lead', assignedTo: [user] }], data: {
+  projectData: {}, protocol, scope: { requirements: [
+    { id: 'req-1', title: 'PMCF Plan', status: 'accepted' }, { id: 'req-2', title: 'ISO 14155', status: 'accepted' },
+    { id: 'declined', title: 'Declined standard', status: 'not-applicable' },
+  ] },
+} };
+const attachment = { id: 'file', appendixNumber: 4, filename: 'PMCF Plan v2.1', sizeBytes: 12, uploadedAt: '2026-10-02', uploaderName: 'Writer', requirementIds: [] };
+let nextCheck = 'satisfied';
+let locked = false;
+let analysisCalls = 0;
+const errors = [];
+window.addEventListener('error', event => errors.push(event.message));
+window.fetch = async (input, init = {}) => {
+  const url = String(input);
+  const body = init.body ? JSON.parse(init.body) : {};
+  let payload = {};
+  if (url.endsWith('/requirements') && init.method === 'PATCH') { attachment.requirementIds = body.requirementIds; payload = [attachment]; }
+  else if (url.endsWith('/decision')) {
+    if (body.action === 'unlink') { section.issues = [{ ...finding }]; }
+    else {
+      section.issues = [{ ...finding, documentLink: { id: 'decision', attachmentId: 'file', label: 'Appendix 4 - PMCF Plan v2.1', status: 'checking' } }];
+      const result = nextCheck;
+      setTimeout(() => { const issue = section.issues[0]; if (issue.documentLink) {
+        issue.documentLink.status = result;
+        issue.documentLink.reason = result === 'satisfied' ? 'PMCF evidence is sufficient' : 'AI check unavailable';
+        if (result === 'warning') issue.severity = 'warning';
+      } }, 200);
+    }
+    payload = protocol;
+  } else if (url.endsWith('/protocol/sections/1') && init.method === 'PATCH') { section.content = body.content; payload = { content: body.content, updatedAt: '2026-10-02' }; }
+  else if (url.endsWith('/analyze-section')) {
+    analysisCalls++;
+    section.issues = [{ ...finding, id: 'recreated', description: 'PMCF follow-up details missing from CIP' }];
+    payload = { issues: section.issues, requiredElements: [] };
+  } else if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/attachments')) payload = [attachment];
+  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: [] };
+  else if (url.endsWith('/workflow')) payload = { steps: { 'protocol-pdf': { state: locked ? 'in_review' : 'draft' } } };
+  else if (url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/milestones')) payload = { milestones: [] };
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+const el = React.createElement;
+let root;
+const mount = () => {
+  root = createRoot(document.getElementById('root'));
+  root.render(el(CurrentUserProvider, { user, status: 'ready' }, el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
+    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(App) })))));
+};
+const assert = (value, message) => { if (!value) throw new Error(message); };
+let stage = 'load';
+const waitFor = async predicate => {
+  for (let attempt = 0; attempt < 180; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
+  throw new Error(`Timed out: ${stage} ${errors.join('; ')}`);
+};
+const list = () => document.querySelector('[data-section-findings="1"]');
+const control = () => list()?.querySelector('[data-finding-document-control]');
+const button = (text, parent = document) => [...parent.querySelectorAll('button')].find(item => item.textContent.trim() === text);
+const blockers = () => document.querySelector('[data-severity-count="blocker"]')?.dataset.count;
+const link = async () => {
+  button('Satisfied by document', control()).click();
+  await waitFor(() => control().querySelector('select'));
+  const select = control().querySelector('select'); select.value = 'file'; select.dispatchEvent(new Event('change', { bubbles: true }));
+  await waitFor(() => !button('Link document', control()).disabled);
+  button('Link document', control()).click();
+  await waitFor(() => control().textContent.includes('checking…'));
+};
+try {
+  mount();
+  await waitFor(() => list()?.textContent.includes('Missing PMCF plan'));
+  stage = 'requirement selection';
+  const requirements = document.querySelector('[aria-label="Requirements covered by PMCF Plan v2.1"]');
+  assert(requirements.querySelectorAll('input').length === 2, 'Only accepted requirements should be listed');
+  requirements.querySelectorAll('input')[0].click();
+  await waitFor(() => attachment.requirementIds.includes('req-1'));
+  requirements.querySelectorAll('input')[1].click();
+  await waitFor(() => attachment.requirementIds.length === 2);
+  stage = 'link/check';
+  await link();
+  assert(blockers() === '0', 'Checking document should immediately remove the blocker');
+  await waitFor(() => control()?.textContent.includes('Satisfied by Appendix 4 - PMCF Plan v2.1'));
+  stage = 'refresh';
+  root.unmount(); mount();
+  await waitFor(() => control()?.textContent.includes('Satisfied by Appendix 4 - PMCF Plan v2.1'));
+  assert(blockers() === '0', 'Saved satisfaction should remain nonblocking after reload');
+  stage = 'edit and automatic analysis';
+  button('Edit').click();
+  await waitFor(() => document.querySelector('[contenteditable="true"]'));
+  const editor = document.querySelector('[contenteditable="true"]');
+  editor.innerHTML = '<p>Edited section referencing Appendix 4.</p>'; editor.dispatchEvent(new Event('input', { bubbles: true }));
+  button('Save').click();
+  await waitFor(() => document.querySelector('textarea'));
+  const textarea = document.querySelector('textarea');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, 'Clarification');
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => !button('Confirm').disabled);
+  button('Confirm').click();
+  await waitFor(() => analysisCalls === 1 && control()?.textContent.includes('Satisfied by document'));
+  assert(blockers() === '1', 'Reanalysis should replace the finding and discard its old link');
+  await link();
+  await waitFor(() => control()?.textContent.includes('Satisfied by Appendix 4'));
+  stage = 'unlink';
+  button('Remove link', control()).click();
+  await waitFor(() => control()?.textContent.includes('Satisfied by document'));
+  assert(blockers() === '1', 'Unlink should restore the original blocker');
+  stage = 'AI failure'; nextCheck = 'failed'; await link();
+  await waitFor(() => control()?.textContent.includes('check unavailable'));
+  assert(blockers() === '0', 'AI failure must preserve a nonblocking saved link');
+  stage = 'warning'; button('Remove link', control()).click();
+  await waitFor(() => control()?.textContent.includes('Satisfied by document'));
+  nextCheck = 'warning'; await link();
+  await waitFor(() => control()?.textContent.includes('requirement not satisfied'));
+  assert(blockers() === '0', 'Insufficient document warning should not remain a blocker');
+  stage = 'signature lock'; locked = true; root.unmount(); mount();
+  await waitFor(() => control()?.textContent.includes('Remove link'));
+  await waitFor(() => button('Remove link', control()).disabled);
+  assert(document.querySelector('[aria-label="Requirements covered by PMCF Plan v2.1"] input').disabled, 'Requirement assignment should be locked');
+  assert(!errors.length, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: accepted requirement multi-selection, checking, satisfaction, reload, edit/reanalysis, unlink, AI failure, warning, signature lock';
+} catch (error) { document.getElementById('result').textContent = `FAIL: ${error.message}`; }
+</script></body></html>

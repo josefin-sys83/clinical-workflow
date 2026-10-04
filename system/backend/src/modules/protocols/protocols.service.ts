@@ -5,6 +5,8 @@ import { getPool } from '../../db/pg';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AuditService, type AuditActor, type RecordAuditEvent } from '../audit/audit.service';
 import { protocolIssueSeverity } from './protocol-issue-severity';
+import { validateFindingRequirements } from '../projects/finding-requirements';
+import { withFindingDocumentLink } from './protocol-finding-state';
 
 type Db = { query: PoolClient['query'] };
 type ProtocolAuditEvent = Omit<RecordAuditEvent, 'projectId' | 'actor'>;
@@ -304,8 +306,9 @@ export class ProtocolsService {
         [protocolRow.id],
       ),
       db.query(
-        `select i.* from protocol_section_issue i
+        `select i.*, pa.appendix_number, pa.filename from protocol_section_issue i
          join protocol_section s on s.id = i.section_id
+         left join protocol_attachment pa on pa.id = i.attachment_id
          where s.protocol_id = $1
          order by i.raised_date nulls last, i.id`,
         [protocolRow.id],
@@ -359,13 +362,14 @@ export class ProtocolsService {
     const issuesBySection = new Map<string, any[]>();
     for (const row of issuesResult.rows) {
       const values = issuesBySection.get(row.section_id) ?? [];
-      values.push({
+      values.push(withFindingDocumentLink({
         id: row.issue_key,
         severity: row.severity,
         subsection: row.subsection,
         description: row.description,
         reference: row.reference,
         source: row.source,
+        requirementId: row.requirement_id ?? null,
         targetSection: row.target_section,
         remediation: row.remediation,
         raisedBy: row.raised_by,
@@ -373,7 +377,7 @@ export class ProtocolsService {
         status: row.status,
         dueDate: row.due_date,
         textQuote: row.text_quote,
-      });
+      }, row));
       issuesBySection.set(row.section_id, values);
     }
 
@@ -596,6 +600,11 @@ export class ProtocolsService {
       throw new BadRequestException('Protocol must be an object');
     }
     this.validateProtocolCollections(value);
+    const findings = (value.sections || []).flatMap((section: any) => section.issues || []);
+    if (findings.some((issue: any) => issue.requirementId != null && issue.requirementId !== '')) {
+      const { rows } = await client.query('select data from projects where id=$1 for update', [projectId]);
+      validateFindingRequirements(findings, rows[0]?.data?.scope?.requirements);
+    }
     const protocolId = await this.ensureForProject(projectId, client);
     await client.query(`select id from protocol where id = $1 for update`, [protocolId]);
     const now = new Date().toISOString();
@@ -844,8 +853,8 @@ export class ProtocolsService {
         `insert into protocol_section_issue (
            section_id, issue_key, severity, subsection, description, reference,
            raised_by, raised_date, status, due_date, text_quote,
-           source, target_section, remediation
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+           source, target_section, remediation, requirement_id
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          on conflict (section_id, issue_key) do update set
            severity = excluded.severity,
            subsection = excluded.subsection,
@@ -858,11 +867,12 @@ export class ProtocolsService {
            text_quote = excluded.text_quote,
            source = excluded.source,
            target_section = excluded.target_section,
-           remediation = excluded.remediation`,
+           remediation = excluded.remediation,
+           requirement_id = excluded.requirement_id`,
         [
           sectionId,
           key,
-          issue.severity,
+          issue.originalSeverity || issue.severity,
           issue.subsection || null,
           issue.description || '',
           issue.reference || null,
@@ -874,6 +884,7 @@ export class ProtocolsService {
           issue.source ?? null,
           issue.targetSection ?? null,
           issue.remediation ?? null,
+          issue.requirementId || null,
         ],
       );
     }

@@ -29,7 +29,8 @@ describe('protocol generation', () => {
     };
     controller = new ProtocolsController(projects as any, protocols, ai, {} as any,
       { start: jest.fn(), clear: jest.fn() } as any,
-      { assertDocumentNotSigned: jest.fn(), assertProtocolPrerequisites: jest.fn() } as any, {} as any);
+      { assertDocumentNotSigned: jest.fn(), assertProtocolPrerequisites: jest.fn() } as any,
+      { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);
   });
 
   it('rejects a protocol with a blank section after sanitization', async () => {
@@ -88,7 +89,7 @@ describe('protocol generation', () => {
       generationPath: 'protocol',
       projectId: 'project',
       projectData: expect.objectContaining({ sponsor: 'Sponsor', deviceName: 'Device' }),
-      scope: { intendedUse: 'other-custom', customIntendedUse: 'Updated use' },
+      scope: { intendedUse: 'Updated use', customIntendedUse: 'Updated use' },
       effectiveIntendedUse: 'Updated use',
       projectManager: 'Manager',
     }));
