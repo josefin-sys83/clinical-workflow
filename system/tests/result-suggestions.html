@@ -18,6 +18,13 @@ const state = { results: [], sections: [], supportingDocuments: [], locked: fals
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const pending = [];
 let active = 0, maxActive = 0;
+let saveFailure = false, ignoreAbort = false, holdParse = false;
+const savedInputs = [], parsedInputs = [], pendingParses = [];
+const tableText = 'Group\tN\nTreatment\t42';
+const tableContent = { headers: ['Group', 'N'], rows: [['Treatment', '42']] };
+const tableSuggestion = { title: 'Study population', reportSectionKey: 'performance',
+  description: 'The table reports 42 in the Treatment group.', limitation: null };
+const figureImage = { dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN2kAAAAASUVORK5CYII=' };
 const suggestion = { title: 'Infusion volume accuracy', reportSectionKey: 'performance',
   description: '190 episodes (95%) were within ±5%.', limitation: null };
 const source = { headers: ['Outcome', 'Episodes', '%'], rows: [['Within ±5%', 190, 95], ['Outside', 10, 5]],
@@ -27,9 +34,20 @@ window.fetch = async (url, init = {}) => {
   const path = String(url);
   if (path.endsWith('/workspace')) return response(state);
   if (path.endsWith('/milestones')) return response({ milestones: [] });
+  if (path.endsWith('/parse-table')) {
+    const text = JSON.parse(init.body).text;
+    parsedInputs.push(text);
+    const parsed = () => text === tableText
+      ? response(structuredClone(tableContent))
+      : response({ message: 'Include a header and at least one data row' }, 400);
+    if (holdParse) return new Promise(resolve => pendingParses.push(() => resolve(parsed())));
+    return parsed();
+  }
   if (path.endsWith('/preview')) {
     const filename = init.body.get('file').name;
-    return response({ issues: [], drafts: Array.from({ length: filename === 'five.xlsx' ? 5 : 1 }, (_, i) => ({
+    if (filename.endsWith('.png')) return response({ issues: [], drafts: [{ title: filename,
+      type: 'figure', content: { image: figureImage }, sourceFilename: filename }] });
+    return response({ issues: [], drafts: Array.from({ length: filename === 'twelve.xlsx' ? 12 : filename === 'five.xlsx' ? 5 : 1 }, (_, i) => ({
       title: `${filename} sheet ${i + 1}`, type: filename.endsWith('.txt') ? 'listing' : 'table',
       content: filename.endsWith('.txt')
         ? { text: 'Synthetic dataset: volume accuracy and adverse event results.' }
@@ -45,14 +63,18 @@ window.fetch = async (url, init = {}) => {
         finished = true; active--; resolve(response(body, status));
       };
       init.signal?.addEventListener('abort', () => {
+        if (ignoreAbort) return; // Exercise late responses even when transport cancellation fails.
         if (finished) return;
         finished = true; active--; reject(new DOMException('Aborted', 'AbortError'));
       });
-      pending.push({ body: JSON.parse(init.body), finish });
+      const fail = () => { if (!finished) { finished = true; active--; reject(new TypeError('Network unavailable')); } };
+      pending.push({ body: JSON.parse(init.body), signal: init.signal, finish, fail });
     });
   }
   if (path.endsWith('/results') && init.method === 'POST') {
     const body = JSON.parse(init.body);
+    if (saveFailure) { saveFailure = false; return response({ message: 'Save unavailable' }, 500); }
+    savedInputs.push(body);
     const item = { titleOrigin: 'human', sectionOrigin: 'human', descriptionOrigin: 'human', ...body,
       id: `r-${state.results.length}`, reportSectionId: body.reportSectionKey ? 'saved-section' : null,
       version: 1, status: 'draft', placement: 'unplaced', reportNumber: state.results.length + 1, lastDecision: null };
@@ -85,6 +107,36 @@ const upload = filename => {
   el.files = files.files; el.dispatchEvent(new Event('change', { bubbles: true }));
 };
 const submit = form => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+const field = (form, name) => [...form.querySelectorAll('label')]
+  .find(label => label.textContent.trim().startsWith(name)).querySelector('input, textarea, select');
+const setField = (element, value) => {
+  const prototype = element.tagName === 'SELECT' ? HTMLSelectElement.prototype
+    : element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
+  element.dispatchEvent(new Event(element.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+};
+const openEntry = async mode => {
+  button(mode).click();
+  await wait(() => document.querySelector('form') && button('Suggest with AI'), `${mode} form missing`);
+  return document.querySelector('form');
+};
+const fillTable = (form, mode) => {
+  if (mode === 'Paste table') setField(field(form, 'Table data'), tableText);
+  else for (const [label, value] of [['Header column 1', 'Group'], ['Header column 2', 'N'], ['Row 1 column 1', 'Treatment'], ['Row 1 column 2', '42']])
+    setField(form.querySelector(`[aria-label="${label}"]`), value);
+};
+const startSuggestion = async form => {
+  const index = pending.length;
+  const trigger = button('Suggest with AI', form);
+  trigger.click(); trigger.click();
+  await wait(() => pending.length === index + 1, 'Explicit AI request missing or duplicated');
+  assert(trigger.disabled, 'AI button not disabled during request');
+  return pending[index];
+};
+const closeEntry = async form => {
+  button('Cancel', form).click();
+  await wait(() => !document.querySelector('form'), 'Entry form not closed');
+};
 try {
   render('initial');
   await wait(() => button('Upload file') && !button('Upload file').disabled, 'Workspace did not load');
@@ -195,8 +247,237 @@ try {
     limitation: 'Source text is unreadable.', alternativeSectionKeys: [] });
   await wait(() => forms()[0].textContent.includes('AI did not suggest a section.'), 'Generic abstention help missing');
   assert(!forms()[0].textContent.includes('Multiple result topics.'), 'Unreadable source labelled as mixed content');
+  button('Cancel', forms()[0]).click();
+  await wait(() => !forms().length, 'Unreadable draft not cancelled');
+
+  const batchStart = pending.length;
+  const savedBeforeBatch = state.results.length;
+  upload('twelve.xlsx');
+  await wait(() => forms().length === 12 && pending.length === batchStart + 1, 'Rate-limit batch not imported');
+  for (const index of [10, 11]) {
+    const form = forms()[index];
+    setInput(form.querySelector('input'), `Human title ${index}`);
+    const description = form.querySelector('textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(description, `Human description ${index}`);
+    description.dispatchEvent(new Event('input', { bubbles: true }));
+    const section = form.querySelectorAll('select')[1];
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(section, 'key:safety');
+    section.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  for (let i = 0; i < 12; i++) {
+    await wait(() => pending.length > batchStart + i, `Missing batch request ${i}`);
+    pending[batchStart + i].finish(i < 10 ? suggestion : { message: 'ThrottlerException: Too Many Requests' }, i < 10 ? 200 : 429);
+  }
+  await wait(() => [...document.querySelectorAll('button')].filter(b => b.textContent.trim() === 'Retry AI suggestions').length === 2,
+    'Rate-limited drafts did not offer manual retry');
+  assert(forms().length === 12 && state.results.length === savedBeforeBatch, 'Rate limit removed or saved drafts');
+  assert(forms().slice(0, 10).every(f => f.querySelector('textarea').value === suggestion.description), 'Rate limit changed completed suggestions');
+  const assertHumanFields = (form, index) => {
+    assert(form.querySelector('input').value === `Human title ${index}`, 'Rate limit or retry replaced human title');
+    assert(form.querySelector('textarea').value === `Human description ${index}`, 'Rate limit or retry replaced human description');
+    assert(form.querySelectorAll('select')[1].value === 'key:safety', 'Rate limit or retry replaced human section');
+    assert((form.textContent.match(/Human-edited/g) || []).length === 3, 'Human origins lost after rate limit or retry');
+    assert(form.querySelector('table'), 'Rate limit removed source table');
+  };
+  assertHumanFields(forms()[10], 10);
+  assertHumanFields(forms()[11], 11);
+  assert(document.querySelector('[aria-label="Import preview"]').textContent.includes('Too Many Requests'), 'Rate-limit error not displayed');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert(pending.length === batchStart + 12, 'Rate limit triggered an automatic retry');
+  submit(forms()[10]);
+  await wait(() => state.results.length === savedBeforeBatch + 1 && forms().length === 11, 'Rate limit blocked manual save');
+  const saved = state.results[savedBeforeBatch];
+  assert(saved.title === 'Human title 10' && saved.description === 'Human description 10', 'Manual save lost human edits');
+  assert(saved.titleOrigin === 'human' && saved.sectionOrigin === 'human' && saved.descriptionOrigin === 'human', 'Manual save lost human origins');
+  assert(JSON.stringify(saved.content) === JSON.stringify(source), 'Rate limit changed saved source data');
+  button('Retry AI suggestions').click();
+  await wait(() => pending.length === batchStart + 13, 'Manual retry did not call AI');
+  pending[batchStart + 12].finish();
+  await wait(() => !button('Retry AI suggestions') && active === 0, 'Manual retry did not finish');
+  assertHumanFields(forms()[10], 11);
+  assert(maxActive === 1, 'Batch launched concurrent AI requests');
+
+  // New entry modes share the import suggestion contract. These checks do not assess model quality.
+  state.results = []; state.sections = [];
+  state.sectionOptions.forEach(section => { section.id = null; });
+  render('entry-modes');
+  await wait(() => !document.querySelector('form') && button('Paste table') && !button('Paste table').disabled, 'Entry workspace missing');
+  for (const mode of ['Paste table', 'Build manually']) {
+    let form = await openEntry(mode);
+    const before = pending.length;
+    button('Suggest with AI', form).click();
+    await wait(() => form.querySelector('[role="alert"]'), 'Empty evidence did not show validation error');
+    assert(pending.length === before, 'Empty evidence reached AI');
+    if (mode === 'Paste table') {
+      setField(field(form, 'Table data'), 'invalid');
+      button('Suggest with AI', form).click();
+      await wait(() => parsedInputs.includes('invalid'), 'Paste parser not called');
+      assert(field(form, 'Table data').value === 'invalid', 'Parser failure erased pasted text');
+    }
+    fillTable(form, mode);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert(pending.length === before, 'Typing started AI automatically');
+    setField(field(form, 'Source filename'), '');
+    button('Suggest with AI', form).click();
+    await wait(() => form.textContent.includes('Enter a source filename or label'), 'Missing source not validated');
+    setField(field(form, 'Source filename'), mode === 'Paste table' ? 'Pasted table' : 'Manual entry');
+    let call = await startSuggestion(form);
+    assert(JSON.stringify(call.body.content) === JSON.stringify(tableContent), 'Analysis did not use current table evidence');
+    assert(!('title' in call.body) && !('description' in call.body) && !('sections' in call.body), 'Client metadata leaked into AI input');
+    call.finish(tableSuggestion);
+    await wait(() => field(form, 'Title').value === tableSuggestion.title, 'Untouched fields not filled');
+    assert(field(form, 'Report section').value === 'key:performance', 'Catalogue destination missing');
+    assert(field(form, 'Description').value === tableSuggestion.description, 'Description not filled');
+    assert(form.querySelectorAll('[aria-label^="About the AI suggestion"]').length === 3, 'AI origins missing');
+    saveFailure = true;
+    const count = state.results.length;
+    button('Save draft', form).click();
+    await wait(() => form.textContent.includes('Save unavailable') && !form.querySelector('fieldset').disabled, 'Save failure not retained in form');
+    assert(field(form, 'Title').value === tableSuggestion.title && state.results.length === count, 'Failed save lost draft');
+    button('Save draft', form).click();
+    await wait(() => state.results.length === count + 1 && !document.querySelector('form'), 'AI draft not saved');
+    const savedInput = savedInputs.at(-1);
+    assert(savedInput.reportSectionKey === 'performance' && savedInput.reportSectionId === null, 'Section key not saved');
+    assert(['titleOrigin', 'sectionOrigin', 'descriptionOrigin'].every(key => savedInput[key] === 'ai'), 'Saved AI origins missing');
+    assert(JSON.stringify(savedInput.content) === JSON.stringify(tableContent), 'Saving changed analyzed evidence');
+    assert(pending.length === before + 1, 'Saving triggered another AI call');
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    setField(field(form, 'Title'), 'My title');
+    setField(field(form, 'Description'), 'Delete this');
+    setField(field(form, 'Description'), '');
+    setField(field(form, 'Report section'), 'key:safety');
+    setField(field(form, 'Report section'), '');
+    call = await startSuggestion(form);
+    setField(field(form, 'Title'), 'Changed while waiting');
+    call.finish(tableSuggestion);
+    await wait(() => !button('Suggest with AI', form).disabled, 'Human-edit analysis not finished');
+    assert(field(form, 'Title').value === 'Changed while waiting', 'AI overwrote pending human edit');
+    assert(field(form, 'Description').value === '' && field(form, 'Report section').value === '', 'AI filled intentionally cleared fields');
+    assert((form.textContent.match(/Human-edited/g) || []).length === 3, 'Human origins missing');
+    for (const status of [429, 503, 504, 'network']) {
+      call = await startSuggestion(form);
+      if (status === 'network') call.fail();
+      else call.finish({ message: `Synthetic AI failure ${status}` }, status);
+      await wait(() => form.querySelector('[role="alert"]') && !button('Suggest with AI', form).disabled, 'AI failure not displayed');
+      assert(field(form, 'Title').value === 'Changed while waiting' && field(form, 'Description').value === '' && field(form, 'Report section').value === '', 'AI failure changed human fields');
+      const attempts = pending.length;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert(pending.length === attempts, 'AI failure retried automatically');
+    }
+    call = await startSuggestion(form);
+    call.finish(tableSuggestion);
+    await wait(() => !button('Suggest with AI', form).disabled, 'Manual retry did not finish');
+    const countBeforeManualSave = state.results.length;
+    button('Save draft', form).click();
+    await wait(() => !document.querySelector('form') && state.results.length === countBeforeManualSave + 1, 'Human draft not saved');
+    assert(['titleOrigin', 'sectionOrigin', 'descriptionOrigin'].every(key => savedInputs.at(-1)[key] === 'human'), 'Save lost human origins');
+    assert(savedInputs.at(-1).description === '' && savedInputs.at(-1).reportSectionId === null, 'Save lost intentional blanks');
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    call = await startSuggestion(form);
+    call.finish(tableSuggestion);
+    await wait(() => field(form, 'Title').value === tableSuggestion.title, 'Initial suggestion missing');
+    if (mode === 'Paste table') setField(field(form, 'Table data'), `${tableText}\nControl\t10`);
+    else setField(form.querySelector('[aria-label="Row 1 column 2"]'), '43');
+    await wait(() => form.textContent.includes('Source changed.'), 'Changed source not marked stale');
+    assert(field(form, 'Title').value === tableSuggestion.title, 'Source change erased existing fields');
+    fillTable(form, mode);
+    call = await startSuggestion(form);
+    call.finish({ ...mixed, description: 'Synthetic mixed table content.' });
+    await wait(() => field(form, 'Report section').value === '', 'Abstention left stale AI destination');
+    assert(form.textContent.includes('Multiple result topics.'), 'Alternative sections not shown');
+    assert(form.querySelectorAll('[aria-label^="About the AI suggestion"]').length === 2, 'Empty AI section incorrectly labelled');
+    call = await startSuggestion(form);
+    ignoreAbort = true;
+    if (mode === 'Paste table') setField(field(form, 'Table data'), `${tableText}\nControl\t10`);
+    else setField(form.querySelector('[aria-label="Row 1 column 2"]'), '43');
+    await wait(() => call.signal.aborted, 'Changed evidence did not cancel request');
+    call.finish({ ...tableSuggestion, title: 'STALE response' });
+    ignoreAbort = false;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert(field(form, 'Title').value === mixed.title, 'Stale response applied to changed evidence');
+    await closeEntry(form);
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    setField(field(form, 'Title'), 'Save without waiting');
+    call = await startSuggestion(form);
+    ignoreAbort = true;
+    button('Save draft', form).click();
+    await wait(() => !document.querySelector('form'), 'Pending AI blocked save');
+    call.finish({ ...tableSuggestion, title: 'LATE saved response' });
+    ignoreAbort = false;
+    assert(savedInputs.at(-1).title === 'Save without waiting' && !savedInputs.at(-1).description, 'Late response changed saved draft');
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    call = await startSuggestion(form);
+    ignoreAbort = true;
+    button(mode === 'Paste table' ? 'Build manually' : 'Paste table').click();
+    await wait(() => call.signal.aborted && document.querySelector('form') !== form, 'Mode change did not cancel analysis');
+    call.finish({ ...tableSuggestion, title: 'LATE mode response' });
+    ignoreAbort = false;
+    const replacement = document.querySelector('form');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert(field(replacement, 'Title').value === '', 'Previous mode response filled new form');
+    await closeEntry(replacement);
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    setField(field(form, 'Title'), 'Entirely manual');
+    const attempts = pending.length;
+    button('Save draft', form).click();
+    await wait(() => !document.querySelector('form'), 'Saving without AI failed');
+    assert(pending.length === attempts && savedInputs.at(-1).title === 'Entirely manual', 'Manual save invoked AI');
+  }
+
+  let form = await openEntry('Paste table');
+  fillTable(form, 'Paste table');
+  holdParse = true;
+  const attemptsBeforeParse = pending.length;
+  button('Suggest with AI', form).click();
+  await wait(() => pendingParses.length === 1, 'Deferred parser not called');
+  setField(field(form, 'Table data'), 'Different source');
+  await wait(() => !button('Suggest with AI', form).disabled, 'Changed paste did not cancel analysis');
+  pendingParses[0](); holdParse = false;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert(pending.length === attemptsBeforeParse, 'Obsolete parsed content reached AI');
+  await closeEntry(form);
+
+  for (const type of ['listing', 'figure']) {
+    form = await openEntry('Build manually');
+    setField(field(form, 'Type'), type);
+    await wait(() => field(form, type === 'listing' ? 'Listing content' : 'Figure data'), 'Text input missing');
+    setField(field(form, type === 'listing' ? 'Listing content' : 'Figure data'), 'Synthetic source text');
+    const call = await startSuggestion(form);
+    assert(call.body.type === type && call.body.content.text === 'Synthetic source text', 'Manual text evidence changed');
+    call.finish({ ...tableSuggestion, description: 'Synthetic source text.' });
+    await wait(() => field(form, 'Title').value === tableSuggestion.title, 'Text suggestion missing');
+    await closeEntry(form);
+  }
+
+  for (const clearTitle of [false, true]) {
+    form = await openEntry('Build manually');
+    setField(field(form, 'Type'), 'figure');
+    await wait(() => form.querySelector('input[type=file]'), 'Figure input missing');
+    if (clearTitle) { setField(field(form, 'Title'), 'Remove me'); setField(field(form, 'Title'), ''); }
+    const files = new DataTransfer(); files.items.add(new File(['synthetic'], 'default-title.png', { type: 'image/png' }));
+    const fileInput = form.querySelector('input[type=file]');
+    fileInput.files = files.files; fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(() => form.querySelector('img') && !form.querySelector('fieldset').disabled, 'Figure preview missing');
+    assert(field(form, 'Title').value === (clearTitle ? '' : 'default-title.png'), 'Filename default overwrote human blank');
+    const call = await startSuggestion(form);
+    assert(call.body.content.image.dataUrl === figureImage.dataUrl, 'Figure image not sent unchanged');
+    call.finish({ ...tableSuggestion, title: 'Suggested figure title' });
+    await wait(() => !button('Suggest with AI', form).disabled, 'Figure suggestion not finished');
+    assert(field(form, 'Title').value === (clearTitle ? '' : 'Suggested figure title'), 'Default title blocked AI or AI overwrote human blank');
+    await closeEntry(form);
+  }
   assert(failures.length === 0, failures.join('\n'));
-  document.getElementById('result').textContent = 'PASS: five sequential suggestions, user-edit protection, info popover, origins on save/reload, timeout/retry, split/merge invalidation, unchanged evidence, save before AI response, and partial suggestions with manual placement';
+  document.getElementById('result').textContent = 'PASS: file import regression and twelve-result 429 batch; Paste table and Build manually explicit AI, validation, human edits and blanks, save/failure/retry, stale responses, manual save, listing/figure evidence and automatic defaults. Simulated flows only; model quality not evaluated.';
 } catch (error) {
   document.getElementById('result').textContent = `FAIL: ${error.message}\n${failures.join('\n')}`;
 }

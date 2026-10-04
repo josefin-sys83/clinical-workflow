@@ -5,6 +5,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { randomUUID } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import request from 'supertest';
@@ -74,6 +75,7 @@ describeDatabase('results HTTP API and PostgreSQL constraints', () => {
     };
     (getPool as jest.Mock).mockReturnValue({ ...db, connect: async () => db });
     const module = await Test.createTestingModule({
+      imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }])],
       controllers: [ResultsController],
       providers: [ResultsService, AuditService, { provide: AiService, useValue: { suggestResult: jest.fn() } }],
     })
