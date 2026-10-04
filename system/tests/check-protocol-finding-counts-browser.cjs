@@ -49,9 +49,10 @@ async function run() {
       socket.send(JSON.stringify({ id, method, params }));
     });
     await command('Emulation.setFocusEmulationEnabled', { enabled: true });
-    for (const query of ['', '?synopsis=1']) {
+    const fixture = process.env.PROTOCOL_TEST_FIXTURE || 'protocol-finding-counts.html';
+    for (const query of fixture === 'protocol-finding-counts.html' ? ['', '?synopsis=1'] : ['']) {
       await command('Page.navigate', {
-        url: `${process.env.PROTOCOL_TEST_ORIGIN || 'http://localhost:5175'}/tests/protocol-finding-counts.html${query}`,
+        url: `${process.env.PROTOCOL_TEST_ORIGIN || 'http://localhost:5175'}/tests/${fixture}${query}`,
       });
       let status;
       for (let attempt = 0; attempt < 200; attempt++) {

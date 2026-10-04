@@ -7,6 +7,15 @@ export const ISSUE_SEVERITIES = [
 export type IssueSeverity = typeof ISSUE_SEVERITIES[number];
 
 export interface IssueMetadata {
+  documentLink?: {
+    id: string;
+    attachmentId: string;
+    label: string;
+    status: 'checking' | 'satisfied' | 'warning' | 'blocker' | 'failed';
+    reason?: string | null;
+    decidedByUserId?: string | null;
+    decidedAt?: string;
+  };
   requirementId?: string | null;
   source?: string | null;
   targetSection?: string | null;
@@ -30,8 +39,8 @@ export function getIssuePresentation(severity: IssueSeverity) {
   return severityPresentation[severity];
 }
 
-export function isOpenIssue(issue: { status: string }): boolean {
-  return issue.status === 'open';
+export function isOpenIssue(issue: { status: string; documentLink?: IssueMetadata['documentLink'] }): boolean {
+  return issue.status === 'open' && (!issue.documentLink || ['warning', 'blocker'].includes(issue.documentLink.status));
 }
 
 export function countIssueSeverities(issues: readonly { severity: IssueSeverity }[]) {

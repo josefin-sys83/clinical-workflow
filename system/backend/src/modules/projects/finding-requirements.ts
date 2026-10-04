@@ -16,7 +16,7 @@ export function acceptedFindingRequirements(requirements: unknown): Array<{
 
 // Keep the existing string request contract while carrying stable IDs explicitly.
 export function findingRequirementsText(requirements: unknown): string {
-  return JSON.stringify(acceptedFindingRequirements(requirements));
+  return JSON.stringify(acceptedFindingRequirements(requirements)); //"[{\"id\":\"REQ-1\",\"title\":\"ISO 14155\",\"accepted\":true}]"
 }
 
 export function validateFindingRequirements(

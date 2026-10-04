@@ -21,11 +21,14 @@ import {
   listProtocolAttachments,
   uploadProtocolAttachment,
   removeProtocolAttachment,
+  updateProtocolAttachmentRequirements,
+  decideProtocolFinding,
   type ProtocolAttachment,
 } from '@/shared/api/documents';
 import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
 import { countIssueSeverities, getIssuePresentation, isOpenIssue } from '@/shared/protocol/issues';
 import { FindingDetails } from '@/shared/protocol/FindingDetails';
+import { FindingDocumentControl } from '@/shared/protocol/FindingDocumentControl';
 
 
 
@@ -68,9 +71,8 @@ export default function App() {
     void promise.then(remove, remove);
     return promise;
   };
-  // Analysis responses must consult the latest dismissals, including decisions
-  // made while the request was in flight.
-  const wontFixDescriptions = useRef<Record<string, string[]>>({});
+  // Only saved, accepted requirements can be assigned to a supporting document.
+  const [acceptedRequirements, setAcceptedRequirements] = useState<Array<{ id: string; title: string }>>([]);
   const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
   const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
   // A save may start another review before an earlier review of this section ends.
@@ -172,7 +174,7 @@ export default function App() {
       });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadOrGenerateProtocol = React.useCallback((generateIfMissing = !import.meta.env.DEV) => {
+  const loadOrGenerateProtocol = React.useCallback((generateIfMissing = false) => {
     if (!projectId) return;
     // Guards against duplicate concurrent generation runs (e.g. React StrictMode's
     // double-invoked effect in dev), which doubles AI request volume and can trip
@@ -195,6 +197,7 @@ export default function App() {
           });
         }
         setRoles(p.roles || p.data?.roles || []);
+        setAcceptedRequirements((p.data?.scope?.requirements || []).filter((r: any) => r.status === 'accepted'));
         if (p.data?.protocol?.sections?.length) {
           setProtocol(p.data.protocol);
           setSectionAnalysisStatus(Object.fromEntries(p.data.protocol.sections.map((s: any) => [s.id, s.analysisStatus || 'not-run'])));
@@ -306,11 +309,6 @@ export default function App() {
 
         let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
         const elements = result.requiredElements || [];
-        // Filter out won't-fix descriptions for this section
-        const suppressed = wontFixDescriptions.current[sectionId] || [];
-        if (suppressed.length > 0) {
-          issuesArr = issuesArr.filter((iss: any) => !suppressed.includes(iss.description));
-        }
         const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
         const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
         // The backend persisted this result against the exact section it analyzed.
@@ -487,6 +485,7 @@ export default function App() {
     const section = protocol?.sections?.find((candidate: any) => candidate.id === sectionId);
     const analysisStatus = sectionAnalysisStatus[sectionId] || section?.analysisStatus || 'not-run';
     if (section?.aiGenerated !== false && analysisStatus !== 'succeeded') return;
+    if ((section?.issues || []).some((issue: any) => isOpenIssue(issue) && issue.severity === 'blocker')) return;
     const now = new Date().toISOString();
     setProtocol((prev: any) => {
       if (!prev) return prev;
@@ -527,26 +526,49 @@ export default function App() {
     const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
     const issue = (currentSection?.issues || []).find((i: any) => i.id === issueId);
     if (!issue) return;
-    const issueDescription = issue.description;
-    // Store won't-fix description
-    const existing = wontFixDescriptions.current[sectionId] || [];
-    wontFixDescriptions.current[sectionId] = [...existing, issueDescription];
-    // Remove issue from protocol state
-    setProtocol((prev: any) => {
-      if (!prev) return prev;
-      const updatedSections = prev.sections.map((s: any) =>
-        s.id === sectionId ? { ...s, issues: (s.issues || []).filter((i: any) => i.id !== issueId) } : s
-      );
-      const updated = { ...prev, sections: updatedSections };
-      // Persist to backend
-      fetch(apiBase + '/api/projects/' + projectId, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { protocol: updated } })
-      });
-      return updated;
-    });
+    if (!projectId) return;
+    setProtocol((previous: any) => !previous ? previous : ({ ...previous, sections: previous.sections.map((section: any) =>
+      section.id === sectionId ? { ...section, issues: section.issues.filter((finding: any) => finding.id !== issueId) } : section) }));
+    try {
+      const saved = await decideProtocolFinding(projectId, sectionId, issueId, 'risk_accepted', undefined, comment);
+      setProtocol(saved);
+    } catch (error) {
+      setProtocolError(apiErrorMessage(error, 'Could not save risk acceptance.'));
+      const saved = await apiFetch<any>(`/projects/${projectId}`, { cache: 'no-store' }).catch(() => null);
+      if (saved?.data?.protocol) setProtocol(saved.data.protocol);
+    }
   };
+
+  const handleFindingDocument = (sectionId: string, issueId: string, attachmentId: string | null) => trackProtocolWork(async () => {
+    if (!projectId) return;
+    const saved = await decideProtocolFinding(projectId, sectionId, issueId, attachmentId ? 'document' : 'unlink', attachmentId || undefined);
+    setProtocol((previous: any) => !previous ? saved : ({ ...previous, sections: previous.sections.map((section: any) => {
+      const updated = saved.sections.find((item: any) => item.id === section.id && item.content === section.content);
+      return updated ? { ...section, issues: updated.issues } : section;
+    }) }));
+  });
+
+  const checkingDocuments = Boolean(protocol?.sections?.some((section: any) => section.issues?.some((issue: any) => issue.documentLink?.status === 'checking')));
+  React.useEffect(() => {
+    if (!checkingDocuments || !projectId) return;
+    let active = true;
+    let loading = false;
+    const interval = window.setInterval(async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const project = await apiFetch<any>(`/projects/${projectId}`, { cache: 'no-store' });
+        if (active && project.data?.protocol) setProtocol((previous: any) => !previous ? previous : ({
+          ...previous, sections: previous.sections.map((section: any) => {
+            const updated = project.data.protocol.sections?.find((item: any) => item.id === section.id && item.content === section.content);
+            return updated ? { ...section, issues: updated.issues } : section;
+          }),
+        }));
+      } catch { /* Saved links remain visible; the next poll can recover. */ }
+      finally { loading = false; }
+    }, 1500);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [checkingDocuments, projectId]);
 
   const handleCreateAmendment = async (data: { title: string; reason: string; description: string; affectedProtocolSections: string[] }) => {
     try {
@@ -634,6 +656,8 @@ export default function App() {
     () => sessionUser?.name || currentUser.replace(/\s*\([^)]*\)$/, ''),
     [sessionUser, currentUser]
   );
+
+  const documentLinksLocked = protocolFinalized || ['in_review', 'ready_for_review', 'approved', 'signed', 'final'].includes(snapshot?.steps?.['protocol-pdf']?.state || '');
 
   const canManageProtocolAttachments = React.useMemo(() => {
     if (!sessionUser) return false;
@@ -728,7 +752,7 @@ export default function App() {
       ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))
   );
 
-  const protocolSections = protocol?.sections?.map((s: any, idx: number) => ({
+  const protocolSections: Array<React.ComponentProps<typeof ProtocolSection>['section'] & { content: string; issues: NonNullable<React.ComponentProps<typeof ProtocolSection>['section']['issues']> }> = protocol?.sections?.map((s: any, idx: number) => ({
     id: s.id || String(idx + 1),
     number: s.id || String(idx + 1),
     title: s.title || '',
@@ -807,12 +831,12 @@ export default function App() {
 
   // Counts and cards share the same open findings, across all five severities.
   const allSectionIssues = protocolSections.flatMap(section =>
-    section.issues.filter(isOpenIssue).map(issue => ({ section, issue }))
+    section.issues.filter((issue: any) => isOpenIssue(issue) || issue.documentLink).map(issue => ({ section, issue }))
   );
-  const allSectionSeverityCounts = countIssueSeverities(allSectionIssues.map(({ issue }) => issue));
+  const allSectionSeverityCounts = countIssueSeverities(allSectionIssues.filter(({ issue }) => isOpenIssue(issue)).map(({ issue }) => issue));
   const totalBlockers = allSectionSeverityCounts.find(({ severity }) => severity === 'blocker')!.count;
   const totalWarnings = allSectionSeverityCounts.find(({ severity }) => severity === 'warning')!.count;
-  const allOpenIssuesCount = allSectionIssues.length + synopsisConsistencyIssues.length;
+  const allOpenIssuesCount = allSectionIssues.filter(({ issue }) => isOpenIssue(issue)).length + synopsisConsistencyIssues.length;
   const allSectionsComplete = protocolSections.length > 0 && protocolSections.every(s =>
     s.approvalStatus === 'approved' || s.status === 'approved'
   );
@@ -851,10 +875,10 @@ export default function App() {
   const myIssuesSections = getMyIssuesSections();
   const mySectionIssues = allSectionIssues.filter(({ section }) => myIssuesSections.includes(section));
   // Synopsis findings are project-wide and appear in both filter states.
-  const myIssuesCount = mySectionIssues.length + synopsisConsistencyIssues.length;
+  const myIssuesCount = mySectionIssues.filter(({ issue }) => isOpenIssue(issue)).length + synopsisConsistencyIssues.length;
   const visibleSectionIssues = issueFilter === 'all-issues' ? allSectionIssues : mySectionIssues;
   const visibleSeverityCounts = countIssueSeverities([
-    ...visibleSectionIssues.map(({ issue }) => issue),
+    ...visibleSectionIssues.filter(({ issue }) => isOpenIssue(issue)).map(({ issue }) => issue),
     ...synopsisConsistencyIssues,
   ]);
   const visibleIssuesCount = visibleSeverityCounts.reduce((count, severity) => count + severity.count, 0);
@@ -1036,11 +1060,19 @@ export default function App() {
 
                 <ProtocolAttachmentsSection
                   attachments={protocolAttachments}
-                  canManage={canManageProtocolAttachments}
+                  canManage={canManageProtocolAttachments && !documentLinksLocked}
                   busy={attachmentBusy}
                   error={attachmentError}
                   onUpload={handleProtocolAttachmentUpload}
                   onRemove={handleProtocolAttachmentRemove}
+                  requirements={acceptedRequirements}
+                  onRequirementsChange={async (attachment, requirementIds) => {
+                    if (!projectId) return;
+                    setAttachmentBusy(true); setAttachmentError(null);
+                    try { setProtocolAttachments(await updateProtocolAttachmentRequirements(projectId, attachment.id, requirementIds)); }
+                    catch (error) { setAttachmentError(apiErrorMessage(error, 'Could not update covered requirements.')); }
+                    finally { setAttachmentBusy(false); }
+                  }}
                 />
 
                 {generatingProtocol ? (
@@ -1116,6 +1148,8 @@ export default function App() {
                           analyzeSectionWithAI(section.title, section.content, section.id);
                         }}
                         attachments={protocolAttachments}
+                        documentLinksLocked={documentLinksLocked || generatingProtocol}
+                        onFindingDocument={(issueId, attachmentId) => handleFindingDocument(section.id, issueId, attachmentId)}
                       />
                     ))}
                   </div>
@@ -1266,7 +1300,7 @@ export default function App() {
               <div className="flex-1 overflow-y-auto min-h-0">
                 <div className="p-4 space-y-3" data-issues-panel-list>
                   {synopsisConsistencyIssues.map((issue: any, i: number) => {
-                    const presentation = getIssuePresentation(issue.severity);
+                    const presentation = getIssuePresentation(issue.documentLink && !isOpenIssue(issue) ? 'recommendation' : issue.severity);
                     return (
                       <div key={'synopsis-' + i} data-panel-finding-severity={issue.severity} className={`p-3 rounded border ${presentation.badge} ${presentation.border}`}>
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -1281,7 +1315,7 @@ export default function App() {
                     );
                   })}
                   {visibleSectionIssues.map(({ section, issue }) => {
-                    const presentation = getIssuePresentation(issue.severity);
+                    const presentation = getIssuePresentation(issue.documentLink && !isOpenIssue(issue) ? 'recommendation' : issue.severity);
                     return (
                       <div
                         key={`${section.id}-${issue.id}`}
@@ -1293,7 +1327,7 @@ export default function App() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
                               <span className={`text-xs px-1.5 py-0.5 rounded ${presentation.badge}`}>
-                                {presentation.label}
+                                {issue.documentLink && !isOpenIssue(issue) ? 'Document linked' : presentation.label}
                               </span>
                               {issue.raisedBy?.toLowerCase().includes('system') && (
                                 <span className="text-xs text-slate-500">AI Regulatory Review</span>
@@ -1304,6 +1338,8 @@ export default function App() {
                               {issue.description}
                             </p>
                             <FindingDetails finding={issue} />
+                            <FindingDocumentControl finding={issue} attachments={protocolAttachments} disabled={documentLinksLocked || generatingProtocol}
+                              onDecide={(issueId, attachmentId) => handleFindingDocument(section.id, issueId, attachmentId)} />
 
                             <div className={`pt-2 border-t ${presentation.border} space-y-1.5`}>
                               <div className="flex items-center justify-between">

@@ -1,8 +1,11 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
 import { AuditService, type AuditActor } from '../audit/audit.service';
+import { assertProtocolDocumentsMutable } from './protocol-document-lock';
+import { validateFindingRequirements, acceptedFindingRequirements } from '../projects/finding-requirements';
+import { extractDocumentText } from '../../common/document-text';
 
 @Injectable()
 export class ProtocolAttachmentsService {
@@ -43,7 +46,7 @@ export class ProtocolAttachmentsService {
               pa.uploaded_by_user_id,
               coalesce(u.name, pa.uploaded_by_name) as uploader_name,
               coalesce(u.email, pa.uploaded_by_email) as uploader_email,
-              pa.uploaded_at
+              pa.uploaded_at, pa.requirement_ids, pa.extraction_error
        from protocol_attachment pa
        join protocol pr on pr.id = pa.protocol_id
        left join users u on u.id = pa.uploaded_by_user_id
@@ -63,6 +66,8 @@ export class ProtocolAttachmentsService {
       uploaderName: String(row.uploader_name),
       uploaderEmail: row.uploader_email ?? null,
       uploadedAt: row.uploaded_at,
+      requirementIds: row.requirement_ids || [],
+      extractionError: row.extraction_error ?? null,
     }));
   }
 
@@ -80,6 +85,7 @@ export class ProtocolAttachmentsService {
     try {
       await client.query('BEGIN');
       await this.assertCanManageProtocolAttachments(client, args.projectId, args.actor.userId);
+      await assertProtocolDocumentsMutable(client, args.projectId);
 
       const { rows: actorRows } = await client.query(
         `select name, email from users where id = $1`,
@@ -168,6 +174,7 @@ export class ProtocolAttachmentsService {
     try {
       await client.query('BEGIN');
       await this.assertCanManageProtocolAttachments(client, args.projectId, args.actor.userId);
+      await assertProtocolDocumentsMutable(client, args.projectId);
       const { rows } = await client.query(
         `select appendix_number, filename, mime_type, description,
                 octet_length(bytes)::int as size_bytes
@@ -179,6 +186,12 @@ export class ProtocolAttachmentsService {
       );
       const attachment = rows[0];
       if (!attachment) throw new NotFoundException('Protocol attachment not found');
+
+      const linkedFindings = await client.query(
+        `update protocol_section_issue set attachment_id=null,verification_status=null,verification_request_id=null,
+         verification_reason=null,verified_at=null,document_linked_by_user_id=null,document_linked_at=null
+         where attachment_id=$1 returning id`, [args.attachmentId],
+      );
 
       await client.query(
         `delete from protocol_attachment where id = $1`,
@@ -199,6 +212,7 @@ export class ProtocolAttachmentsService {
           mimeType: attachment.mime_type,
           sizeBytes: Number(attachment.size_bytes),
           description: attachment.description ?? null,
+          removedDocumentLinks: linkedFindings.rows.map(finding => finding.id),
         },
       }, client);
 
@@ -211,5 +225,68 @@ export class ProtocolAttachmentsService {
     } finally {
       client.release();
     }
+  }
+
+  async updateRequirements(projectId: string, attachmentId: string, requirementIds: string[], actor: AuditActor) {
+    if (!Array.isArray(requirementIds) || requirementIds.some(id => typeof id !== 'string' || !id.trim())) {
+      throw new BadRequestException('requirementIds must contain accepted requirement IDs');
+    }
+    const ids = [...new Set(requirementIds)];
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await this.assertCanManageProtocolAttachments(client, projectId, actor.userId);
+      const data = await assertProtocolDocumentsMutable(client, projectId);
+      validateFindingRequirements(ids.map(requirementId => ({ requirementId })), data.scope?.requirements);
+      const { rows } = await client.query(
+        `update protocol_attachment pa set requirement_ids=$3
+         from protocol pr where pa.protocol_id=pr.id and pr.project_id=$1 and pa.id=$2
+         returning pa.appendix_number, pa.filename`, [projectId, attachmentId, ids],
+      );
+      if (!rows[0]) throw new NotFoundException('Protocol attachment not found');
+      await this.audit.record({
+        projectId, stepId: 'protocol-make', type: 'protocol.attachment.requirements.updated',
+        message: `Updated requirements covered by Appendix ${rows[0].appendix_number}: ${rows[0].filename}`,
+        actor, entityType: 'protocol_attachment', entityId: attachmentId,
+        metadata: { requirementIds: ids, ...rows[0] },
+      }, client);
+      const result = await this.listProtocolAttachments({ projectId }, client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async supportingDocuments(projectId: string, requirements: unknown, includeText = false) {
+    const accepted = acceptedFindingRequirements(requirements);
+    const { rows } = await getPool().query(
+      `select pa.id, pa.appendix_number, pa.filename, pa.description, pa.requirement_ids,
+              array(select distinct i.requirement_id from protocol_section_issue i
+                    where i.attachment_id=pa.id and i.status='open' and i.requirement_id is not null) as finding_requirement_ids,
+              pa.extracted_text, pa.extraction_error${includeText ? ', pa.bytes, pa.mime_type' : ''}
+       from protocol_attachment pa join protocol pr on pr.id=pa.protocol_id
+       where pr.project_id=$1 order by pa.appendix_number`, [projectId],
+    );
+    return Promise.all(rows.map(async row => {
+      let extractedText = row.extracted_text;
+      let extractionError = row.extraction_error;
+      if (includeText && extractedText == null && extractionError == null) {
+        try { extractedText = await extractDocumentText(row.bytes, row.filename, row.mime_type); }
+        catch (error) { extractionError = error instanceof Error ? error.message : 'Text extraction failed'; }
+        await getPool().query('update protocol_attachment set extracted_text=$2, extraction_error=$3 where id=$1',
+          [row.id, extractedText ?? null, extractionError ?? null]);
+      }
+      const requirementIds: string[] = [...new Set<string>([...(row.requirement_ids || []), ...(row.finding_requirement_ids || [])])]
+        .filter(id => accepted.some(r => r.id === id));
+      return {
+        id: row.id, label: `Appendix ${row.appendix_number} - ${row.filename}`,
+        appendixNumber: Number(row.appendix_number), filename: row.filename, description: row.description,
+        requirementIds,
+        requirements: accepted.filter(r => requirementIds.includes(r.id)),
+        ...(includeText ? { extractedText: extractedText ?? '', extractionError: extractionError ?? null } : {}),
+      };
+    }));
   }
 }

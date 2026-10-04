@@ -19,6 +19,8 @@ export type ProtocolAttachment = {
   uploaderName: string;
   uploaderEmail: string | null;
   uploadedAt: string;
+  requirementIds?: string[];
+  extractionError?: string | null;
 };
 
 export async function listProtocolAttachments(projectId: string): Promise<ProtocolAttachment[]> {
@@ -47,6 +49,19 @@ export async function removeProtocolAttachment(args: {
     `/projects/${args.projectId}/documents/protocol/attachments/${args.attachmentId}`,
     { method: 'DELETE' },
   );
+}
+
+export function updateProtocolAttachmentRequirements(projectId: string, attachmentId: string, requirementIds: string[]): Promise<ProtocolAttachment[]> {
+  return apiFetch(`/projects/${projectId}/documents/protocol/attachments/${attachmentId}/requirements`, {
+    method: 'PATCH', body: JSON.stringify({ requirementIds }),
+  });
+}
+
+export function decideProtocolFinding(projectId: string, sectionId: string, issueId: string,
+  action: 'document' | 'unlink' | 'risk_accepted', attachmentId?: string, reason?: string): Promise<any> {
+  return apiFetch(`/projects/${projectId}/protocol/sections/${encodeURIComponent(sectionId)}/findings/${encodeURIComponent(issueId)}/decision`, {
+    method: 'POST', body: JSON.stringify({ action, attachmentId, reason }),
+  });
 }
 
 export async function finalizeDocument(args: {

@@ -29,7 +29,7 @@ describe.each(['protocol', 'report'])('%s section finding requirements', kind =>
     const workflow: any = { assertDocumentNotSigned: jest.fn() };
     const body = { sectionId: section.id, sectionTitle: section.title, sectionContent: section.content };
     if (kind === 'protocol') {
-      const controller = new ProtocolsController(projects, storage, ai, {} as any, {} as any, workflow, {} as any);
+      const controller = new ProtocolsController(projects, storage, ai, {} as any, {} as any, workflow, { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);
       run = () => controller.analyzeSection('project', body, { user: actor });
     } else {
       const controller = new ReportsController(projects, storage, ai, workflow);

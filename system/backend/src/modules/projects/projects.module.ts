@@ -10,6 +10,7 @@ import { ProtocolsService } from '../protocols/protocols.service';
 import { ReportsService } from '../reports/reports.service';
 
 import { ProtocolAttachmentsService } from '../protocols/protocol-attachments.service';
+import { ProtocolFindingDocumentsService } from '../protocols/protocol-finding-documents.service';
 import { ProtocolsController } from '../protocols/protocols.controller';
 import { ReportsController } from '../reports/reports.controller';
 import { DocumentWorkflowService } from './document-workflow.service';
@@ -21,7 +22,7 @@ import { ResultsService } from '../results/results.service';
 @Module({
   imports: [AiModule, AuditModule, WorkflowModule, AdminModule],
   controllers: [ProjectsController, ProtocolsController, ReportsController, ResultsController],
-  providers: [ProjectsService, ProtocolsService, ReportsService, MilestoneService, DocumentWorkflowService, ProtocolAttachmentsService, ResultsService],
+  providers: [ProjectsService, ProtocolsService, ReportsService, MilestoneService, DocumentWorkflowService, ProtocolAttachmentsService, ProtocolFindingDocumentsService, ResultsService],
   exports: [ProjectsService, ProtocolsService, ReportsService],
 })
 export class ProjectsModule {}

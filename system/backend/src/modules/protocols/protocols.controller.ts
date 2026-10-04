@@ -12,7 +12,7 @@ import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { logAnalyzeSectionRequest } from '../../common/analysis-request-logger';
 import { randomUUID } from 'crypto';
 import { ProtocolsService } from './protocols.service';
-import { UpdateSectionContentDto, UploadProtocolAttachmentDto } from './dto';
+import { UpdateSectionContentDto, UploadProtocolAttachmentDto, UpdateAttachmentRequirementsDto, FindingDecisionDto } from './dto';
 import { GenerationProgressService } from '../ai/generation-progress.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { getMissingProtocolAttachmentIssues } from './protocol-attachment-reference';
@@ -24,6 +24,7 @@ import { Roles } from '../auth/roles.decorator';
 import { PROTOCOL_UPLOAD_OPTIONS } from '../../common/upload-security';
 import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
+import { ProtocolFindingDocumentsService } from './protocol-finding-documents.service';
 import { buildGenerationMetadataLog, buildProtocolGenerationContext, sourceSynopsisText } from '../projects/project-generation-context';
 import { findingRequirementsText, validateFindingRequirements } from '../projects/finding-requirements';
 import { ConflictException } from '@nestjs/common';
@@ -55,6 +56,7 @@ export class ProtocolsController {
     private readonly generationProgress: GenerationProgressService,
     private readonly documentWorkflow: DocumentWorkflowService,
     private readonly attachments: ProtocolAttachmentsService,
+    private readonly findingDocuments?: ProtocolFindingDocumentsService,
   ) {}
 
   @Patch('/:projectId/protocol/sections/:sectionId')
@@ -266,17 +268,24 @@ export class ProtocolsController {
       : null;
 
     const crossSectionContext = (protocol.sections || [])
-      .filter((s: any) => ['Study Design', 'Study Rationale & Objectives'].includes(s.title) && s.title !== sectionTitle && s.content)
+      .filter((s: any) => s.title !== sectionTitle && s.content)
       .map((s: any) => ({ title: s.title, content: s.content }));
 
     const requirements = project?.data?.scope?.requirements;
     const acceptedRequirements = findingRequirementsText(requirements);
     const synopsisExcerpt = sourceSynopsisText(project?.data?.synopsis);
 
-    const protocolAttachments = await this.protocols.listAttachmentsForAnalysis(project.id);
-    const attachmentLabels = protocolAttachments.map((attachment) =>
-      `Appendix ${attachment.appendixNumber}: ${attachment.filename}${attachment.description ? ` — ${attachment.description}` : ''}`,
-    );
+    const protocolAttachments = await this.attachments.supportingDocuments(project.id, requirements, true);
+    const attachmentMetadata = protocolAttachments.map((attachment) => ({
+      id: attachment.id,
+      label: attachment.label,
+      appendixNumber: attachment.appendixNumber,
+      filename: attachment.filename,
+      description: attachment.description,
+      requirementIds: attachment.requirementIds,
+      requirements: attachment.requirements,
+      extractionError: attachment.extractionError,
+    }));
     const attachmentIssues = getMissingProtocolAttachmentIssues(
       { id: sectionId || section?.id || sectionTitle, title: sectionTitle, content: sectionContent },
       protocolAttachments.map((attachment) => attachment.appendixNumber),
@@ -286,12 +295,15 @@ export class ProtocolsController {
       { id: sectionId || section?.id || sectionTitle, title: sectionTitle, content: sectionContent },
       targetMarkets,
       project?.data?.projectData || {},
+      requirements,
+      protocolAttachments,
     );
 
     await logAnalyzeSectionRequest({
       projectId: project.id,
       sectionId,
       aiRequestSent: attachmentIssues.length === 0,
+      endpoint: '/v1/ai/analyze-section',
       request: {
         sectionTitle,
         sectionContent,
@@ -303,9 +315,10 @@ export class ProtocolsController {
         crossSectionContext,
         acceptedRequirements,
         synopsisExcerpt,
+        protocolDocuments: protocolAttachments,
       },
-      // Attachments are checked locally; the Python API has no attachment input.
-      protocolAttachments: attachmentLabels,
+      // Keep a metadata summary alongside the complete AI request payload.
+      protocolAttachments: attachmentMetadata,
     });
 
     // This integrity check does not need AI. Return known-broken references
@@ -319,7 +332,15 @@ export class ProtocolsController {
       };
     }
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt);
+    this.logger.log(JSON.stringify({
+      event: 'ai.protocol.section_analysis.documents',
+      projectId: project.id,
+      sectionId,
+      sectionTitle,
+      protocolDocuments: attachmentMetadata,
+    }));
+
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt, protocolAttachments);
 
     if (result?.error) return result;
 
@@ -567,6 +588,21 @@ async forceProtocolDraft(@Param('projectId') projectId: string, @Req() req: any)
   @Roles('admin', 'author', 'reviewer', 'approver')
   listProtocolAttachments(@Param('projectId') projectId: string) {
     return this.attachments.listProtocolAttachments({ projectId });
+  }
+
+  @Patch('/:projectId/documents/protocol/attachments/:attachmentId/requirements')
+  @Roles('admin', 'author', 'reviewer', 'approver')
+  updateAttachmentRequirements(@Param('projectId') projectId: string, @Param('attachmentId') attachmentId: string,
+    @Body() body: UpdateAttachmentRequirementsDto, @Req() req: any) {
+    return this.attachments.updateRequirements(projectId, attachmentId, body.requirementIds, req.user);
+  }
+
+  @Post('/:projectId/protocol/sections/:sectionId/findings/:issueId/decision')
+  @Roles('admin', 'author', 'reviewer', 'approver')
+  @UseGuards(AiThrottlerGuard)
+  decideFinding(@Param('projectId') projectId: string, @Param('sectionId') sectionId: string,
+    @Param('issueId') issueId: string, @Body() body: FindingDecisionDto, @Req() req: any) {
+    return this.findingDocuments!.decide(projectId, sectionId, issueId, body.action, req.user, body.attachmentId, body.reason);
   }
 
   @Post('/:projectId/documents/protocol/attachments')

@@ -1,3 +1,4 @@
+import { assertNoProtocolBlockers } from '../protocols/protocol-finding-state';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { getPool } from '../../db/pg';
 import { TransitionDto, WorkflowSnapshot } from './dto';
@@ -135,6 +136,9 @@ export class WorkflowService {
     const now = new Date().toISOString();
     try {
       if (ownsTransaction) await client.query('BEGIN');
+      // Document decisions take the same lock, so signature transitions cannot
+      // race a link/unlink transaction.
+      if (stepId.startsWith('protocol-')) await client.query('select id from projects where id=$1 for update', [projectId]);
 
       const { rows: stepRows } = await client.query(
         `select 1 from workflow_steps where step_id=$1`,
@@ -164,6 +168,9 @@ export class WorkflowService {
 
       next = nextState(current, action);
       assertValidTransition(stepId, current, action, next);
+      if (stepId.startsWith('protocol-') && ['mark_ready', 'start_review', 'approve', 'sign', 'finalize'].includes(action)) {
+        await assertNoProtocolBlockers(client, projectId);
+      }
 
       await client.query(
         `update workflow_step_state set state=$3, updated_at=$4 where project_id=$1 and step_id=$2`,

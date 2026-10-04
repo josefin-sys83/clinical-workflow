@@ -66,6 +66,7 @@ const project = { id: 'fixture', targetMarkets: ['EU'], data: { projectData: {},
 let releaseAnalysis;
 let patchCalls = 0;
 let releaseDismissal;
+const riskAccepted = [];
 window.fetch = async (input, init = {}) => {
   const url = String(input);
   const body = init.body ? JSON.parse(init.body) : {};
@@ -76,9 +77,15 @@ window.fetch = async (input, init = {}) => {
     payload = { content: section.content, updatedAt: '2026-09-27' };
   } else if (url.endsWith('/analyze-section')) {
     payload = await new Promise(resolve => { releaseAnalysis = resolve; });
-  } else if (url.endsWith('/projects/fixture') && init.method === 'PATCH') {
+    payload.issues = payload.issues.filter(issue => !riskAccepted.includes(issue.description));
+    section.issues = payload.issues;
+  } else if (url.endsWith('/decision') && init.method === 'POST') {
     await new Promise(resolve => { releaseDismissal = resolve; });
-    project.data.protocol = body.data.protocol;
+    const issueId = url.split('/findings/')[1].split('/')[0];
+    const finding = section.issues.find(issue => issue.id === issueId);
+    if (finding) riskAccepted.push(finding.description);
+    section.issues = section.issues.filter(issue => !riskAccepted.includes(issue.description));
+    payload = project.data.protocol;
   } else if (url.endsWith('/projects/fixture')) payload = project;
   else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
   else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: synopsisCount ? [synopsisFinding] : [] };
