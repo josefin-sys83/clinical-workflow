@@ -14,6 +14,33 @@ class ReportSectionOption(BaseModel):
     title: str = Field(min_length=1, max_length=1000)
 
 
+class TflDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=200)
+    filename: str = Field(min_length=1, max_length=1000)
+    text: str = Field(min_length=1, max_length=60000)
+
+
+class TflContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    documents: list[TflDocument]
+    limitation: str | None = Field(max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_context(self):
+        if not self.documents and not self.limitation:
+            raise ValueError("Attached TFL must include documents or explain why it is unavailable.")
+        if len({document.id for document in self.documents}) != len(self.documents):
+            raise ValueError("TFL document IDs must be unique.")
+        return self
+
+
+class TflEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    documentId: str = Field(min_length=1, max_length=200)
+    quote: str = Field(min_length=1, max_length=4000)
+
+
 class SuggestResultRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["table", "figure", "listing"]
@@ -22,6 +49,7 @@ class SuggestResultRequest(BaseModel):
     sourceLocation: str | None = Field(default=None, max_length=2000)
     originalReference: str | None = Field(default=None, max_length=1000)
     sections: list[ReportSectionOption]
+    tfl: TflContext | None = None
 
     @model_validator(mode="after")
     def validate_source(self):
@@ -46,14 +74,14 @@ class SuggestResultRequest(BaseModel):
         # Bound the complete textual model input; never silently truncate evidence.
         source = {k: v for k, v in self.content.items() if k not in ("image", "provenance")}
         payload = {**self.model_dump(exclude={"content"}), "content": source}
-        if len(json.dumps(payload, ensure_ascii=False)) > 60_000:
+        if len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) > 60_000:
             raise ValueError("Result is too large for AI suggestions. Split it or enter the fields manually.")
         if len({s.key for s in self.sections}) != len(self.sections):
             raise ValueError("Report section keys must be unique.")
         return self
 
 
-class ResultSuggestion(BaseModel):
+class ResultSuggestionMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str | None = Field(max_length=1000)
     reportSectionKey: str | None = Field(max_length=200)
@@ -74,3 +102,7 @@ class ResultSuggestion(BaseModel):
                     or len(self.alternativeSectionKeys) < 2):
                 raise ValueError("Mixed-topic alternatives require distinct sections, supported metadata and no selected section.")
         return self
+
+
+class ResultSuggestion(ResultSuggestionMetadata):
+    tflEvidence: list[TflEvidence]

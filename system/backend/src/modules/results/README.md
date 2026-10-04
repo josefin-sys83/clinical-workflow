@@ -109,6 +109,7 @@ Additional endpoints under the results base path:
 | GET | `/workspace` | All results, supporting documents, existing section destinations, signed/final lock state |
 | POST | `/parse-table` | Parse `{ "text": "..." }` as CSV or spreadsheet paste; does not persist |
 | POST | `/preview` | Multipart `file`; returns `{ drafts, issues }` for review; does not persist |
+| POST | `/suggest` | Suggest title, report section and description for one imported object; does not persist |
 | POST | `/supporting-documents` | Multipart `file`, `type` (`sap`/`tfl`), optional description |
 | GET | `/supporting-documents/:documentId` | Download original bytes |
 | DELETE | `/supporting-documents/:documentId` | Remove an unreferenced attachment and audit the removal |
@@ -120,6 +121,96 @@ PDF/DOCX/TXT text extraction into listings, plus PNG/JPEG figure images. It does
 figure/table in a document, or generate AI suggestions. Imported drafts must be
 reviewed and saved individually. Legacy `.xls`/`.doc` files must be converted to
 `.xlsx`/`.docx` before result intake; they may still be attached as reference files.
+
+Import review requests AI metadata separately from file parsing. The suggestion
+includes `placementBasisLabel`: exactly `Using TFL mapping` when a mapping is used,
+`no TFL, based on content` when no TFL is attached, or null when attached TFL cannot
+be used. The backend reads all project-owned TFL attachments; clients cannot supply
+TFL context or usage claims. SAP files are not used for this placement mapping.
+
+TFL reading supports text-based PDF, DOCX, XLSX and UTF-8 TXT using existing libraries,
+without OCR. All attached TFL documents are assessed together without version priority.
+Unreadable/unsupported attachments, unavailable section keys and oversized input are
+checked in code. Missing, incomplete or conflicting mappings must also leave placement
+unassigned with an explanation in `limitation`, but identifying those semantic conditions
+currently depends on the model (see the verification gaps below). Supported titles and
+descriptions should come from the result itself. There is no authorized content-based
+placement fallback when TFL is attached.
+PDF pages without readable text, including blank pages, conservatively prevent use
+of that document. Input is bounded at 60,000 serialized text characters and is not
+silently truncated; an oversized TFL is withheld with an explicit limitation.
+
+AI must identify a mapping covering the whole object and return its document ID and
+an exact source quote. Python and backend validate this evidence and available section
+keys; the backend derives the label and removes internal quotes from the UI response.
+These checks establish source traceability, not guaranteed semantic accuracy. Human
+review remains required. TFL is used for placement only, never as study-result evidence
+for the title or description.
+
+The basis label is visible only during import review and is hidden after any manual
+section change, including changing back. `Human-edited` remains separate. The basis
+label is not saved and does not reappear after reloading a saved result. Changes to
+attached TFL files mark import placement suggestions as stale and hide their label,
+explanation and alternatives. Reanalyze placement uses the current attachments;
+it preserves titles, descriptions and manually edited sections. Changes from other
+sessions are detected on workspace refresh, not immediately.
+
+### Task 47 review and rollout
+
+Review as three PRs based on Task 46, then merge and deploy **AI, backend, frontend**
+in that order. Enable the complete workflow only after all three are deployed.
+No database migration is needed. Planned rollback uses the reverse order.
+
+| PR | Changes and verification |
+| --- | --- |
+| AI | Study Results Python models, prompt and service; API response serialization; result suggestion and TFL tests |
+| Backend | AI forwarding/validation; Results DTO, controller, service, extraction, mapping, tests and this README |
+| Frontend | Study Results import drafts, review, editor and page; results API type; result-suggestions browser fixture |
+
+Without TFL, backend omits `tfl` and Python returns the original Task 46 metadata
+response without `tflEvidence`. With TFL, Python returns the extended response.
+Both response models reject unknown fields; backend explicitly accepts optional
+`tflEvidence` and continues to reject other unknown fields.
+
+Required compatibility matrix (verify before deployment):
+
+| Backend | Python | No TFL | Attached TFL |
+| --- | --- | --- | --- |
+| Task 46 | Task 46 | Original suggestions | Task 47 unavailable |
+| Task 46 | Task 47 | Original response contract | Task 47 unavailable |
+| Task 47 | Task 46 | Original suggestions | Explicit failure; no retry without TFL |
+| Task 47 | Task 47 | Content-based suggestions | Mapping or explained abstention |
+
+A successful response alone never proves TFL usage: backend still requires source
+evidence before assigning the mapping label. Recheck these contracts and regression
+tests if Task 46 review changes section keys, response fields, import scheduling or
+human-edit handling. These PRs are separately reviewable, not independent deployments.
+Local agent instructions and unrelated Git changes do not belong in these PRs.
+
+Verification on 2026-10-01:
+
+- 55 Python tests and 95 relevant backend tests passed with simulated AI responses.
+- Actual Task 46 code from `d5beff9` and the updated code passed all six compatibility
+  scenarios: four no-TFL combinations, new/new with TFL, and the expected 422 for
+  new backend/old Python with TFL. LLM responses were simulated; HTTP serialization,
+  model validation and backend response contracts were exercised.
+- Backend/frontend builds, import checks and both headless Chrome fixtures passed.
+  Browser tests intercept API calls; they do not verify a live database workflow.
+- All eight existing complete/incomplete synthetic TFL files were extracted using
+  the backend code. No database was accessed.
+- Six paid AI calls completed, with no retries: no TFL; complete XLSX, PDF and DOCX;
+  incomplete TXT; and two conflicting TFL documents. Five placement outcomes and
+  labels matched expectations. The conflict case incorrectly selected Safety Analysis
+  and received `Using TFL mapping` because its quote existed in one document, despite
+  a second document mapping the same result to Report Appendices.
+- Manual source comparison found an unsupported safety population of 100 in three
+  descriptions (complete XLSX, complete DOCX, conflict). That value exists in the TFL,
+  not in the imported result object. Quote validation does not prevent this leakage.
+
+**Deployment is not ready:** conflict detection and keeping TFL-only facts out of
+descriptions need correction and renewed live verification. Passing stub tests is
+not evidence that the model detects conflicting mappings. No additional live calls,
+database integration tests or UI flows against a real backend/database were run.
 
 Spreadsheet previews keep filename, sheet, physical row ranges and column ranges.
 Structured `content.provenance` stores source ranges for the header and each data

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { validateFigureContent } from './figure-image';
+import { extractTflText, TflContext } from './tfl-mapping';
 import { getPool } from '../../db/pg';
 import { AuditActor, AuditService } from '../audit/audit.service';
 import {
@@ -169,6 +170,27 @@ export class ResultsService {
     );
     if (!rows[0]) throw new NotFoundException('Supporting document not found');
     return rows[0];
+  }
+
+  async tflContext(projectId: string): Promise<TflContext | null> {
+    const { rows } = await getPool().query(
+      `select id,filename from supporting_document where project_id=$1 and type='tfl' order by uploaded_at,id`,
+      [projectId],
+    );
+    if (!rows.length) return null;
+    const documents: TflContext['documents'] = [];
+    for (const row of rows) {
+      try {
+        const document = await this.downloadSupportingDocument(projectId, row.id);
+        const text = await extractTflText(row.filename, document.bytes);
+        documents.push({ id: row.id, filename: row.filename, text });
+        if (JSON.stringify(documents).length > 60000)
+          return { documents: [], limitation: 'The attached TFL documents are too large to assess together. Select a section manually.' };
+      } catch {
+        return { documents: [], limitation: `TFL "${row.filename}" could not be fully read. Use readable PDF, DOCX, XLSX or UTF-8 TXT within the size limit, or select a section manually.` };
+      }
+    }
+    return { documents, limitation: null };
   }
 
   async removeSupportingDocument(

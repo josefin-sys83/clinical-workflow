@@ -31,6 +31,10 @@ const generatedProtocol = z.object({
 
 const contracts: Record<string, z.ZodTypeAny> = {
   '/v1/ai/suggest-result': z.object({
+    tflEvidence: z.array(z.object({
+      documentId: suggestionText(200).unwrap(),
+      quote: suggestionText(4000).unwrap(),
+    }).strict()).optional(),
     title: suggestionText(1000),
     reportSectionKey: suggestionText(200),
     description: suggestionText(20000),

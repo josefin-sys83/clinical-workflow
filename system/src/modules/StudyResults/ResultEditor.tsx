@@ -55,6 +55,8 @@ export function ResultEditor({
   draftKey,
   onDraftChange,
   suggestion: importedSuggestion,
+  placementStale = false,
+  placementOnly = false,
 }: {
   projectId: string;
   initial?: ResultInput;
@@ -62,6 +64,8 @@ export function ResultEditor({
   draftKey?: string;
   onDraftChange?: (key: string, input: ResultInput) => void;
   suggestion?: ResultSuggestion;
+  placementStale?: boolean;
+  placementOnly?: boolean;
   mode: 'manual' | 'paste' | 'upload' | 'edit';
   busy: boolean;
   onSave: (input: ResultInput) => Promise<void>;
@@ -101,30 +105,32 @@ export function ResultEditor({
     description: initial?.descriptionOrigin === 'human',
   });
   const placementHelpId = useId();
-  const showPlacementHelp = !section && suggestion?.reportSectionKey === null && !!suggestion.limitation;
+  const showPlacementHelp = !placementStale && !section && suggestion?.reportSectionKey === null && !!suggestion.limitation;
   const alternativeTitles = sections
     .filter(s => suggestion?.alternativeSectionKeys?.includes(s.id.replace(/^key:/, '')))
     .map(s => s.title);
+  const appliedSuggestion = useRef<ResultSuggestion>();
   useEffect(() => {
-    if (!suggestion) return;
+    if (!suggestion || appliedSuggestion.current === suggestion) return;
+    appliedSuggestion.current = suggestion;
     const next: Partial<typeof origins> = {};
-    if (!humanEdits.current.title &&
+    if (!placementOnly && !humanEdits.current.title &&
         (suggestion.title !== null || (canSuggest && origins.titleOrigin === 'ai'))) {
       setTitle(suggestion.title ?? '');
       next.titleOrigin = suggestion.title === null ? undefined : 'ai';
     }
-    if (!humanEdits.current.section &&
-        (suggestion.reportSectionKey !== null || (canSuggest && origins.sectionOrigin === 'ai'))) {
+    if (!placementStale && !humanEdits.current.section &&
+        (suggestion.reportSectionKey !== null || placementOnly || (canSuggest && origins.sectionOrigin === 'ai'))) {
       setSection(suggestion.reportSectionKey === null ? '' : `key:${suggestion.reportSectionKey}`);
       next.sectionOrigin = suggestion.reportSectionKey === null ? undefined : 'ai';
     }
-    if (!humanEdits.current.description &&
+    if (!placementOnly && !humanEdits.current.description &&
         (suggestion.description !== null || (canSuggest && origins.descriptionOrigin === 'ai'))) {
       setDescription(suggestion.description ?? '');
       next.descriptionOrigin = suggestion.description === null ? undefined : 'ai';
     }
     setOrigins((previous) => ({ ...previous, ...next }));
-  }, [suggestion]);
+  }, [suggestion, placementStale, placementOnly]);
   const [content, setContent] = useState<Record<string, unknown> | null>(
     initial?.content ?? null,
   );
@@ -368,6 +374,9 @@ export function ResultEditor({
               origin={origins.sectionOrigin}
               field="report section"
             />
+            {!placementStale && suggestion?.placementBasisLabel && !humanEdits.current.section && (
+              <p className="text-xs text-slate-600">{suggestion.placementBasisLabel}</p>
+            )}
             <label className="block text-xs text-slate-600">
               Report section
               <select
@@ -391,6 +400,14 @@ export function ResultEditor({
                 ))}
               </select>
             </label>
+            {!placementStale && placementOnly && suggestion && humanEdits.current.section && (
+              <div role="status" className="mt-1 text-xs text-slate-600">
+                New AI placement suggestion: {sections.find(s => s.id === `key:${suggestion.reportSectionKey}`)?.title ?? 'Not assigned yet'}.
+                {' '}Your manual selection is unchanged.
+                {suggestion.limitation && <p>{suggestion.limitation}</p>}
+                {alternativeTitles.length > 0 && <p>Suggested alternatives: {alternativeTitles.join('; ')}.</p>}
+              </div>
+            )}
             {showPlacementHelp && (
               <div id={placementHelpId} className="mt-1 text-xs text-slate-600">
                 {alternativeTitles.length >= 2

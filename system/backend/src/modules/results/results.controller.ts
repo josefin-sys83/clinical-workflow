@@ -47,6 +47,7 @@ import { ResultsService } from './results.service';
 import { AiService } from '../ai/ai.service';
 import { validateFigureContent } from './figure-image';
 import { AiThrottlerGuard } from '../../common/ai-throttler.guard';
+import { withPlacementBasis } from './tfl-mapping';
 
 const input = new ValidationPipe({
   whitelist: true,
@@ -77,16 +78,21 @@ export class ResultsController {
     if (workspace.locked) throw new ForbiddenException('The report is locked.');
     const sections = workspace.sectionOptions.map(({ key, title }) => ({ key, title }));
     const { image: _image, provenance: _provenance, ...textContent } = body.content;
-    if (JSON.stringify({ ...body, content: textContent, sections }).length > 60000)
+    const textInput = { ...body, sourceLocation: body.sourceLocation ?? null,
+      originalReference: body.originalReference ?? null, content: textContent, sections, tfl: null };
+    if (JSON.stringify(textInput).length > 60000)
       throw new BadRequestException(
         'Result is too large for AI suggestions. Split it or enter the fields manually.',
       );
-    const suggestion = await this.ai.suggestResult(body, sections);
+    let tfl = await this.results.tflContext(projectId);
+    if (tfl && JSON.stringify({ ...textInput, tfl }).length > 60000)
+      tfl = { documents: [], limitation: 'The result and attached TFL documents are too large to assess together. Select a section manually.' };
+    const suggestion = await this.ai.suggestResult(body, sections, tfl);
     const suggestedKeys = [...(suggestion.alternativeSectionKeys ?? [])];
     if (suggestion.reportSectionKey !== null) suggestedKeys.push(suggestion.reportSectionKey);
     if (suggestedKeys.some(key => !sections.some(section => section.key === key)))
       throw new BadGatewayException('AI suggested an unavailable report section.');
-    return suggestion;
+    return withPlacementBasis(suggestion, tfl);
   }
 
   @Get('workspace')

@@ -117,6 +117,7 @@ export class SuggestResultDto extends PickType(CreateResultDto, [
 ] as const) {}
 
 export type ResultSuggestion = {
+  placementBasisLabel: 'Using TFL mapping' | 'no TFL, based on content' | null;
   title: string | null;
   reportSectionKey: string | null;
   description: string | null;
