@@ -91,7 +91,11 @@ export async function advanceWorkflowStep(args: {
   // currentState not found in this target's chain (e.g. still 'draft', or a branch
   // state like 'blocked' that re-enters at the top) means nothing has been done yet —
   // run the full chain. Otherwise only what's strictly after where it already sits.
-  const remaining = currentIndex === -1 ? chain : chain.slice(currentIndex + 1);
+  // Request Changes while the protocol is out for signature is one direct transition
+  // (the backend clears the signatures); the review chain can't start from 'signed'.
+  const sendBackFromSigning = args.stepId === 'protocol-pdf' && args.to === 'blocked' && currentState === 'signed';
+  const remaining = sendBackFromSigning ? [args.to]
+    : currentIndex === -1 ? chain : chain.slice(currentIndex + 1);
 
   for (const stage of remaining) {
     try {
