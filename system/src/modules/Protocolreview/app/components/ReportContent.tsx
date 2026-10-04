@@ -89,7 +89,8 @@ export function ReportContent({
       if (children.length > 1 && children.every((child) => child.tagName === 'SPAN')) {
         children.slice(1).forEach((child) => child.before(document.createElement('br')));
       }
-      return <div className="text-neutral-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightReviewHtml(container.innerHTML, sectionFindings) }} />;
+      // Pasted or browser-edited text can carry inline fonts; show one consistent font.
+      return <div className="text-neutral-700 leading-relaxed [&_*]:[font-family:inherit]! [&_*]:[font-size:inherit]!" dangerouslySetInnerHTML={{ __html: highlightReviewHtml(container.innerHTML, sectionFindings) }} />;
     }
 
     const contentArray = Array.isArray(section.content)
