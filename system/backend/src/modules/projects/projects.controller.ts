@@ -167,6 +167,15 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     }
   }
 
+  // 3. A protocol out for signature or finalized is frozen: its content changes only
+  //    through Request Changes (before finalizing) or an amendment (after).
+  if (body.data?.protocol !== undefined) {
+    const protocolState = (await this.workflow.getSnapshot(projectId))?.steps?.['protocol-pdf']?.state;
+    if (protocolState === 'signed' || protocolState === 'final') {
+      throw new BadRequestException('This protocol is out for signature or finalized and can no longer be changed here.');
+    }
+  }
+
   // Build readable audit events before the write, then hand them to ProjectsService so
   // every event is inserted with the same transaction client as the project mutation.
   const auditEvents: ProjectAuditEvent[] = [];

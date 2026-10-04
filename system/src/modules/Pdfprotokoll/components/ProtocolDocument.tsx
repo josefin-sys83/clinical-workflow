@@ -850,7 +850,7 @@ export function ProtocolDocument() {
           <div style={{ background: '#fff', borderRadius: '12px', padding: '32px', maxWidth: '480px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#111827', marginBottom: '8px' }}>Request Changes</h3>
             <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '20px' }}>
-              Describe what needs to be corrected. This will be logged in the audit trail and the document will be returned to review.
+              Describe what needs to be corrected. This will be logged in the audit trail and the document will be returned for editing. Any signatures already given will be cleared, and everyone will need to sign the new version.
             </p>
             <textarea
               value={requestChangesComment}

@@ -11,6 +11,7 @@ import { buildWorkflowPath } from '@/shared/workflow/steps';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
+import { apiErrorMessage, apiFetch } from '@/shared/api/http';
 
 /** Derive a section status from approval state + open issues */
 function deriveSectionStatus(section: any): ReportSection['status'] {
@@ -65,21 +66,6 @@ export default function ReviewPageCopy() {
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // ── Derive current user from project roles ────────────────────────────────
-  const currentUser = useMemo(() => {
-    const priority = ['Protocol Lead', 'Principal Investigator', 'Medical Writer', 'Regulatory Affairs'];
-    for (const roleTitle of priority) {
-      const role = roles.find((r: any) => r.title === roleTitle);
-      const person = role?.assignedTo?.[0];
-      if (person?.name) return person.name;
-    }
-    for (const role of roles) {
-      const person = role?.assignedTo?.[0];
-      if (person?.name) return person.name;
-    }
-    return 'Unknown';
-  }, [roles]);
-
   // ── Helper: look up a section owner from roles ────────────────────────────
   const sectionOwner = useMemo(() => {
     const lead = roles.find((r: any) => r.title === 'Protocol Lead')?.assignedTo?.[0]?.name;
@@ -117,8 +103,13 @@ export default function ReviewPageCopy() {
       const openIssues = (section.issues || []).filter(
         isOpenIssue,
       );
+      const acceptances: any[] = section.riskAcceptances || [];
 
       openIssues.forEach((issue: any) => {
+        const description = (issue.description || '').trim();
+        // Saved decisions are matched to findings by description, because findings
+        // are recreated each time a section is analysed.
+        const acceptance = acceptances.find((a) => a.description === description);
         derivedFindings.push({
           id: issue.id,
           sectionId: section.id,
@@ -130,9 +121,14 @@ export default function ReviewPageCopy() {
           targetSection: issue.targetSection,
           remediation: issue.remediation,
           textHighlight: issue.textQuote,
-          description: issue.description || '',
+          description,
           location: issue.subsection || section.title || '',
           sectionOwner,
+          acceptedRisk: Boolean(acceptance),
+          acceptanceId: acceptance?.id,
+          acceptanceReason: acceptance?.reason,
+          acceptedBy: acceptance?.acceptedBy,
+          acceptedAt: acceptance ? new Date(acceptance.acceptedAt) : undefined,
         });
 
         const raisedByLower = (issue.raisedBy || '').toLowerCase();
@@ -187,74 +183,42 @@ export default function ReviewPageCopy() {
     return comments;
   }, [protocol]);
 
-  // ── Add Comment ───────────────────────────────────────────────────────────
-  const handleAddComment = async (content: string, type: 'general' | 'issue' | 'approval-request') => {
+  // ── Add Comment / Reply ───────────────────────────────────────────────────
+  // Comments have their own endpoint: the server records the signed-in user as
+  // author and writes the audit entry. Only this section's comments are replaced
+  // here, so nothing else on the page is written back.
+  const updateSection = (sectionId: string, changes: Record<string, unknown>) =>
+    setProtocol((prev: any) => !prev ? prev : ({
+      ...prev,
+      sections: prev.sections.map((s: any) => (s.id === sectionId ? { ...s, ...changes } : s)),
+    }));
+
+  const postComment = async (
+    sectionId: string,
+    body: { content: string; type?: string; parentCommentKey?: string },
+  ) => {
     if (!projectId) return;
-    const now = new Date().toISOString();
-    const newComment = {
-      id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      author: currentUser,
-      authorRole: roles.find((r: any) => r.assignedTo?.some((a: any) => a.name === currentUser))?.title || 'Reviewer',
-      timestamp: now,
-      content,
-      type,
-      status: 'open' as const,
-    };
-    const sectionId = activeSection;
-
-    // Optimistic update: append comment to the matching protocol section so
-    // reviewerComments (derived from protocol) reflects it immediately.
-    setProtocol((prev: any) => {
-      if (!prev) return prev;
-      const updatedSections = prev.sections.map((s: any) =>
-        s.id === sectionId ? { ...s, comments: [...(s.comments || []), newComment] } : s,
-      );
-      const updated = { ...prev, sections: updatedSections };
-      // Persist to backend (fire-and-forget inside the state setter)
-      fetch(`${apiBase}/api/projects/${projectId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { protocol: updated } }),
-      }).catch(() => {});
-      return updated;
-    });
-
+    try {
+      const comments = await apiFetch<any[]>(`/projects/${projectId}/protocol/sections/${sectionId}/comments`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      updateSection(sectionId, { comments });
+    } catch (error) {
+      window.alert(apiErrorMessage(error, 'The comment could not be saved. Please try again.'));
+      throw error;
+    }
   };
 
-  // ── Add Reply ─────────────────────────────────────────────────────────────
+  const handleAddComment = async (content: string, type: 'general' | 'issue' | 'approval-request') => {
+    await postComment(activeSection, { content, type });
+  };
+
   const handleAddReply = async (commentId: string, replyText: string) => {
-    if (!projectId) return;
-    const now = new Date().toISOString();
-    const reply = {
-      id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      author: currentUser,
-      authorRole: roles.find((r: any) => r.assignedTo?.some((a: any) => a.name === currentUser))?.title || 'Reviewer',
-      timestamp: now,
-      content: replyText,
-      status: 'open' as const,
-    };
-
-    // Optimistic update: append reply into the matching comment's replies array
-    setProtocol((prev: any) => {
-      if (!prev) return prev;
-      const updatedSections = prev.sections.map((s: any) => ({
-        ...s,
-        comments: (s.comments || []).map((c: any) =>
-          c.id === commentId
-            ? { ...c, replies: [...(c.replies || []), reply] }
-            : c,
-        ),
-      }));
-      const updated = { ...prev, sections: updatedSections };
-      // Persist to backend (fire-and-forget)
-      fetch(`${apiBase}/api/projects/${projectId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { protocol: updated } }),
-      }).catch(() => {});
-      return updated;
-    });
-
+    const sectionId = protocol?.sections?.find((s: any) =>
+      (s.comments || []).some((c: any) => c.id === commentId))?.id;
+    if (!sectionId) return;
+    await postComment(sectionId, { content: replyText, parentCommentKey: commentId });
   };
 
   // ── Event handlers ────────────────────────────────────────────────────────
@@ -272,19 +236,35 @@ export default function ReviewPageCopy() {
     );
   };
 
-  const handleAcceptRisk = (findingId: string) => {
-    setFindings((prev) =>
-      prev.map((finding) => {
-        if (finding.id !== findingId) return finding;
+  // Risk decisions are saved with a reason and audited, so they survive leaving the
+  // page and re-analysis of the section.
+  const handleAcceptRisk = async (findingId: string, reason: string) => {
+    const finding = findings.find((f) => f.id === findingId);
+    if (!finding || !projectId) return;
+    try {
+      const riskAcceptances = await apiFetch<any[]>(
+        `/projects/${projectId}/protocol/sections/${finding.sectionId}/risk-acceptances`,
+        { method: 'POST', body: JSON.stringify({ description: finding.description, reason }) },
+      );
+      updateSection(finding.sectionId, { riskAcceptances });
+    } catch (error) {
+      window.alert(apiErrorMessage(error, 'The risk could not be accepted. Please try again.'));
+      throw error;
+    }
+  };
 
-        return {
-          ...finding,
-          acceptedRisk: true,
-          acceptedBy: currentUser,
-          acceptedAt: new Date(),
-        };
-      }),
-    );
+  const handleRevokeRisk = async (findingId: string) => {
+    const finding = findings.find((f) => f.id === findingId);
+    if (!finding?.acceptanceId || !projectId) return;
+    try {
+      const riskAcceptances = await apiFetch<any[]>(
+        `/projects/${projectId}/protocol/sections/${finding.sectionId}/risk-acceptances/${finding.acceptanceId}`,
+        { method: 'DELETE' },
+      );
+      updateSection(finding.sectionId, { riskAcceptances });
+    } catch (error) {
+      window.alert(apiErrorMessage(error, 'The risk acceptance could not be withdrawn. Please try again.'));
+    }
   };
 
   const handleApproveReport = async (reason: string) => {
@@ -388,9 +368,10 @@ export default function ReviewPageCopy() {
             aiFindings={aiFindings}
             onFindingClick={handleFindingClick}
             onDismissAIFinding={handleDismissAIFinding}
-            onAcceptRisk={handleAcceptRisk}
-            onAddComment={handleAddComment}
-            onAddReply={handleAddReply}
+            onAcceptRisk={protocolFinalized ? undefined : handleAcceptRisk}
+            onRevokeRisk={protocolFinalized ? undefined : handleRevokeRisk}
+            onAddComment={protocolFinalized ? undefined : handleAddComment}
+            onAddReply={protocolFinalized ? undefined : handleAddReply}
             activeSectionTitle={sections.find((s) => s.id === activeSection)?.title}
           />
         </div>

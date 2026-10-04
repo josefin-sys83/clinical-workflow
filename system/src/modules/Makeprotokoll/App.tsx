@@ -16,6 +16,7 @@ import { AmendmentModal } from './components/AmendmentModal';
 import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
+import { useUnsavedChangesWarning } from '@/shared/hooks/useUnsavedChangesWarning';
 import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
 import {
   listProtocolAttachments,
@@ -73,6 +74,22 @@ export default function App() {
   };
   // Only saved, accepted requirements can be assigned to a supporting document.
   const [acceptedRequirements, setAcceptedRequirements] = useState<Array<{ id: string; title: string }>>([]);
+
+  // Sections with edits the server has not yet confirmed. Drives the
+  // leave-page warning; react-router allows only one blocker per page.
+  const [dirtySections, setDirtySections] = React.useState<Set<string>>(new Set());
+  const handleDirtyChange = React.useCallback((sectionId: string, dirty: boolean) => {
+    setDirtySections(prev => {
+      if (prev.has(sectionId) === dirty) return prev;
+      const next = new Set(prev);
+      if (dirty) next.add(sectionId); else next.delete(sectionId);
+      return next;
+    });
+  }, []);
+  useUnsavedChangesWarning(dirtySections.size > 0);
+  // Analysis responses must consult the latest dismissals, including decisions
+  // made while the request was in flight.
+  const wontFixDescriptions = useRef<Record<string, string[]>>({});
   const [sectionAnalysisStatus, setSectionAnalysisStatus] = React.useState<Record<string, 'not-run' | 'running' | 'succeeded' | 'failed'>>({});
   const [sectionAnalysisError, setSectionAnalysisError] = React.useState<Record<string, string>>({});
   // A save may start another review before an earlier review of this section ends.
@@ -358,18 +375,21 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [projectId, waitingForSavedAnalysis]);
 
-  const handleSectionSaved = (sectionId: string, newContent: string, prevContent: string, reason: string) => {
-    if (generationRequested.current) return Promise.reject(new Error('Please wait for protocol generation to finish.'));
+  const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string) => {
+    if (generationRequested.current) throw new Error('Please wait for protocol generation to finish.');
+    // Invalidate any analysis already in flight for this section — its result
+    // would describe the previous text.
     sectionAnalysisRequest.current[sectionId] = (sectionAnalysisRequest.current[sectionId] || 0) + 1;
-    return trackProtocolWork(async () => {
-      const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
-      const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
+    const currentSection = protocol?.sections?.find((s: any) => s.id === sectionId);
+    const prevOpenCount = (currentSection?.issues || []).filter((i: any) => i.status === 'open' || !i.status).length;
 
-      // 1. Persist to backend — this also creates the audit trail entry with full
-      //    user identity, before/after content, and reason for change.
-      let savedSection: { content: string; updatedAt: string };
-      try {
-        savedSection = await apiFetch<{ content: string; updatedAt: string }>('/projects/' + projectId + '/protocol/sections/' + sectionId, {
+    // 1. Persist — this also writes the audit entry with user identity,
+    //    before/after content and reason. Tracked so protocol generation cannot
+    //    start mid-save. Throws on failure, so the editor keeps the user's text.
+    const saved = await trackProtocolWork(() =>
+      apiFetch<{ content: string; updatedAt: string; revision: number }>(
+        '/projects/' + projectId + '/protocol/sections/' + sectionId,
+        {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -383,32 +403,25 @@ export default function App() {
             approvedBy: currentSection?.approvedBy,
             approvedAt: currentSection?.approvedAt,
           }),
-        });
-      } catch (e) {
-        console.error('Section save failed', e);
-        throw e;
-      }
+        },
+      ));
 
-      // 2. Use the server's saved HTML for display, analysis, and retries. Saving
-      // sanitizes/normalizes editor HTML, so newContent may no longer match it.
-      setProtocol((prev: any) => {
-        if (!prev) return prev;
-        const updatedSections = prev.sections.map((s: any) =>
-          s.id === sectionId ? { ...s, content: savedSection.content, updatedAt: savedSection.updatedAt,
-            issues: [], analysisStatus: 'not-run', analysisError: null } : s
-        );
-        return { ...prev, sections: updatedSections };
-      });
+    // 2. Show exactly what the server stored — saving sanitizes the editor HTML,
+    //    so newContent may not match it.
+    setProtocol((prev: any) => !prev ? prev : ({
+      ...prev,
+      sections: prev.sections.map((s: any) => s.id === sectionId
+        ? { ...s, content: saved.content, updatedAt: saved.updatedAt, revision: saved.revision,
+            issues: [], analysisStatus: 'not-run', analysisError: null }
+        : s),
+    }));
 
-      // Development bypass sections remain fully editable without invoking the
-      // unavailable AI provider. They can be analysed manually after AI is configured.
-      if (currentSection?.aiGenerated === false) return;
+    // Development bypass sections remain editable without the AI provider.
+    if (currentSection?.aiGenerated === false) return;
 
-      // 3. Re-analyse and surface any resolved issues
-      const sectionTitle = currentSection?.title || '';
-      const resolvedCount = await analyzeSectionWithAI(sectionTitle, savedSection.content, sectionId, prevOpenCount);
-      // resolved issues are reflected in the issues panel automatically
-    });
+    // 3. Re-analyse in the background. The save is already confirmed; analysis
+    //    tracks its own status and errors and never throws.
+    void analyzeSectionWithAI(currentSection?.title || '', saved.content, sectionId, prevOpenCount);
   };
 
   const canForceProtocolDraft = import.meta.env.DEV || sessionUser?.roles.includes('admin') === true;
@@ -752,6 +765,9 @@ export default function App() {
       ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))
   );
 
+  // Same rule the backend enforces: a signed protocol changes only by amendment.
+  const protocolSigned = ['signed', 'final'].includes(snapshot?.steps?.['protocol-pdf']?.state ?? '');
+
   const protocolSections: Array<React.ComponentProps<typeof ProtocolSection>['section'] & { content: string; issues: NonNullable<React.ComponentProps<typeof ProtocolSection>['section']['issues']> }> = protocol?.sections?.map((s: any, idx: number) => ({
     id: s.id || String(idx + 1),
     number: s.id || String(idx + 1),
@@ -759,10 +775,11 @@ export default function App() {
     status: s.status || 'draft',
     owner: roles.find((r: any) => r.title === 'Principal Investigator')?.assignedTo?.[0]?.name || '',
     updated: s.updatedAt || '',
+    revision: s.revision,
     comments: s.comments || [],
     aiGenerated: s.aiGenerated !== false,
     reviewStatus: null,
-    locked: false,
+    locked: protocolSigned,
     reviewCycle: 0,
     reviewer: roles.find((r: any) => r.title === 'Medical Writer')?.assignedTo?.[0]?.name || '',
     approver: roles.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name || '',
@@ -1135,6 +1152,7 @@ export default function App() {
                         isHighlighted={highlightedSection === section.id}
                         isReviewMode={isReviewMode}
                         onSaved={(newContent, prevContent, reason) => handleSectionSaved(section.id, newContent, prevContent, reason)}
+                        onDirtyChange={(dirty) => handleDirtyChange(section.id, dirty)}
                         onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
                         onAddComment={(content, type) => handleAddComment(section.id, content, type)}
                         onResolveComment={(commentId) => handleResolveComment(section.id, commentId)}

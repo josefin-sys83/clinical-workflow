@@ -206,6 +206,11 @@ export default function Login() {
                   />
                 </div>
 
+                {!error && new URLSearchParams(window.location.search).has('expired') && (
+                  <div className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5">
+                    Your session expired. Sign in again to continue.
+                  </div>
+                )}
                 {error && (
                   <div className="flex items-center gap-2 text-sm text-rose-700 bg-rose-50 border border-red-100 rounded-lg px-3 py-2.5">
                     <AlertCircle className="w-4 h-4 flex-shrink-0" />
