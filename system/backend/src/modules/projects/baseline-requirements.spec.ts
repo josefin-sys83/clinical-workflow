@@ -103,7 +103,7 @@ describe('accepted baseline requirements', () => {
     const ai = { analyzeSection: jest.fn().mockResolvedValue({ issues: [] }) };
     const controller = new ProtocolsController({ get: jest.fn().mockResolvedValue(project) } as any,
       protocols as any, ai as any, {} as any, {} as any,
-      { assertDocumentNotSigned: jest.fn() } as any, { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);
+      { assertDocumentNotSigned: jest.fn(), assertProtocolEditable: jest.fn() } as any, { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);
     await controller.analyzeSection('project', { sectionId: '1', sectionTitle: section.title, sectionContent: section.content });
     const accepted = ai.analyzeSection.mock.calls[0][8];
     expect(accepted).toContain('ISO-14971');

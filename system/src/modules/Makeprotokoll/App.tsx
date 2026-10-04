@@ -765,8 +765,12 @@ export default function App() {
       ['approved', 'signed', 'final', 'in_review', 'ready_for_review'].includes(s.status))
   );
 
-  // Same rule the backend enforces: a signed protocol changes only by amendment.
-  const protocolSigned = ['signed', 'final'].includes(snapshot?.steps?.['protocol-pdf']?.state ?? '');
+  // Same rule the backend enforces: a signed protocol changes only by amendment, and
+  // after finalization only in sections under an approved, not yet finalized amendment.
+  const protocolPdfState = snapshot?.steps?.['protocol-pdf']?.state ?? '';
+  const protocolSigned = ['signed', 'final'].includes(protocolPdfState);
+  const openAmendmentIds = new Set((protocol?.amendments || [])
+    .filter((a: any) => a.status === 'approved').map((a: any) => a.id));
 
   const protocolSections: Array<React.ComponentProps<typeof ProtocolSection>['section'] & { content: string; issues: NonNullable<React.ComponentProps<typeof ProtocolSection>['section']['issues']> }> = protocol?.sections?.map((s: any, idx: number) => ({
     id: s.id || String(idx + 1),
@@ -779,7 +783,7 @@ export default function App() {
     comments: s.comments || [],
     aiGenerated: s.aiGenerated !== false,
     reviewStatus: null,
-    locked: protocolSigned,
+    locked: protocolSigned && !(protocolPdfState === 'final' && openAmendmentIds.has(s.amendmentId)),
     reviewCycle: 0,
     reviewer: roles.find((r: any) => r.title === 'Medical Writer')?.assignedTo?.[0]?.name || '',
     approver: roles.find((r: any) => r.title === 'Clinical Affairs VP')?.assignedTo?.[0]?.name || '',

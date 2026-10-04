@@ -66,7 +66,7 @@ export class ProtocolsController {
     @Body() body: UpdateSectionContentDto,
     @Req() req: any,
   ) {
-    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
     return this.protocols.updateSection(
       projectId,
       sectionId,
@@ -89,7 +89,7 @@ export class ProtocolsController {
     @Body() body: { content?: string; type?: string; parentCommentKey?: string },
     @Req() req: any,
   ) {
-    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
     return this.protocols.addComment(projectId, sectionId, body, req.user);
   }
 
@@ -100,7 +100,7 @@ export class ProtocolsController {
     @Body() body: { description?: string; reason?: string },
     @Req() req: any,
   ) {
-    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
     return this.protocols.acceptRisk(projectId, sectionId, body, req.user);
   }
 
@@ -111,7 +111,7 @@ export class ProtocolsController {
     @Param('acceptanceId', ParseUUIDPipe) acceptanceId: string,
     @Req() req: any,
   ) {
-    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
     return this.protocols.revokeRiskAcceptance(projectId, sectionId, acceptanceId, req.user);
   }
 
@@ -247,7 +247,7 @@ export class ProtocolsController {
     @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] },
     @Req() req?: any,
   ) {
-    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    await this.documentWorkflow.assertProtocolEditable(projectId, body.sectionId);
     const project = await this.projects.get(projectId);
     if (!body.sectionId) throw new BadRequestException('sectionId is required');
     const { section, requestId } = await this.protocols.beginSectionAnalysis(projectId, body.sectionId, body.sectionContent, req?.user);

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { getPool } from '../../db/pg';
 import { WorkflowService } from '../workflow/workflow.service';
 
 @Injectable()
@@ -34,6 +35,26 @@ export class DocumentWorkflowService {
         `This ${document} has been finalized and signed and can no longer be changed. Use an amendment instead.`,
       );
     }
+  }
+
+  // After finalization a protocol changes only through an approved amendment that has
+  // not been finalized yet, and only in the sections it covers. Without a sectionId
+  // (whole-protocol saves) any such open amendment allows the change.
+  async assertProtocolEditable(projectId: string, sectionId?: string) {
+    const state = (await this.workflow.getSnapshot(projectId)).steps?.['protocol-pdf']?.state;
+    if (state === 'final') {
+      const { rows } = await getPool().query(
+        sectionId === undefined
+          ? `select 1 from protocol_amendment a join protocol p on p.id = a.protocol_id
+             where p.project_id = $1 and a.status = 'approved' limit 1`
+          : `select 1 from protocol_section s join protocol p on p.id = s.protocol_id
+             join protocol_amendment a on a.id = s.amendment_id
+             where p.project_id = $1 and s.section_key = $2 and a.status = 'approved' limit 1`,
+        sectionId === undefined ? [projectId] : [projectId, sectionId],
+      );
+      if (rows.length > 0) return;
+    }
+    await this.assertDocumentNotSigned(projectId, 'protocol-pdf');
   }
 
   // Backend enforcement of the same prerequisite the frontend's WorkflowStepGuard checks

@@ -29,7 +29,7 @@ describe('protocol generation', () => {
     };
     controller = new ProtocolsController(projects as any, protocols, ai, {} as any,
       { start: jest.fn(), clear: jest.fn() } as any,
-      { assertDocumentNotSigned: jest.fn(), assertProtocolPrerequisites: jest.fn() } as any,
+      { assertDocumentNotSigned: jest.fn(), assertProtocolEditable: jest.fn(), assertProtocolPrerequisites: jest.fn() } as any,
       { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);
   });
 

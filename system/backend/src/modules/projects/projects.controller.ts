@@ -9,6 +9,7 @@ import { AiService } from '../ai/ai.service';
 import { normalizeAiMarkets } from './project-generation-context';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
+import { DocumentWorkflowService } from './document-workflow.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -38,6 +39,7 @@ export class ProjectsController {
     private readonly ai: AiService,
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
+    private readonly documentWorkflow: DocumentWorkflowService,
   ) {}
 
  @Get('/requirements')
@@ -168,12 +170,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   }
 
   // 3. A protocol out for signature or finalized is frozen: its content changes only
-  //    through Request Changes (before finalizing) or an amendment (after).
+  //    through Request Changes (before finalizing) or an approved amendment (after).
   if (body.data?.protocol !== undefined) {
-    const protocolState = (await this.workflow.getSnapshot(projectId))?.steps?.['protocol-pdf']?.state;
-    if (protocolState === 'signed' || protocolState === 'final') {
-      throw new BadRequestException('This protocol is out for signature or finalized and can no longer be changed here.');
-    }
+    await this.documentWorkflow.assertProtocolEditable(projectId);
   }
 
   // Build readable audit events before the write, then hand them to ProjectsService so
