@@ -175,6 +175,7 @@ class ProtocolReviewIssue(StrictProtocolModel):
 
     id: str
     severity: ReviewSeverity
+    requirement: str | None
     subsection: str
     description: str
     source: str | None

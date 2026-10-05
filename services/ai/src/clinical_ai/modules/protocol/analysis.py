@@ -566,7 +566,7 @@ class ProtocolAnalysisService:
 
         return [
             ProtocolReviewIssue(
-                **issue.model_dump(exclude={"requirement"}),
+                **issue.model_dump(),
                 id=f"i-{index}",
                 raisedBy="AI Regulatory Review",
                 raisedDate=raised_date,
