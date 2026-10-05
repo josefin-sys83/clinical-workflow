@@ -13,10 +13,9 @@ const protocolIssue = z.object({
   severity: protocolIssueSeverity,
   subsection: text,
   description: text,
+  requirement: text.nullable(),
   source: text.nullable(),
   requirementId: z.string().nullable().optional(),
-  // Accepted requirement name as sent to the AI; mapped to requirementId by the caller.
-  requirement: text.nullable().optional(),
   targetSection: text.nullable(),
   remediation: text.nullable(),
   raisedBy: z.literal('AI Regulatory Review'),

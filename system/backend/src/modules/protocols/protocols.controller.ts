@@ -386,17 +386,15 @@ export class ProtocolsController {
 
     if (result?.error) return result;
 
-    // Deterministic rule-based checks always run alongside the AI analysis, so
-    // regulatory-reference and specificity gaps are caught even if the AI misses them.
-    // The AI identifies requirements by the names it was sent, not internal IDs. Link an
-    // exact, unambiguous requirement name, else source text; otherwise keep it unlinked.
-    const aiIssues = (result.issues || []).map(({ requirement, ...issue }: any) => {
+    // AI returns the exact requirement name. Link only a unique accepted name;
+    // source remains human-readable finding context.
+    const aiIssues = (result.issues || []).map((issue: any) => {
       if (issue.requirementId !== undefined) return issue;
-      const byName = accepted.filter(r => requirement && r.title === requirement);
-      const matches = byName.length ? byName : accepted.filter(r => issue.source &&
-        (issue.source === r.title || issue.source === r.description));
+      const matches = accepted.filter(requirement => issue.requirement && issue.requirement === requirement.title);
       return { ...issue, requirementId: matches.length === 1 ? matches[0].id : null };
     });
+    // Deterministic rule-based checks always run alongside the AI analysis, so
+    // regulatory-reference and specificity gaps are caught even if the AI misses them.
     result.issues = validateFindingRequirements(mergeIssues(
       mergeIssues(validateFindingRequirements(aiIssues, requirements, 'ai'), ruleIssues),
       attachmentIssues,

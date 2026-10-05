@@ -67,28 +67,29 @@ describe('protocol section analysis API contract', () => {
   });
 
   it.each([
-    ['Follow-up', 'req-1'], ['Define follow-up visits.', 'req-1'], ['Unknown source', null], [null, null],
-  ])('maps the documented source %p to an internal requirement link %p', async (source, requirementId) => {
-    ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', source }], requiredElements: [], satisfiedRequirements: [] });
+    ['Follow-up', 'req-1'], ['Safety', 'req-2'], ['Define follow-up visits.', null],
+    ['Unknown requirement', null], ['Pending', null], ['follow-up', null], [null, null],
+  ])('maps the explicit requirement name %p to an internal requirement link %p', async (requirement, requirementId) => {
+    ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', requirement, source: null }], requiredElements: [], satisfiedRequirements: [] });
     const result = await analyze(controller);
     expect(result.issues[0].requirementId).toBe(requirementId);
     expect(protocols.finishSectionAnalysis).toHaveBeenCalledWith('project', '1', 'request', result, null, undefined);
   });
 
-  it('links by the requirement name the AI was sent before falling back to source', async () => {
-    ai.analyzeSection.mockResolvedValue({ issues: [
-      { id: 'named', requirement: 'Safety', source: 'ISO 14155 §6.4' },
-      { id: 'unknown', requirement: 'Not sent', source: 'Follow-up' },
-    ], requiredElements: [], satisfiedRequirements: [] });
-    const [named, unknown] = (await analyze(controller)).issues;
-    expect(named).toMatchObject({ id: 'named', requirementId: 'req-2' });
-    expect(named).not.toHaveProperty('requirement');
-    expect(unknown.requirementId).toBe('req-1');
+  it('keeps ambiguous requirement names unlinked', async () => {
+    project.data.scope.requirements = [...requirements, { ...requirements[0], id: 'duplicate' }];
+    ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', requirement: 'Follow-up', source: null }] });
+    expect((await analyze(controller)).issues[0].requirementId).toBeNull();
   });
 
-  it('keeps ambiguous sources unlinked', async () => {
-    project.data.scope.requirements = [...requirements, { ...requirements[0], id: 'duplicate' }];
-    ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', source: 'Follow-up' }] });
+  it('uses the requirement name when source refers to another accepted requirement', async () => {
+    ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', requirement: 'Follow-up', source: 'Safety' }] });
+    const result = await analyze(controller);
+    expect(result.issues[0]).toMatchObject({ requirementId: 'req-1', source: 'Safety' });
+  });
+
+  it('does not infer a requirement from source when requirement is null', async () => {
+    ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', requirement: null, source: 'Follow-up' }] });
     expect((await analyze(controller)).issues[0].requirementId).toBeNull();
   });
 
