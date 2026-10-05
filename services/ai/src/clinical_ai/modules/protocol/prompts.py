@@ -218,7 +218,8 @@ Perform one final package-level review after requirement evaluation. You have tw
 
 2. CROSS-SECTION CONSISTENCY REVIEW
 - Independently compare the current section with the supplied other protocol sections.
-- Create a new finding only for a material contradiction, conflicting value/timeline/population/procedure, or a meaningful unclear cross-section connection that is not already represented by an existing finding.
+- Create a new finding for any material factual contradiction across sections, including conflicting sponsor/manufacturer identity, device identity, study identifiers, population, values, timelines, procedures, countries/markets, or other regulatory/clinical facts.
+- Explicitly compare named entities and key factual identifiers across sections. If the current section names a different sponsor, manufacturer, device, study identifier, or other core entity than another section, treat that as a material contradiction rather than a cross-reference issue.
 - Use blocker only for a material clinical/regulatory contradiction that must be resolved before approval.
 - Use warning for a meaningful inconsistency or ambiguity that requires clarification but is not clearly approval-blocking.
 - Use cross_reference for an unclear/missing connection to information that is actually present in another supplied section; name that target section and use remediation to say what reference should be added or clarified.
@@ -269,7 +270,7 @@ def route_section_requirements_prompt(
 ):
     payload = {
         'section': {'title': sectionTitle, 'content': sectionContent},
-        'synopsisExcerpt': synopsisExcerpt or '',
+        # 'synopsisExcerpt': synopsisExcerpt or '',
         'amendmentContext': amendmentContext,
         'acceptedRequirements': acceptedRequirements,
         'previousDecisions': previousDecisions,
@@ -303,7 +304,7 @@ def analyze_requirement_batch_prompt(
             'deviceCategory': deviceCategory,
             'intendedUse': intendedUse,
         },
-        'synopsisExcerpt': synopsisExcerpt or '',
+        # 'synopsisExcerpt': synopsisExcerpt or '',
         'sectionContentRequirements': {
             'required': sectionRequirements['required'],
             'forbidden': sectionRequirements['forbidden'],
