@@ -3,10 +3,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
 import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
+import { ReviewRemediation } from '@/shared/editor/ReviewRemediation';
+import { FindingDetails } from '@/shared/protocol/FindingDetails';
+import { FindingDocumentControl } from '@/shared/protocol/FindingDocumentControl';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
-import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueSeverity } from '@/shared/protocol/issues';
+import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueMetadata, type IssueSeverity } from '@/shared/protocol/issues';
 import { CommentsModal } from './comments-modal';
 import { SectionCompletenessIndicator } from './section-completeness-indicator';
 import { AmendmentWarning } from './amendment-warning';
@@ -23,7 +26,7 @@ import {
   AlertDialogTitle,
 } from '@/shared/ui/alert-dialog';
 
-interface ProtocolIssue {
+interface ProtocolIssue extends IssueMetadata {
   id: string;
   severity: IssueSeverity;
   subsection: string;
@@ -84,6 +87,8 @@ interface ProtocolSectionProps {
     amended?: boolean;
     amendmentId?: string;
     amendmentNumber?: number;
+    analysisStatus?: 'not-run' | 'running' | 'succeeded' | 'failed';
+    analysisError?: string;
   };
   targetMarkets?: string[];
   deviceCategory?: string;
@@ -104,6 +109,8 @@ interface ProtocolSectionProps {
   analysisRetrying?: boolean;
   onRetryAnalysis?: () => void;
   attachments?: ProtocolAttachment[];
+  documentLinksLocked?: boolean;
+  onFindingDocument?: (issueId: string, attachmentId: string | null) => Promise<void>;
 }
 
 /** Apply only inline markdown (bold, italic, underline, images) — safe inside table cells. */
@@ -213,7 +220,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [] }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -249,6 +256,7 @@ function ProtocolSectionComponent(
   const comments = Array.isArray(section.comments) ? section.comments : [];
 
   const openIssues = (section.issues || []).filter(isOpenIssue);
+  const visibleIssues = (section.issues || []).filter(issue => isOpenIssue(issue) || issue.documentLink);
   const severityCounts = countIssueSeverities(openIssues).filter(({ count }) => count > 0);
   const totalIssues = openIssues.length;
   const isBlocked = openIssues.some(issue => issue.severity === 'blocker');
@@ -425,7 +433,7 @@ function ProtocolSectionComponent(
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    const findings = analysisStatus === 'running' || isAnalyzing ? [] : section.issues;
+    const findings = analysisStatus === 'running' || isAnalyzing ? [] : (section.issues || []).filter(isOpenIssue);
     if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), findings);
     // Legacy markdown fallback
     let h = content
@@ -851,13 +859,13 @@ function ProtocolSectionComponent(
                   Open findings — counted in the section header. Resolved and Won’t fix findings are excluded.
                   Required-element coverage is shown separately in the completeness checklist.
                 </p>
-                {openIssues.length === 0 && (
+                {visibleIssues.length === 0 && (
                   <p className="text-xs text-slate-600" role="status">
                     {analysisStatus === 'succeeded' ? 'No open findings.' : 'Findings will appear after successful analysis.'}
                   </p>
                 )}
                 {/* Issues toggle row — subtle, full-width clickable */}
-                {openIssues.length > 0 && (
+                {visibleIssues.length > 0 && (
                 <button
                   aria-expanded={issuesExpanded}
                   onClick={() => setIssuesExpanded(v => !v)}
@@ -877,8 +885,8 @@ function ProtocolSectionComponent(
                 )}
 
                 {/* Issue cards */}
-                {openIssues.map((issue) => {
-                  const presentation = getIssuePresentation(issue.severity);
+                {visibleIssues.map((issue) => {
+                  const presentation = getIssuePresentation(issue.documentLink && !isOpenIssue(issue) ? 'recommendation' : issue.severity);
                   const showCard = issuesExpanded;
                   if (!showCard) return null;
                   return (
@@ -890,7 +898,7 @@ function ProtocolSectionComponent(
                     >
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className={`text-xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${presentation.badge}`}>
-                          {presentation.label}
+                          {issue.documentLink && !isOpenIssue(issue) ? 'Document linked' : presentation.label}
                         </span>
                         {issue.raisedBy?.toLowerCase().includes('system') && (
                           <span className="text-xs text-slate-500">AI Regulatory Review</span>
@@ -900,9 +908,9 @@ function ProtocolSectionComponent(
                       <p className={`text-xs leading-relaxed mb-1 ${presentation.text}`}>
                         {issue.description}
                       </p>
-                      {issue.reference && (
-                        <div className="text-xs text-slate-500 italic mb-1">{issue.reference}</div>
-                      )}
+                      <FindingDetails finding={issue} />
+                      <FindingDocumentControl finding={issue} attachments={attachments} disabled={documentLinksLocked}
+                        onDecide={onFindingDocument} />
                       <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 mt-1.5">
                         <span className="text-xs text-slate-500">
                           {issue.raisedBy} · {issue.raisedDate}
@@ -924,6 +932,7 @@ function ProtocolSectionComponent(
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
+              <ReviewRemediation findings={analysisStatus === 'running' || isAnalyzing ? [] : (isEditing ? editorFindings : openIssues)}>
               {section.content ? (() => {
                 if (isEditing) {
                   const btnBase: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 4, border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', flexShrink: 0 };
@@ -1002,6 +1011,7 @@ function ProtocolSectionComponent(
                   </div>
                 );
               })() : getSectionContent(section.id, section.aiGenerated, section.issues || [])}
+              </ReviewRemediation>
             </ProtocolTextSeparator>
 
             {/* 7. SECTION ACTIONS */}
@@ -1032,7 +1042,7 @@ function ProtocolSectionComponent(
                     ) : (
                       <button
                         onClick={() => setShowApproveModal(true)}
-                        disabled={analysisBlocksApproval}
+                        disabled={analysisBlocksApproval || isBlocked}
                         title={analysisBlocksApproval ? 'A successful AI analysis is required before approval.' : undefined}
                         className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-1.5"
                       >
@@ -1059,7 +1069,7 @@ function ProtocolSectionComponent(
                     ) : (
                       <button
                         onClick={() => setShowApproveModal(true)}
-                        disabled={analysisBlocksApproval}
+                        disabled={analysisBlocksApproval || isBlocked}
                         title={analysisBlocksApproval ? 'A successful AI analysis is required before approval.' : undefined}
                         className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
                       >
@@ -1151,7 +1161,7 @@ function ProtocolSectionComponent(
           <AlertDialogFooter>
             <AlertDialogCancel disabled={approveLoading}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={approveLoading || analysisBlocksApproval}
+              disabled={approveLoading || analysisBlocksApproval || isBlocked}
               onClick={async (e) => {
                 e.preventDefault(); // keep the dialog open until the async approval settles
                 if (!onApprove) return;

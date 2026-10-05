@@ -37,6 +37,7 @@ export interface InlineMarker {
 }
 
 export interface RegulatoryFinding {
+  requirementId?: string | null;
   id: string;
   sectionId: string;
   severity: FindingSeverity;

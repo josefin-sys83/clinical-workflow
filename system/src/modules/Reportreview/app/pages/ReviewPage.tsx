@@ -113,6 +113,7 @@ export default function ReviewPage() {
           sectionId: s.id,
           severity: issue.severity === 'blocker' ? 'blocker' : 'warning',
           description: issue.description || issue.message || '',
+          requirementId: issue.requirementId,
           location: issue.title || issue.message || s.title,
         }))
       );

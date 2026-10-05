@@ -1,4 +1,4 @@
-import { countIssueSeverities, getIssuePresentation } from '@/shared/protocol/issues';
+import { countIssueSeverities } from '@/shared/protocol/issues';
 import { useEffect, useRef } from 'react';
 import {
   CheckCircle2,
@@ -10,6 +10,8 @@ import type { ReportSection, RegulatoryFinding } from '../types/review';
 import { TableView } from './TableView';
 import { FigureView } from './FigureView';
 import DOMPurify from 'dompurify';
+import { highlightReviewHtml } from '@/shared/editor/review-highlights';
+import { ReviewRemediation } from '@/shared/editor/ReviewRemediation';
 
 interface ReportContentProps {
   sections: ReportSection[];
@@ -70,6 +72,8 @@ export function ReportContent({
   };
 
   const renderContent = (section: ReportSection) => {
+    const sectionFindings = findings.filter(finding => finding.sectionId === section.id)
+      .map(finding => ({ ...finding, textQuote: finding.textHighlight }));
     const rawContent = Array.isArray(section.content)
       ? section.content.join('\n\n')
       : section.content || '';
@@ -85,14 +89,21 @@ export function ReportContent({
       if (children.length > 1 && children.every((child) => child.tagName === 'SPAN')) {
         children.slice(1).forEach((child) => child.before(document.createElement('br')));
       }
-      return <div className="text-neutral-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: container.innerHTML }} />;
+      return <div className="text-neutral-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightReviewHtml(container.innerHTML, sectionFindings) }} />;
     }
 
     const contentArray = Array.isArray(section.content)
       ? section.content
       : (section.content || '').split('\n\n');
 
-    const sectionFindings = findings.filter((f) => f.sectionId === section.id);
+    // Anchor against the whole section so repeated quotes stay ambiguous.
+    const container = document.createElement('div');
+    contentArray.forEach(paragraph => {
+      const element = document.createElement('p');
+      element.textContent = paragraph;
+      container.append(element);
+    });
+    container.innerHTML = highlightReviewHtml(container.innerHTML, sectionFindings);
 
     return contentArray.map((paragraph, i) => {
       if (typeof paragraph !== 'string') return null;
@@ -109,41 +120,9 @@ export function ReportContent({
         if (figure) return <FigureView key={i} figure={figure} />;
       }
 
-      // Inline highlight for findings with textHighlight
-      const matchingFinding = sectionFindings.find(
-        (f) => f.textHighlight && paragraph.includes(f.textHighlight),
-      );
-
-      if (matchingFinding?.textHighlight) {
-        const hi = matchingFinding.textHighlight;
-        const idx = paragraph.indexOf(hi);
-        const before = paragraph.substring(0, idx);
-        const after = paragraph.substring(idx + hi.length);
-
-        const presentation = getIssuePresentation(matchingFinding.severity);
-        const bgClass = matchingFinding.acceptedRisk
-          ? 'bg-neutral-100 border-neutral-300 text-neutral-700'
-          : `${presentation.badge} ${presentation.border}`;
-
-        return (
-          <p key={i} className="text-neutral-700 leading-relaxed mb-4">
-            {before}
-            <mark
-              className={`${bgClass} border px-1 py-0.5 rounded-sm`}
-              style={{ fontStyle: 'normal' }}
-              title={matchingFinding.description}
-            >
-              {hi}
-            </mark>
-            {after}
-          </p>
-        );
-      }
-
       return (
-        <p key={i} className="text-neutral-700 leading-relaxed mb-4">
-          {paragraph}
-        </p>
+        <p key={i} className="text-neutral-700 leading-relaxed mb-4"
+          dangerouslySetInnerHTML={{ __html: container.children[i].innerHTML }} />
       );
     });
   };
@@ -196,7 +175,9 @@ export function ReportContent({
 
               {/* Section content */}
               <div className="prose prose-neutral max-w-none prose-p:leading-relaxed">
-                {renderContent(section)}
+                <ReviewRemediation findings={findings.filter(finding => finding.sectionId === section.id && !finding.acceptedRisk)}>
+                  {renderContent(section)}
+                </ReviewRemediation>
               </div>
             </section>
           ))}

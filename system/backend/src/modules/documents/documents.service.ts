@@ -133,6 +133,7 @@ export class DocumentsService {
     const client = await getPool().connect();
     try {
       await client.query('BEGIN');
+      if (args.docType === 'protocol') await client.query('select id from projects where id=$1 for update', [args.projectId]);
       let protocolId: string | null = null;
       if (args.docType === 'protocol') {
         const { rows } = await client.query(

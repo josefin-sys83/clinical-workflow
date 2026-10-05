@@ -7,8 +7,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { acceptedRequirementsText } from '../projects/project-generation-context';
+import { acceptedFindingRequirements, findingRequirementsText } from '../projects/finding-requirements';
 import { validateAiResponse } from './ai-response-contract';
 import type { ResultSuggestion, SuggestResultDto } from '../results/dto';
+import { logGenerateProtocolRequest } from '../../common/analysis-request-logger';
 
 export const PROTOCOL_SECTION_TITLES = [
   'Protocol Overview',
@@ -130,15 +132,23 @@ export class AiService {
     scope: any,
     onSectionDone?: (title: string) => void,
   ): Promise<any> {
-    scope = { ...scope, requirements: acceptedRequirementsText(scope?.requirements) };
+    const requirements = acceptedFindingRequirements(scope?.requirements);
+    scope = {
+      ...scope,
+      requirements,
+      findingRequirements: findingRequirementsText(scope?.requirements),//"[{\"id\":\"REQ-1\",\"title\":\"ISO 14155\",\"accepted\":true}]"
+    };
+    const request = { projectData, roles, synopsis, scope };
+    const endpoint = onSectionDone ? '/v1/ai/generate-protocol/stream' : '/v1/ai/generate-protocol';
+    await logGenerateProtocolRequest({ endpoint, request });
     if (!onSectionDone) {
-      return this.post('/v1/ai/generate-protocol', { projectData, roles, synopsis, scope }, true);
+      return this.post(endpoint, request, true);
     }
 
-    const response = await this.fetchAiService('/v1/ai/generate-protocol/stream', {
+    const response = await this.fetchAiService(endpoint, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ projectData, roles, synopsis, scope }),
+      body: JSON.stringify(request),
     });
 
     if (!response.ok) {
@@ -221,6 +231,7 @@ export class AiService {
     crossSectionContext?: { title: string; content: string }[],
     acceptedRequirements?: string,
     synopsisExcerpt?: string,
+    protocolDocuments: any[] = [],
   ): Promise<any> {
     return this.post('/v1/ai/analyze-section', {
       sectionTitle,
@@ -233,7 +244,17 @@ export class AiService {
       crossSectionContext,
       acceptedRequirements,
       synopsisExcerpt,
+      protocolDocuments,
     }, true);
+  }
+
+  async checkFindingDocument(body: { issue: any; requirement: any; section: any; document: any }): Promise<{ status: 'satisfied' | 'warning' | 'blocker'; reason: string }> {
+    const result = await this.post<any>('/v1/ai/check-finding-document', body);
+    if (!result || !['satisfied', 'warning', 'blocker'].includes(result.status)
+      || typeof result.reason !== 'string' || !result.reason.trim()) {
+      throw new BadGatewayException('AI service returned an invalid supporting document check.');
+    }
+    return { status: result.status, reason: result.reason };
   }
 
   async generateReportSection(
@@ -266,6 +287,7 @@ export class AiService {
     intendedUse: string,
     appendicesList?: string[],
     amendmentContext?: { number: number; title: string; reason: string; description: string } | null,
+    acceptedRequirements?: string,
   ): Promise<any> {
     return this.post('/v1/ai/analyze-report-section', {
       sectionTitle,
@@ -275,6 +297,7 @@ export class AiService {
       intendedUse,
       appendicesList,
       amendmentContext,
+      acceptedRequirements,
     });
   }
 

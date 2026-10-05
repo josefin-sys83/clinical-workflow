@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { FileText, Loader2, Trash2, Upload } from 'lucide-react';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 
-type AttachmentRecord = Pick<ProtocolAttachment, 'id' | 'filename' | 'description' | 'uploaderName' | 'uploadedAt' | 'sizeBytes'> & { appendixNumber?: number };
+type AttachmentRecord = Pick<ProtocolAttachment, 'id' | 'filename' | 'description' | 'uploaderName' | 'uploadedAt' | 'sizeBytes'> & { appendixNumber?: number; requirementIds?: string[]; extractionError?: string | null };
 
 interface ProtocolAttachmentsSectionProps<T extends AttachmentRecord> {
   attachments: T[];
@@ -18,6 +18,8 @@ interface ProtocolAttachmentsSectionProps<T extends AttachmentRecord> {
   uploadLabel?: string;
   labelFor?: (attachment: T) => string;
   onDownload?: (attachment: T) => Promise<void>;
+  requirements?: Array<{ id: string; title: string }>;
+  onRequirementsChange?: (attachment: T, requirementIds: string[]) => Promise<void>;
 }
 
 function formatBytes(bytes: number): string {
@@ -45,6 +47,8 @@ export function ProtocolAttachmentsSection<T extends AttachmentRecord>({
   uploadLabel = 'Upload file',
   labelFor = (attachment) => attachment.appendixNumber === undefined ? attachment.filename : `Appendix ${attachment.appendixNumber}: ${attachment.filename}`,
   onDownload,
+  requirements = [],
+  onRequirementsChange,
 }: ProtocolAttachmentsSectionProps<T>) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState('');
@@ -96,6 +100,20 @@ export function ProtocolAttachmentsSection<T extends AttachmentRecord>({
                 <p className="mt-1 text-xs text-slate-500">
                   Uploaded by {attachment.uploaderName} on {formatUploadedAt(attachment.uploadedAt)} · {formatBytes(attachment.sizeBytes)}
                 </p>
+                {onRequirementsChange && <details className="mt-2 text-xs">
+                  <summary className="cursor-pointer font-medium text-blue-700">Accepted requirements covered ({attachment.requirementIds?.length || 0})</summary>
+                  <div className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded border border-slate-200 bg-white p-2" aria-label={`Requirements covered by ${attachment.filename}`}>
+                    {!requirements.length && <p>No accepted requirements available.</p>}
+                    {requirements.map(requirement => <label key={requirement.id} className="flex items-start gap-2">
+                      <input type="checkbox" checked={(attachment.requirementIds || []).includes(requirement.id)} disabled={!canManage || busy}
+                        onChange={event => void onRequirementsChange(attachment, event.target.checked
+                          ? [...(attachment.requirementIds || []), requirement.id]
+                          : (attachment.requirementIds || []).filter(id => id !== requirement.id))} />
+                      <span>{requirement.title}</span>
+                    </label>)}
+                  </div>
+                </details>}
+                {attachment.extractionError && <p className="mt-1 text-xs text-amber-800">Document text unavailable: {attachment.extractionError}</p>}
               </div>
               {onDownload && <button type="button" disabled={busy} onClick={() => void onDownload(attachment)} className="text-xs text-blue-700 underline disabled:opacity-50">Download</button>}
               {canManage && (

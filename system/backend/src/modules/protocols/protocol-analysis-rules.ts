@@ -1,9 +1,13 @@
-
+import { acceptedFindingRequirements } from '../projects/finding-requirements';
 
 // ── Deterministic rule-based section checks ──────────────────────────────
 // These always run alongside AI analysis so specific regulatory-reference and
 // specificity gaps are caught even if the AI misses them.
-export function getRuleBasedIssues(section: { id: string; title: string; content: string }, targetMarkets: string[], projectData: any): any[] {
+export function getRuleBasedIssues(section: { id: string; title: string; content: string }, targetMarkets: string[], projectData: any,
+  requirements?: unknown, supportingDocuments: any[] = []): any[] {
+  // These absence-only checks cannot establish coverage across controlled
+  // documents. Let the document-aware AI evaluate coverage in that case.
+  if (supportingDocuments.some(document => document.requirementIds?.length && document.extractedText?.trim())) return [];
   const issues: any[] = [];
   const content = section.content || '';
   const sectionTitle = section.title || '';
@@ -28,7 +32,14 @@ export function getRuleBasedIssues(section: { id: string; title: string; content
     issues.push({ id: `rule-stats-${section.id}`, severity: 'blocker', description: 'Statistical significance level or confidence interval not specified', reference: 'ISO 14155:2020 §7.4.4', raisedBy: 'Rule-based check', status: 'open', dueDate: '7 days' });
   }
 
-  return issues;
+  const accepted = acceptedFindingRequirements(requirements);
+  return issues.map(issue => {
+    const topic = issue.id.match(/^rule-([a-z]+)-/)?.[1];
+    const reference = topic === 'iso' || topic === 'stats' ? /ISO[\s-]*14155/i
+      : topic === 'fda' ? /21\s*CFR\s*(?:Part\s*)?812|\bFDA\b/i : /2017\/745|\bMDR\b/i;
+    const requirement = accepted.find(item => reference.test(item.title));
+    return { ...issue, requirementId: requirement?.id ?? null };
+  });
 }
 
 

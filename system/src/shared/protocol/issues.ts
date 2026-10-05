@@ -6,6 +6,27 @@ export const ISSUE_SEVERITIES = [
 
 export type IssueSeverity = typeof ISSUE_SEVERITIES[number];
 
+export interface IssueMetadata {
+  documentLink?: {
+    id: string;
+    attachmentId: string;
+    label: string;
+    status: 'checking' | 'satisfied' | 'warning' | 'blocker' | 'failed';
+    reason?: string | null;
+    decidedByUserId?: string | null;
+    decidedAt?: string;
+  };
+  requirementId?: string | null;
+  source?: string | null;
+  targetSection?: string | null;
+  remediation?: string | null;
+  reference?: string | null;
+}
+
+export function findingText(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 const severityPresentation = {
   blocker: { label: 'Blocker', plural: 'Blockers', badge: theme.status.error, border: theme.border.error, text: theme.text.error },
   warning: { label: 'Warning', plural: 'Warnings', badge: theme.status.warning, border: theme.border.warning, text: theme.text.warning },
@@ -18,8 +39,8 @@ export function getIssuePresentation(severity: IssueSeverity) {
   return severityPresentation[severity];
 }
 
-export function isOpenIssue(issue: { status: string }): boolean {
-  return issue.status === 'open';
+export function isOpenIssue(issue: { status: string; documentLink?: IssueMetadata['documentLink'] }): boolean {
+  return issue.status === 'open' && (!issue.documentLink || ['warning', 'blocker'].includes(issue.documentLink.status));
 }
 
 export function countIssueSeverities(issues: readonly { severity: IssueSeverity }[]) {

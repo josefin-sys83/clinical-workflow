@@ -1,3 +1,4 @@
+import { FindingRequirement } from '@/shared/protocol/FindingRequirement';
 import { useState } from 'react';
 import { AlertTriangle, XCircle, MessageSquare, Sparkles, X, ChevronRight, Send } from 'lucide-react';
 import type { RegulatoryFinding, ReviewerComment, AIFinding } from '../types/review';
@@ -159,6 +160,7 @@ export function FindingsPanel({
                 <p className="text-sm text-neutral-900 mb-4 leading-relaxed">
                   {finding.description}
                 </p>
+                <FindingRequirement requirementId={finding.requirementId} />
 
                 {finding.acceptedRisk && finding.acceptedBy && finding.acceptedAt && (
                   <div className="mb-4 p-2 bg-neutral-100 rounded text-xs text-neutral-600">

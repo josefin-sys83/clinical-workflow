@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, IsArray, ArrayMaxSize, IsUUID, IsIn } from 'class-validator';
 import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 
 // Generous but bounded — real protocol/report sections can legitimately run to tens of
@@ -47,4 +47,26 @@ export class UploadProtocolAttachmentDto {
   @IsString()
   @MaxLength(2000)
   description?: string;
+}
+
+export class UpdateAttachmentRequirementsDto {
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsString({ each: true })
+  @MaxLength(200, { each: true })
+  requirementIds!: string[];
+}
+
+export class FindingDecisionDto {
+  @IsIn(['document', 'unlink', 'risk_accepted'])
+  action!: 'document' | 'unlink' | 'risk_accepted';
+
+  @IsOptional()
+  @IsUUID()
+  attachmentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
 }

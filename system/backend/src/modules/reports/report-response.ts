@@ -45,6 +45,7 @@ type IssueRow = ChildRow & {
   status: string;
   due_date: string | null;
   text_quote: string | null;
+  requirement_id?: string | null;
 };
 
 type CompletenessRow = ChildRow & {
@@ -134,6 +135,7 @@ function mapIssue(issue: IssueRow) {
     status: issue.status,
     dueDate: issue.due_date,
     textQuote: issue.text_quote,
+    requirementId: issue.requirement_id ?? null,
   };
 }
 

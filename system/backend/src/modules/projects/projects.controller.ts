@@ -1,3 +1,4 @@
+import { extractDocumentText } from '../../common/document-text';
 import { Body, Controller, Get, Header, Logger, Param, Patch, Post, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, ForbiddenException, UnauthorizedException, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -458,17 +459,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const mimetype = sourceFile.mimetype || sourceFile.contentType || '';
     const filename = sourceFile.originalname || sourceFile.fileName || '';
     const buffer = sourceFile.buffer || sourceFile.bytes;
-    if (mimetype.includes('word') || filename.endsWith('.docx') || filename.endsWith('.doc')) {
-      const mammoth = require('mammoth');
-      const result = await mammoth.extractRawText({ buffer });
-      text = result.value;
-    } else if (mimetype === 'application/pdf' || filename.endsWith('.pdf')) {
-      const pdfParse = require('pdf-parse');
-      const parsed = await pdfParse(buffer);
-      text = parsed.text;
-    } else {
-      text = buffer.toString('utf-8');
-    }
+    text = await extractDocumentText(buffer, filename, mimetype);
     console.log('[analyzeSynopsis] extracted text length:', text.length, '| preview:', text.slice(0, 300));
 
     const existing = await this.projects.get(projectId);

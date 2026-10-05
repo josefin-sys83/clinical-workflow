@@ -17,6 +17,36 @@ describe('protocol write transactions', () => {
     service = new ProtocolsService(audit);
   });
 
+  it('persists a valid requirement ID in the relational issue', async () => {
+    client.query.mockResolvedValue({ rows: [{ id: 'project', data: { scope: { requirements: [
+      { id: 'req-1', status: 'accepted' },
+    ] } } }] });
+    await service.save('project', {
+      sections: [{ id: '1', issues: [{ id: 'finding', severity: 'warning', requirementId: 'req-1' }] }],
+    }, actor, client);
+    const insert = client.query.mock.calls.find(([sql]: [string]) => sql.includes('insert into protocol_section_issue'));
+    expect(insert[0]).toContain('requirement_id = excluded.requirement_id');
+    expect(insert[1][14]).toBe('req-1');
+  });
+
+  it('rejects a requirement removed or unaccepted before persistence', async () => {
+    await expect(service.save('project', {
+      sections: [{ id: '1', issues: [{ id: 'finding', severity: 'warning', requirementId: 'removed' }] }],
+    }, actor, client)).rejects.toThrow('accepted requirement in this project');
+    expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes('insert into protocol_section_issue'))).toBe(false);
+  });
+
+  it('returns the saved requirement ID when a protocol is reloaded', async () => {
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('from protocol where project_id')) return { rows: [{ id: 'protocol' }] };
+      if (sql.includes('select ps.*')) return { rows: [{ id: 'section', section_key: '1' }] };
+      if (sql.includes('select i.*')) return { rows: [{ section_id: 'section', issue_key: 'finding', requirement_id: 'req-1' }] };
+      return { rows: [] };
+    });
+    const protocol = await service.getByProject('project', client);
+    expect(protocol.sections[0].issues[0].requirementId).toBe('req-1');
+  });
+
   it.each(['blocker', 'warning', 'cross_reference', 'recommendation', 'human_decision_required'])(
     'saves the exact protocol issue severity %s', async severity => {
       await service.save('project', {
