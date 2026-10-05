@@ -8,6 +8,7 @@ from clinical_ai.modules.protocol.service import ProtocolService
 from clinical_ai.modules.report.service import ReportService
 from clinical_ai.modules.scope.service import ScopeService
 from clinical_ai.modules.synopsis.service import SynopsisService
+from clinical_ai.modules.study_results.service import ResultsService
 
 
 class AiService:
@@ -20,6 +21,7 @@ class AiService:
         self.protocol = ProtocolService(llm)
         self.report = ReportService(llm)
         self.consistency = ConsistencyService(llm)
+        self.results = ResultsService(llm)
 
     async def analyzeSynopsis(self, text: str, targetMarkets: list[str] | None = None):
         return await self.synopsis.analyze(text, targetMarkets)
@@ -77,9 +79,11 @@ class AiService:
         intendedUse: str,
         requiredElements: list[Any] | None = None,
         amendmentContext: dict[str, Any] | None = None,
-        crossSectionContext: list[dict[str, str]] | None = None,
-        acceptedRequirements: str | None = None,
+        crossSectionContext: list[Any] | None = None,
+        acceptedRequirements: Any = None,
         synopsisExcerpt: str | None = None,
+        protocolAttachments: list[Any] | None = None,
+        previousDecisions: list[Any] | None = None,
     ):
         return await self.protocol.analyze_section(
             sectionTitle,
@@ -92,7 +96,17 @@ class AiService:
             crossSectionContext,
             acceptedRequirements,
             synopsisExcerpt,
+            protocolAttachments,
+            previousDecisions,
         )
+
+    async def checkProtocolAttachments(
+        self,
+        issue: str,
+        requirement: str | None,
+        attachments: list[Any],
+    ):
+        return await self.protocol.check_attachments(issue, requirement, attachments)
 
     async def generateReportSection(
         self,

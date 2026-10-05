@@ -1,12 +1,42 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   parseResultTable,
   previewResultUpload,
   type ResultInput,
   type ResultsWorkspace,
+  type ResultSuggestion,
 } from '@/shared/api/results';
 import { apiErrorMessage } from '@/shared/api/http';
 import { ResultContent } from './ResultContent';
+import { Popover, PopoverTrigger, PopoverContent } from '@/shared/ui/popover';
+
+export function SuggestionOrigin({
+  origin,
+  field,
+}: {
+  origin?: 'ai' | 'human';
+  field: string;
+}) {
+  if (!origin) return null;
+  if (origin === 'human')
+    return <span className="text-xs text-slate-500">Human-edited</span>;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="text-xs text-violet-700 underline decoration-dotted"
+          aria-label={`About the AI suggestion for ${field}`}
+        >
+          AI suggestion ⓘ
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="bg-white text-sm text-slate-700">
+        This {field} was suggested by AI. Review and edit it before saving.
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-50';
@@ -23,12 +53,14 @@ export function ResultEditor({
   onCancel,
   draftKey,
   onDraftChange,
+  suggestion,
 }: {
   projectId: string;
   initial?: ResultInput;
   sections: ResultsWorkspace['sections'];
   draftKey?: string;
   onDraftChange?: (key: string, input: ResultInput) => void;
+  suggestion?: ResultSuggestion;
   mode: 'manual' | 'paste' | 'upload' | 'edit';
   busy: boolean;
   onSave: (input: ResultInput) => Promise<void>;
@@ -44,7 +76,43 @@ export function ResultEditor({
       (mode === 'paste' ? 'Pasted table' : 'Manual entry'),
   );
   const [location, setLocation] = useState(initial?.sourceLocation ?? '');
-  const [section, setSection] = useState(initial?.reportSectionId ?? '');
+  const [section, setSection] = useState(
+    initial?.reportSectionKey
+      ? `key:${initial.reportSectionKey}`
+      : (initial?.reportSectionId ?? ''),
+  );
+  const [origins, setOrigins] = useState({
+    titleOrigin: initial?.titleOrigin,
+    sectionOrigin: initial?.sectionOrigin,
+    descriptionOrigin: initial?.descriptionOrigin,
+  });
+  const humanEdits = useRef({
+    title: initial?.titleOrigin === 'human',
+    section: initial?.sectionOrigin === 'human',
+    description: initial?.descriptionOrigin === 'human',
+  });
+  const placementHelpId = useId();
+  const showPlacementHelp = !section && suggestion?.reportSectionKey === null && !!suggestion.limitation;
+  const alternativeTitles = sections
+    .filter(s => suggestion?.alternativeSectionKeys?.includes(s.id.replace(/^key:/, '')))
+    .map(s => s.title);
+  useEffect(() => {
+    if (!suggestion) return;
+    const next: Partial<typeof origins> = {};
+    if (suggestion.title !== null && !humanEdits.current.title) {
+      setTitle(suggestion.title);
+      next.titleOrigin = 'ai';
+    }
+    if (suggestion.reportSectionKey !== null && !humanEdits.current.section) {
+      setSection(`key:${suggestion.reportSectionKey}`);
+      next.sectionOrigin = 'ai';
+    }
+    if (suggestion.description !== null && !humanEdits.current.description) {
+      setDescription(suggestion.description);
+      next.descriptionOrigin = 'ai';
+    }
+    setOrigins((previous) => ({ ...previous, ...next }));
+  }, [suggestion]);
   const [content, setContent] = useState<Record<string, unknown> | null>(
     initial?.content ?? null,
   );
@@ -98,7 +166,12 @@ export function ResultEditor({
         description,
         sourceFilename: source,
         sourceLocation: location,
-        reportSectionId: section || null,
+        reportSectionId: section.startsWith('key:') ? null : section || null,
+        reportSectionKey: section.startsWith('key:')
+          ? section.slice(4)
+          : undefined,
+        originalReference: initial?.originalReference,
+        ...origins,
         content,
       });
   }, [
@@ -111,6 +184,8 @@ export function ResultEditor({
     location,
     section,
     content,
+    origins,
+    initial?.originalReference,
   ]);
 
   async function save(event: React.FormEvent) {
@@ -145,7 +220,12 @@ export function ResultEditor({
         description,
         sourceFilename: source.trim(),
         sourceLocation: location,
-        reportSectionId: section || null,
+        reportSectionId: section.startsWith('key:') ? null : section || null,
+        reportSectionKey: section.startsWith('key:')
+          ? section.slice(4)
+          : undefined,
+        originalReference: initial?.originalReference,
+        ...origins,
         content: nextContent,
       });
     } catch (err) {
@@ -180,13 +260,18 @@ export function ResultEditor({
         </p>
       )}
       <fieldset disabled={disabled} className="space-y-4">
+        <SuggestionOrigin origin={origins.titleOrigin} field="title" />
         <label className="block text-xs text-slate-600">
           Title
           <input
             required
             maxLength={1000}
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              humanEdits.current.title = true;
+              setOrigins((previous) => ({ ...previous, titleOrigin: 'human' }));
+              setTitle(e.target.value);
+            }}
             className={inputClass}
           />
         </label>
@@ -207,21 +292,54 @@ export function ResultEditor({
               <option value="listing">Listing</option>
             </select>
           </label>
-          <label className="block text-xs text-slate-600">
-            Report section
-            <select
-              value={section}
-              onChange={(e) => setSection(e.target.value)}
-              className={inputClass}
-            >
-              <option value="">Not assigned yet</option>
-              {sections.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div>
+            <SuggestionOrigin
+              origin={origins.sectionOrigin}
+              field="report section"
+            />
+            <label className="block text-xs text-slate-600">
+              Report section
+              <select
+                value={section}
+                aria-describedby={showPlacementHelp ? placementHelpId : undefined}
+                onChange={(e) => {
+                  humanEdits.current.section = true;
+                  setOrigins((previous) => ({
+                    ...previous,
+                    sectionOrigin: 'human',
+                  }));
+                  setSection(e.target.value);
+                }}
+                className={inputClass}
+              >
+                <option value="">Not assigned yet</option>
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {showPlacementHelp && (
+              <div id={placementHelpId} className="mt-1 text-xs text-slate-600">
+                {alternativeTitles.length >= 2
+                  ? `Multiple result topics. Suggested sections for parts of this content: ${alternativeTitles.join('; ')}. Select manually.`
+                  : 'AI did not suggest a section. Select manually or review the source.'}
+                {' '}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button type="button" className="text-violet-700 underline decoration-dotted"
+                      aria-label="Why no report section was selected">
+                      ⓘ
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="bg-white text-sm text-slate-700">
+                    {suggestion?.limitation}
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+          </div>
         </div>
         {!sections.length && (
           <p className="text-xs text-slate-500">
@@ -392,13 +510,24 @@ export function ResultEditor({
             />
           </label>
         )}
+        <SuggestionOrigin
+          origin={origins.descriptionOrigin}
+          field="description"
+        />
         <label className="block text-xs text-slate-600">
           Description — state only what is in the data
           <textarea
             rows={3}
             maxLength={20000}
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => {
+              humanEdits.current.description = true;
+              setOrigins((previous) => ({
+                ...previous,
+                descriptionOrigin: 'human',
+              }));
+              setDescription(e.target.value);
+            }}
             className={inputClass}
           />
         </label>

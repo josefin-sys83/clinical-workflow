@@ -15,12 +15,6 @@ PROTOCOL_SECTION_TITLES = [
     'Ethics & Regulatory Considerations',
 ]
 
-PROTOCOL_HIGH_ISSUE_SECTIONS = [
-    'Safety Monitoring & Reporting',
-    'Statistical Considerations',
-    'Ethics & Regulatory Considerations',
-]
-
 
 def get_section_requirements(sectionTitle: str) -> dict[str, str]:
     requirements_map = {
