@@ -174,6 +174,7 @@ class LLMGateway:
             max_tokens=max_tokens,
             temperature=temperature,
             json_mode="Return ONLY this JSON" in prompt_text,
+            frequency_penalty=(spec.frequency_penalty if isinstance(spec, PromptSpec) else 0.0),
             response_schema=response_schema,
             response_schema_name=response_schema_name,
         )

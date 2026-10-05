@@ -91,6 +91,7 @@ OUTPUT: Write only the section content. No preamble, no title, no markdown."""
         user=untrustedProjectData,
         max_tokens=3500,
         temperature=0.5,
+        frequency_penalty=0.2,
     )
 
 
@@ -319,6 +320,7 @@ def analyze_requirement_batch_prompt(
         user='REQUIREMENT ANALYSIS INPUT:\n' + _json(payload),
         max_tokens=2200,
         temperature=0.0,
+        frequency_penalty=0.2,
     )
 
 

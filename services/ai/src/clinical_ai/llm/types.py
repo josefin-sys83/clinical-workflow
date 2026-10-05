@@ -15,6 +15,7 @@ class PromptSpec:
     user: str
     max_tokens: int = 2000
     temperature: float = 0.3
+    frequency_penalty: float = 0.0
     image_data_url: str | None = None
 
     @classmethod
@@ -25,12 +26,14 @@ class PromptSpec:
         user: str,
         max_tokens: int,
         temperature: float,
+        frequency_penalty: float = 0.0,
     ) -> "PromptSpec":
         return cls(
             system=system,
             user=user,
             max_tokens=max_tokens,
             temperature=temperature,
+            frequency_penalty=frequency_penalty,
         )
 
     @property
@@ -45,6 +48,7 @@ class LLMRequest:
     max_tokens: int
     temperature: float
     json_mode: bool
+    frequency_penalty: float = 0.0
     response_schema: dict[str, Any] | None = None
     response_schema_name: str | None = None
 

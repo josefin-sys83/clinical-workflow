@@ -68,6 +68,9 @@ class AzureOpenAIProvider:
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
         }
+        if request.frequency_penalty:
+            body["frequency_penalty"] = request.frequency_penalty
+
         if request.response_schema:
             body["response_format"] = {
                 "type": "json_schema",
