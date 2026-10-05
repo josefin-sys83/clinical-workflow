@@ -56,9 +56,9 @@ Results CRUD, decisions, permissions and migration details are documented in
 
 The backend now supplies supporting document text to section analysis, associates
 attachments with accepted Scope requirements, and lets a user link a current finding
-to an attachment for a separate evidence check. The NestJS changes are implemented;
-the corresponding Python AI changes are pending. The contracts below describe what
-the backend sends and expects, not functionality already implemented in Python.
+to an attachment for a separate evidence check. Section analysis and attachment
+verification follow the SCRUM-82 protocol AI contract. The examples below describe
+the backend-to-AI payloads; they do not establish the outcome of a live AI review.
 
 ### Backend changes and storage
 
@@ -119,8 +119,7 @@ data and calls `POST /v1/ai/analyze-section` with this shape:
     {
       "id": "element-1",
       "name": "Assessment procedure",
-      "reference": "ISO 14155",
-      "status": "missing"
+      "reference": "ISO 14155"
     }
   ],
   "amendmentContext": null,
@@ -130,46 +129,39 @@ data and calls `POST /v1/ai/analyze-section` with this shape:
       "content": "The saved content of another protocol section..."
     }
   ],
-  "acceptedRequirements": "[{\"id\":\"standard-3\",\"title\":\"ISO 14155\",\"description\":\"Good Clinical Practice requirements\"}]",
-  "synopsisExcerpt": "The project's source synopsis text...",
-  "protocolDocuments": [
+  "acceptedRequirements": [
     {
-      "id": "d6fba0cb-902a-4b85-b239-02e733caa195",
-      "label": "Appendix 1 - ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
-      "appendixNumber": 1,
-      "filename": "ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
-      "description": null,
-      "requirementIds": ["standard-3"],
-      "requirements": [
-        {
-          "id": "standard-3",
-          "title": "ISO 14155",
-          "description": "Good Clinical Practice requirements"
-        }
-      ],
-      "extractedText": "The text extracted from this particular attachment...",
-      "extractionError": null
+      "name": "ISO 14155",
+      "description": "Good Clinical Practice requirements"
+    }
+  ],
+  "protocolAttachments": [
+    {
+      "name": "Appendix 1 - ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
+      "content": "The text extracted from this particular attachment...",
+      "requirement": "ISO 14155"
     }
   ]
 }
 ```
 
-The changes to this request are:
+Only `id`, `name`, and `reference` from each required element are sent; saved status
+and evidence stay in the backend. Amendment context includes `number`, `title`,
+`reason`, and `description`, without snapshots or workflow metadata.
+`crossSectionContext` includes the title and content of every other populated section.
 
-- `protocolDocuments` now carries the attachments, their associated requirements,
-  and actual extracted text. Each attachment's text stays inside its own object,
-  alongside its ID and filename; the AI can identify which document supplied it.
-- `crossSectionContext` now includes all other populated protocol sections rather
-  than only Study Design and Study Rationale & Objectives.
-- `acceptedRequirements` remains a JSON-encoded **string** of accepted requirement
-  objects with `id`, `title`, and `description`; it is not a nested array in this field.
+`acceptedRequirements` is an array of `name`/`description` objects for accepted Scope
+requirements. Internal requirement IDs are kept in the backend. `synopsisExcerpt`
+is omitted because the AI requirement-analysis prompts do not use it.
 
-Each document's `requirementIds` combines direct assignments from
-`protocol_attachment.requirement_ids` with requirement IDs from open findings linked
-to that attachment. The backend removes duplicates and IDs that are no longer
-accepted. `requirements` contains the matching full requirement objects.
-`extractionError` is `null` on successful extraction; otherwise `extractedText` is
-empty when no text is available and the error explains why.
+Each attachment's requirement links combine direct assignments with accepted
+requirement IDs from open findings linked to that attachment. For section analysis,
+a readable attachment is sent once per linked requirement, using that requirement's
+name in `protocolAttachments[].requirement`. Unlinked or unreadable attachments are
+omitted from the AI payload; their metadata and extraction errors remain available
+in the backend. No IDs, extraction errors, or file metadata are sent to the AI.
+Each attachment's content has a 24,000-character AI service limit. HTTP 413 is
+propagated rather than silently truncating the evidence.
 
 The AI implementation must review the section, other sections, and readable supporting
 documents before raising findings. Information missing everywhere can be a blocker;
@@ -180,7 +172,8 @@ calling the AI, logged as `aiRequestSent: false`.
 
 ### Required section analysis response
 
-The backend expects `issues` and `requiredElements`. Example AI response:
+The backend expects `issues`, `requiredElements`, and `satisfiedRequirements`.
+Example AI response:
 
 ```json
 {
@@ -191,7 +184,6 @@ The backend expects `issues` and `requiredElements`. Example AI response:
       "subsection": "Assessment procedure",
       "description": "The required procedure is missing from the available evidence.",
       "source": "ISO 14155",
-      "requirementId": "standard-3",
       "targetSection": "Study Procedures & Assessments",
       "remediation": "Provide the required procedure or supporting evidence.",
       "raisedBy": "AI Regulatory Review",
@@ -209,22 +201,25 @@ The backend expects `issues` and `requiredElements`. Example AI response:
       "status": "missing",
       "evidence": "No supporting procedure was identified in the supplied evidence."
     }
-  ]
+  ],
+  "satisfiedRequirements": []
 }
 ```
 
-Every issue must include `requirementId`: an accepted requirement ID from this
-project, or explicit `null` when no accepted requirement applies. Omitting the field
-fails response validation. Allowed issue severities are `blocker`, `warning`,
-`cross_reference`, `recommendation`, and `human_decision_required`. Required element
-statuses are `complete`, `partial`, and `missing`.
+The documented AI response does not contain internal `requirementId` values. The
+backend maps an issue's `source` to an accepted requirement only when it exactly
+matches a unique name or description; otherwise the finding remains unlinked.
+Legacy explicit IDs are still validated against accepted requirements.
+Allowed issue severities are `blocker`, `warning`, `cross_reference`,
+`recommendation`, and `human_decision_required`. Required element statuses are
+`complete`, `partial`, and `missing`.
 
-The response schema is strict: use the fields shown above. Nullable issue fields
-(`source`, `requirementId`, `targetSection`, `remediation`, `textQuote`) must still
-be present. String fields other than `requirementId` must be nonblank when not null;
-a non-null `requirementId` must match an accepted ID. The backend saves validated
-findings on the section and records analysis as `succeeded`, or records `failed`
-and an error when analysis fails.
+Each satisfied requirement contains `name`, `status: "satisfied"`, `source`
+(`section` or `attachment`), nullable `sourceName`, and `evidence`. The response
+schema is strict. Nullable issue fields (`source`, `targetSection`, `remediation`,
+`textQuote`) must be present; non-null strings must be nonblank. The backend saves
+validated findings on the section and records analysis as `succeeded`, or records
+`failed` and an error when analysis fails.
 
 ### New attachment-to-requirement endpoint
 
@@ -276,76 +271,49 @@ finalized. These writes share a project lock with workflow transitions.
 ### New backend-to-AI attachment verification request
 
 After committing a document link, `verify(projectId, findingId, requestId)` loads the
-finding, its accepted requirement, the containing section, and the chosen attachment.
-It sends **objects containing the data**, not just IDs, to:
+finding, its accepted requirement, and the chosen attachment. The AI adapter sends
+only the finding text, requirement name, and selected attachment evidence to:
 
 ```http
-POST /v1/ai/check-finding-document
+POST /v1/ai/check-protocol-attachments
 ```
 
 Example request body:
 
 ```json
 {
-  "issue": {
-    "id": "issue-1",
-    "requirementId": "standard-3",
-    "severity": "blocker",
-    "description": "The required assessment procedure is missing.",
-    "subsection": "Assessment procedure",
-    "reference": "ISO 14155",
-    "source": "ISO 14155",
-    "targetSection": "Study Procedures & Assessments",
-    "remediation": "Provide the required procedure or supporting evidence.",
-    "textQuote": null
-  },
-  "requirement": {
-    "id": "standard-3",
-    "title": "ISO 14155",
-    "description": "Good Clinical Practice requirements"
-  },
-  "section": {
-    "id": "6",
-    "title": "Study Procedures & Assessments",
-    "content": "The saved section text..."
-  },
-  "document": {
-    "id": "d6fba0cb-902a-4b85-b239-02e733caa195",
-    "label": "Appendix 1 - ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
-    "appendixNumber": 1,
-    "filename": "ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
-    "description": null,
-    "requirementIds": ["standard-3"],
-    "requirements": [
-      {
-        "id": "standard-3",
-        "title": "ISO 14155",
-        "description": "Good Clinical Practice requirements"
-      }
-    ],
-    "extractedText": "The actual text extracted from this attachment...",
-    "extractionError": null
-  }
+  "issue": "The required assessment procedure is missing.",
+  "requirement": "ISO 14155",
+  "attachments": [
+    {
+      "name": "Appendix 1 - ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
+      "content": "The actual text extracted from this attachment..."
+    }
+  ]
 }
 ```
 
-The top-level `requirement` is the specific requirement being checked for this
-finding. `document.requirements` lists all accepted requirements associated with the
-attachment. The check must assess whether that document addresses this finding in
-the context of the requirement and section. Expected response:
+Expected AI response:
 
 ```json
 {
-  "status": "satisfied",
-  "reason": "The attachment provides the procedure required by this finding."
+  "outcome": "resolves",
+  "explanation": "The attachment provides the procedure required by this finding.",
+  "sources": [
+    {
+      "document": "Appendix 1 - ISO_14155_Supporting_Document_ECG-ACQ-SYN-001.docx",
+      "evidence": "The assessment procedure is defined in the attachment."
+    }
+  ]
 }
 ```
 
-Allowed response statuses are `satisfied`, `warning`, and `blocker`, with a nonblank
-`reason`. Insufficient evidence must return the appropriate severity and explanation.
-Missing/unreadable evidence, HTTP failures, a missing endpoint, or an invalid response
-produce saved verification status `failed`; the attachment remains linked and the UI
-offers retry through the same `document` action.
+The adapter maps `resolves` to existing verification status `satisfied`,
+`partially_resolves` to `warning`, and `does_not_resolve` to `blocker`. `explanation`
+becomes the stored verification reason. The same 24,000-character content limit
+applies. Missing/unreadable evidence, HTTP failures, or invalid responses produce
+saved verification status `failed`; the attachment remains linked and the UI offers
+retry through the same `document` action.
 
 Verification only updates `verification_status`, `verification_reason`, and
 `verified_at`; it does not overwrite the original finding severity or its stored
@@ -480,7 +448,7 @@ Override paths with `GENERATE_PROTOCOL_LOG_FILE` and `ANALYZE_SECTION_LOG_FILE`.
 In an analysis log entry:
 
 - `request` is the backend-to-AI request, including
-  `request.protocolDocuments[].extractedText`.
+  `request.protocolAttachments[].content`.
 - The outer `protocolAttachments` is a metadata summary of the same attachments:
   IDs, labels, filenames, requirements, and extraction errors, without extracted text.
   It is for inspection of the log and is not an additional field sent to the AI.
@@ -490,22 +458,17 @@ In an analysis log entry:
 Generation logs contain the actual generation request, including the accepted
 requirement objects and their JSON-encoded representation.
 
-### Python AI implementation still required
+### Protocol AI integration boundaries
 
-| Area | Current Python code | Required integration |
-|---|---|---|
-| Section analysis input | `AnalyzeSectionRequest` and the route/service chain do not consume `protocolDocuments`. | Add the document field and carry it through the route, AI service, protocol service, and analysis prompt, including extracted text and associations. |
-| Section analysis output | `ProtocolReviewIssue` does not define `requirementId`; its strict model forbids extra fields. | Add required nullable `requirementId` and prompt instructions to use an accepted ID or `null`. |
-| Attachment verification | `/v1/ai/check-finding-document` has no Python route. | Implement its request model, route, evidence comparison, and validated `status`/`reason` response. |
-| Full generation context | Python receives the updated `scope` object, but the extra `findingRequirements` field is not explicitly consumed by its generation prompt. | Review the requirement array handling and consume the stable IDs where needed. |
+Analysis accepts the three response arrays defined by SCRUM-82, without requiring
+Python to return internal requirement IDs. The attachment verification endpoint
+only evaluates evidence; the backend retains responsibility for link state,
+validation, document locks, and audit records.
 
-Until the analysis output model is updated, responses containing findings omit
-`requirementId` and fail backend validation with HTTP 502. The frontend displays
-"The AI returned a response that could not be analyzed. Please retry." Other schema
-failures can produce the same message. Until document input is wired through Python,
-the backend sending extracted text does not mean the model receives it. Until the
-verification endpoint exists, document links receive a `failed` check when that
-endpoint is called.
+`previousDecisions` is optional in SCRUM-82 and is not currently sent. Full protocol
+generation uses its separate existing contract; its `scope.findingRequirements`
+field is not explicitly consumed by the current Python generation prompt. No
+Python changes are required for the analysis and verification payloads above.
 
 ## Signing (RSA-SHA256)
 

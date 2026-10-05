@@ -37,19 +37,21 @@ describe.each(['protocol', 'report'])('%s section finding requirements', kind =>
     }
   });
 
-  it('passes accepted IDs to AI and preserves the returned link through persistence', async () => {
+  it('passes accepted requirements to AI and preserves the returned link through persistence', async () => {
     const analyze = kind === 'protocol' ? ai.analyzeSection : ai.analyzeReportSection;
     analyze.mockResolvedValue({ issues: [{ id: 'finding', requirementId: 'req-1' }] });
     const result = await run();
-    expect(JSON.parse(analyze.mock.calls[0][kind === 'protocol' ? 8 : 7])).toEqual([
-      { id: 'req-1', title: 'Safety', description: 'Monitoring' },
-    ]);
+    if (kind === 'protocol') {
+      expect(analyze.mock.calls[0][8]).toEqual([{ name: 'Safety', description: 'Monitoring' }]);
+    } else {
+      expect(JSON.parse(analyze.mock.calls[0][7])).toEqual([{ id: 'req-1', title: 'Safety', description: 'Monitoring' }]);
+    }
     expect(result.issues[0].requirementId).toBe('req-1');
     expect(storage.finishSectionAnalysis).toHaveBeenCalledWith('project', '1', 'request',
       expect.objectContaining({ issues: expect.arrayContaining([expect.objectContaining({ requirementId: 'req-1' })]) }), null, actor);
   });
 
-  it.each(['invented', 'req-2', undefined])('marks analysis failed instead of saving an invalid AI link: %p', requirementId => {
+  it.each(['invented', 'req-2', ...(kind === 'report' ? [undefined] : [])])('marks analysis failed instead of saving an invalid AI link: %p', requirementId => {
     const analyze = kind === 'protocol' ? ai.analyzeSection : ai.analyzeReportSection;
     analyze.mockResolvedValue({ issues: [{ id: 'finding', requirementId }] });
     return expect(run()).rejects.toBeInstanceOf(BadGatewayException).then(() => {

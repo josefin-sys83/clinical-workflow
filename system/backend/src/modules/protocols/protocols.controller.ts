@@ -26,7 +26,7 @@ import { ProtocolUploadSizeExceptionFilter } from './protocol-upload-size.filter
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
 import { ProtocolFindingDocumentsService } from './protocol-finding-documents.service';
 import { buildGenerationMetadataLog, buildProtocolGenerationContext, sourceSynopsisText } from '../projects/project-generation-context';
-import { findingRequirementsText, validateFindingRequirements } from '../projects/finding-requirements';
+import { acceptedFindingRequirements, validateFindingRequirements } from '../projects/finding-requirements';
 import { ConflictException } from '@nestjs/common';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -263,19 +263,28 @@ export class ProtocolsController {
 
     const protocol = project?.data?.protocol || {};
     const section = (protocol.sections || []).find((s: any) => s.title === sectionTitle || s.id === sectionId);
-    const amendmentContext = section?.amended && section?.amendmentId
+    const amendment = section?.amended && section?.amendmentId
       ? (protocol.amendments || []).find((a: any) => a.id === section.amendmentId) || null
       : null;
+    const amendmentContext = amendment ? {
+      number: amendment.number, title: amendment.title, reason: amendment.reason, description: amendment.description,
+    } : null;
+    const requiredElementInputs = requiredElements?.map(({ id, name, reference }) => ({ id, name, reference }));
 
     const crossSectionContext = (protocol.sections || [])
       .filter((s: any) => s.title !== sectionTitle && s.content)
       .map((s: any) => ({ title: s.title, content: s.content }));
 
     const requirements = project?.data?.scope?.requirements;
-    const acceptedRequirements = findingRequirementsText(requirements);
-    const synopsisExcerpt = sourceSynopsisText(project?.data?.synopsis);
+    const accepted = acceptedFindingRequirements(requirements);
+    const acceptedRequirements = accepted.map(({ title, description }) => ({ name: title, description }));
 
     const protocolAttachments = await this.attachments.supportingDocuments(project.id, requirements, true);
+    // One API attachment links to one requirement; keep internal IDs and extraction metadata local.
+    const aiAttachments = protocolAttachments.flatMap(attachment =>
+      attachment.extractedText?.trim() ? attachment.requirements.map(requirement => ({
+        name: attachment.label, content: attachment.extractedText, requirement: requirement.title,
+      })) : []);
     const attachmentMetadata = protocolAttachments.map((attachment) => ({
       id: attachment.id,
       label: attachment.label,
@@ -310,12 +319,11 @@ export class ProtocolsController {
         targetMarkets,
         deviceCategory,
         intendedUse,
-        requiredElements,
+        requiredElements: requiredElementInputs,
         amendmentContext,
         crossSectionContext,
         acceptedRequirements,
-        synopsisExcerpt,
-        protocolDocuments: protocolAttachments,
+        protocolAttachments: aiAttachments,
       },
       // Keep a metadata summary alongside the complete AI request payload.
       protocolAttachments: attachmentMetadata,
@@ -337,17 +345,25 @@ export class ProtocolsController {
       projectId: project.id,
       sectionId,
       sectionTitle,
-      protocolDocuments: attachmentMetadata,
+      protocolAttachments: attachmentMetadata,
     }));
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElements, amendmentContext, crossSectionContext, acceptedRequirements, synopsisExcerpt, protocolAttachments);
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments);
 
     if (result?.error) return result;
 
     // Deterministic rule-based checks always run alongside the AI analysis, so
     // regulatory-reference and specificity gaps are caught even if the AI misses them.
+    // The documented response identifies requirements by source text, not internal IDs.
+    // Link only an exact, unambiguous name or description; otherwise keep the finding unlinked.
+    const aiIssues = (result.issues || []).map((issue: any) => {
+      if (issue.requirementId !== undefined) return issue;
+      const matches = accepted.filter(requirement => issue.source &&
+        (issue.source === requirement.title || issue.source === requirement.description));
+      return { ...issue, requirementId: matches.length === 1 ? matches[0].id : null };
+    });
     result.issues = validateFindingRequirements(mergeIssues(
-      mergeIssues(validateFindingRequirements(result.issues || [], requirements, 'ai'), ruleIssues),
+      mergeIssues(validateFindingRequirements(aiIssues, requirements, 'ai'), ruleIssues),
       attachmentIssues,
     ), requirements);
     return result;
