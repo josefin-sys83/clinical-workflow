@@ -11,7 +11,28 @@ from fastapi.responses import StreamingResponse
 from clinical_ai.ai_service import AiService
 from clinical_ai.modules.protocol.rules import PROTOCOL_SECTION_TITLES
 from clinical_ai.modules.study_results.models import SuggestResultRequest, ResultSuggestion
-from .schemas import *
+from clinical_ai.modules.protocol.models import (
+    AnalyzeSectionRequest,
+    AnalyzeSectionResponse,
+    AttachmentCheckResponse,
+    CheckProtocolAttachmentsRequest,
+    GenerateRequiredElementsRequest,
+    GeneratedRequiredElement,
+    GenerateRequiredElementsResponse,
+)
+from .schemas import (
+    AnalyzeReportSectionRequest,
+    AnalyzeScopeRequest,
+    AnalyzeSynopsisRequest,
+    CheckCrossConsistencyRequest,
+    CheckStatisticalConsistencyRequest,
+    CheckSynopsisConsistencyRequest,
+    DeriveScopeRequest,
+    GenerateProtocolRequest,
+    GenerateProtocolSectionRequest,
+    GenerateReportSectionRequest,
+    ValidateStatisticalValuesRequest,
+)
 
 from clinical_ai.errors import GatewayTimeoutException, ServiceUnavailableException
 
@@ -116,17 +137,23 @@ async def generate_protocol_stream(req: GenerateProtocolRequest, ai: AiService =
     return StreamingResponse(events(), media_type='application/x-ndjson')
 
 
-@router.post('/v1/ai/generate-required-elements', dependencies=[Depends(require_internal_token)])
+@router.post('/v1/ai/generate-required-elements', response_model=list[GeneratedRequiredElement], dependencies=[Depends(require_internal_token)])
 async def generate_required_elements(req: GenerateRequiredElementsRequest, ai: AiService = Depends(get_ai)):
     return await ai.generateRequiredElements(req.sectionTitle, req.targetMarkets, req.deviceCategory, req.intendedUse)
 
 
-@router.post('/v1/ai/analyze-section', dependencies=[Depends(require_internal_token)])
+@router.post('/v1/ai/analyze-section', response_model=AnalyzeSectionResponse, dependencies=[Depends(require_internal_token)])
 async def analyze_section(req: AnalyzeSectionRequest, ai: AiService = Depends(get_ai)):
     return await ai.analyzeSection(
         req.sectionTitle, req.sectionContent, req.targetMarkets, req.deviceCategory, req.intendedUse,
         req.requiredElements, req.amendmentContext, req.crossSectionContext, req.acceptedRequirements, req.synopsisExcerpt,
+        req.protocolAttachments, req.previousDecisions,
     )
+
+
+@router.post('/v1/ai/check-protocol-attachments', response_model=AttachmentCheckResponse, dependencies=[Depends(require_internal_token)])
+async def check_protocol_attachments(req: CheckProtocolAttachmentsRequest, ai: AiService = Depends(get_ai)):
+    return await ai.checkProtocolAttachments(req.issue, req.requirement, req.attachments)
 
 
 @router.post('/v1/ai/generate-report-section', dependencies=[Depends(require_internal_token)])
