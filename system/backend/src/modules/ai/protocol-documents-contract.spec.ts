@@ -41,16 +41,70 @@ describe('protocol supporting document AI requests', () => {
 
   it('sends extracted evidence with linked requirements on section analysis', async () => {
     const service = new AiService();
-    const post = jest.spyOn(service as any, 'post').mockResolvedValue({});
-    const evidence = { ...document, extractedText: 'PMCF follow-up schedule', extractionError: null };
-    await service.analyzeSection('Design', 'CIP', [], '', '', [], null, [], '[]', '', [evidence]);
-    expect(post).toHaveBeenCalledWith('/v1/ai/analyze-section', expect.objectContaining({ protocolDocuments: [evidence] }), true);
+    const response = { issues: [], requiredElements: [], satisfiedRequirements: [] };
+    const fetch = jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify(response)));
+    const evidence = { name: document.label, content: 'PMCF follow-up schedule', requirement: 'PMCF' };
+    await expect(service.analyzeSection('Design', 'CIP', [], '', '', [], null, [],
+      [{ name: 'PMCF', description: 'Follow-up' }], [evidence])).resolves.toEqual(response);
+    expect(JSON.parse((fetch.mock.calls[0][1] as any).body)).toEqual({
+      sectionTitle: 'Design', sectionContent: 'CIP', targetMarkets: [], deviceCategory: '', intendedUse: '',
+      requiredElements: [], amendmentContext: null, crossSectionContext: [],
+      acceptedRequirements: [{ name: 'PMCF', description: 'Follow-up' }], protocolAttachments: [evidence],
+    });
   });
 
-  it.each([{}, { status: 'satisfied' }, { status: 'unknown', reason: 'Example' }])('rejects an invalid comparison response %p', async response => {
+  const check = {
+    issue: { id: 'finding', description: 'Missing plan', severity: 'blocker' },
+    requirement: { id: 'req-1', title: 'PMCF' }, section: { content: 'CIP' },
+    document: { ...document, extractedText: 'PMCF follow-up schedule', extractionError: null },
+  };
+
+  it.each([
+    ['resolves', 'satisfied'], ['partially_resolves', 'warning'], ['does_not_resolve', 'blocker'],
+  ])('maps attachment outcome %s to the existing status %s', async (outcome, status) => {
     const service = new AiService();
-    jest.spyOn(service as any, 'post').mockResolvedValue(response);
-    await expect(service.checkFindingDocument({ issue: {}, requirement: {}, section: {}, document }))
-      .rejects.toThrow('invalid supporting document check');
+    const fetch = jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify({
+      outcome, explanation: 'Evidence assessed', sources: [{ document: document.label, evidence: 'Follow-up schedule' }],
+    })));
+    await expect(service.checkFindingDocument(check)).resolves.toEqual({ status, reason: 'Evidence assessed' });
+    expect(fetch.mock.calls[0][0]).toBe('/v1/ai/check-protocol-attachments');
+    expect(JSON.parse((fetch.mock.calls[0][1] as any).body)).toEqual({
+      issue: 'Missing plan', requirement: 'PMCF',
+      attachments: [{ name: document.label, content: 'PMCF follow-up schedule' }],
+    });
+  });
+
+  it.each([{}, { status: 'satisfied' }, { outcome: 'unknown', explanation: 'Example', sources: [] },
+    { outcome: 'resolves', explanation: 'Example', sources: [{ document: 'PMCF' }] },
+  ])('rejects an invalid comparison response %p', async response => {
+    const service = new AiService();
+    jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify(response)));
+    await expect(service.checkFindingDocument(check)).rejects.toThrow('invalid response for check-protocol-attachments');
+  });
+
+  it('propagates the attachment size limit without truncating evidence', async () => {
+    const service = new AiService();
+    const fetch = jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify({
+      detail: 'Attachment exceeds the 24000 character analysis limit.',
+    }), { status: 413 }));
+    const content = 'x'.repeat(24001);
+    await expect(service.checkFindingDocument({ ...check, document: { ...check.document, extractedText: content } }))
+      .rejects.toMatchObject({ status: 413 });
+    expect(JSON.parse((fetch.mock.calls[0][1] as any).body).attachments[0].content).toBe(content);
+  });
+
+  it('rejects malformed JSON from protocol analysis', async () => {
+    const service = new AiService();
+    jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response('invalid JSON'));
+    await expect(service.analyzeSection('Design', 'CIP', [], '', '')).rejects.toThrow('malformed JSON');
+  });
+
+  it('sends only the documented required-elements context fields', async () => {
+    const service = new AiService();
+    const fetch = jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response('[]'));
+    await service.generateRequiredElements('Design', ['EU'], 'SaMD', 'Monitoring');
+    expect(JSON.parse((fetch.mock.calls[0][1] as any).body)).toEqual({
+      sectionTitle: 'Design', targetMarkets: ['EU'], deviceCategory: 'SaMD', intendedUse: 'Monitoring',
+    });
   });
 });

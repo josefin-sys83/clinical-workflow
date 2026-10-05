@@ -8,14 +8,13 @@ const element = z.object({ id: text, name: text, reference: text });
 const reviewedElement = element.extend({ status: z.enum(['complete', 'partial', 'missing']) });
 const issue = z.object({ description: text, severity: z.enum(['blocker', 'warning']) }).passthrough();
 
-// The AI service must also expose requirementId in its structured response model.
 const protocolIssue = z.object({
   id: text,
   severity: protocolIssueSeverity,
   subsection: text,
   description: text,
   source: text.nullable(),
-  requirementId: z.string().nullable(),
+  requirementId: z.string().nullable().optional(),
   targetSection: text.nullable(),
   remediation: text.nullable(),
   raisedBy: z.literal('AI Regulatory Review'),
@@ -63,6 +62,18 @@ const contracts: Record<string, z.ZodTypeAny> = {
   '/v1/ai/analyze-section': z.object({
     issues: z.array(protocolIssue),
     requiredElements: z.array(reviewedElement.extend({ evidence: text }).strict()),
+    satisfiedRequirements: z.array(z.object({
+      name: text,
+      status: z.literal('satisfied'),
+      source: z.enum(['section', 'attachment']),
+      sourceName: text.nullable(),
+      evidence: text,
+    }).strict()),
+  }).strict(),
+  '/v1/ai/check-protocol-attachments': z.object({
+    outcome: z.enum(['resolves', 'partially_resolves', 'does_not_resolve']),
+    explanation: text,
+    sources: z.array(z.object({ document: text, evidence: text }).strict()),
   }).strict(),
   '/v1/ai/check-synopsis-consistency': z.object({ issues: z.array(issue) }).passthrough(),
 };

@@ -1,8 +1,75 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class GenerateRequiredElementsRequest(BaseModel):
+    sectionTitle: str
+    targetMarkets: list[str]
+    deviceCategory: str
+    intendedUse: str
+
+
+class RequiredElementInput(BaseModel):
+    id: str | None = None
+    name: str
+    reference: str | None = None
+
+
+class ProtocolSectionContext(BaseModel):
+    title: str
+    content: str
+
+
+class AcceptedRequirement(BaseModel):
+    name: str
+    description: str = ''
+
+
+class ProtocolAttachment(BaseModel):
+    name: str
+    content: str
+    requirement: str | None = None
+
+
+class PreviousAnalysisDecision(BaseModel):
+    requirement: str | None = None
+    severity: str
+    issue: str
+    decision: str
+    reason: str | None = None
+
+
+class AnalyzeSectionRequest(BaseModel):
+    sectionTitle: str
+    sectionContent: str
+    targetMarkets: list[str]
+    deviceCategory: str
+    intendedUse: str
+    requiredElements: list[RequiredElementInput] | None = None
+    amendmentContext: Any | None = None
+    crossSectionContext: list[ProtocolSectionContext] | None = None
+    acceptedRequirements: list[AcceptedRequirement] | str | None = None
+    synopsisExcerpt: str | None = None
+    protocolAttachments: list[ProtocolAttachment] | None = None
+    previousDecisions: list[PreviousAnalysisDecision] | None = None
+
+
+class CheckProtocolAttachmentsRequest(BaseModel):
+    issue: str
+    requirement: str | None = None
+    attachments: list[ProtocolAttachment] = Field(min_length=1)
+
+
+ReviewSeverity = Literal[
+    'blocker',
+    'warning',
+    'cross_reference',
+    'recommendation',
+    'human_decision_required',
+]
 
 
 class StrictProtocolModel(BaseModel):
@@ -26,22 +93,88 @@ class GeneratedRequiredElement(StrictProtocolModel):
 class GenerateRequiredElementsResponse(StrictProtocolModel):
     requiredElements: list[GeneratedRequiredElement]
 
-    # @model_validator(mode='after')
-    # def validate_required_element_count(self):
-    #     if not 4 <= len(self.requiredElements) <= 6:
-    #         raise ValueError('requiredElements must contain between 4 and 6 items')
-    #     return self
+
+class RoutedRequirement(StrictProtocolModel):
+    name: str
+    relevance: Literal['relevant', 'maybe_relevant']
+
+
+class RouteRequirementsResponse(StrictProtocolModel):
+    requirements: list[RoutedRequirement]
+
+
+class ProtocolIssueAnalysis(StrictProtocolModel):
+    """Semantic issue returned by AI before application metadata is added."""
+
+    severity: ReviewSeverity
+    requirement: str | None
+    subsection: str
+    description: str
+    source: str | None
+    targetSection: str | None
+    remediation: str | None
+    textQuote: str | None
+
+
+class RequiredElementBatchResult(StrictProtocolModel):
+    name: str
+    status: Literal['complete', 'partial', 'missing']
+    evidence: str
+
+
+class SatisfiedRequirement(StrictProtocolModel):
+    name: str
+    status: Literal['satisfied']
+    source: Literal['section', 'attachment']
+    sourceName: str | None
+    evidence: str
+
+
+class AnalyzeRequirementBatchResponse(StrictProtocolModel):
+    """Structured results from requirement evaluation.
+
+    - issues: requirement findings that still need action
+    - satisfiedRequirements: accepted requirements that are satisfied
+    - requiredElements: checklist results for required section elements"""
+
+    issues: list[ProtocolIssueAnalysis]
+    satisfiedRequirements: list[SatisfiedRequirement]
+    requiredElements: list[RequiredElementBatchResult]
+
+
+class CrossSectionResolution(StrictProtocolModel):
+    issueNumber: int
+    resolution: Literal['cross_reference', 'unchanged']
+    targetSection: str | None
+    description: str | None
+    remediation: str | None
+
+
+class CrossSectionNewFinding(ProtocolIssueAnalysis):
+    severity: Literal['blocker', 'warning', 'cross_reference']
+
+
+class ResolveCrossSectionResponse(StrictProtocolModel):
+    resolutions: list[CrossSectionResolution]
+    newFindings: list[CrossSectionNewFinding]
+
+
+class AttachmentEvidence(StrictProtocolModel):
+    document: str
+    evidence: str
+
+
+class AttachmentCheckResponse(StrictProtocolModel):
+    outcome: Literal['resolves', 'partially_resolves', 'does_not_resolve']
+    explanation: str
+    sources: list[AttachmentEvidence]
 
 
 class ProtocolReviewIssue(StrictProtocolModel):
+    """Final API issue: AI semantics plus deterministic application metadata."""
+
     id: str
-    severity: Literal[
-        'blocker',
-        'warning',
-        'cross_reference',
-        'recommendation',
-        'human_decision_required',
-    ]
+    severity: ReviewSeverity
     subsection: str
     description: str
     source: str | None
@@ -65,3 +198,4 @@ class ReviewedRequiredElement(StrictProtocolModel):
 class AnalyzeSectionResponse(StrictProtocolModel):
     issues: list[ProtocolReviewIssue]
     requiredElements: list[ReviewedRequiredElement]
+    satisfiedRequirements: list[SatisfiedRequirement]

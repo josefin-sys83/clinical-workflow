@@ -230,9 +230,8 @@ export class AiService {
     requiredElements?: any[],
     amendmentContext?: { number: number; title: string; reason: string; description: string } | null,
     crossSectionContext?: { title: string; content: string }[],
-    acceptedRequirements?: string,
-    synopsisExcerpt?: string,
-    protocolDocuments: any[] = [],
+    acceptedRequirements?: { name: string; description: string }[],
+    protocolAttachments: { name: string; content: string; requirement: string }[] = [],
   ): Promise<any> {
     return this.post('/v1/ai/analyze-section', {
       sectionTitle,
@@ -244,18 +243,20 @@ export class AiService {
       amendmentContext,
       crossSectionContext,
       acceptedRequirements,
-      synopsisExcerpt,
-      protocolDocuments,
+      protocolAttachments,
     }, true);
   }
 
   async checkFindingDocument(body: { issue: any; requirement: any; section: any; document: any }): Promise<{ status: 'satisfied' | 'warning' | 'blocker'; reason: string }> {
-    const result = await this.post<any>('/v1/ai/check-finding-document', body);
-    if (!result || !['satisfied', 'warning', 'blocker'].includes(result.status)
-      || typeof result.reason !== 'string' || !result.reason.trim()) {
-      throw new BadGatewayException('AI service returned an invalid supporting document check.');
-    }
-    return { status: result.status, reason: result.reason };
+    const result = await this.post<{
+      outcome: 'resolves' | 'partially_resolves' | 'does_not_resolve'; explanation: string;
+    }>('/v1/ai/check-protocol-attachments', {
+      issue: body.issue.description,
+      requirement: body.requirement.title,
+      attachments: [{ name: body.document.label, content: body.document.extractedText }],
+    }, true);
+    const statuses = { resolves: 'satisfied', partially_resolves: 'warning', does_not_resolve: 'blocker' } as const;
+    return { status: statuses[result.outcome], reason: result.explanation };
   }
 
   async generateReportSection(

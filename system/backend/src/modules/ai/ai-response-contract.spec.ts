@@ -9,12 +9,26 @@ const sectionAnalysis = (severity: unknown) => ({
     status: 'open', dueDate: '7 days', textQuote: null,
   }],
   requiredElements: [],
+  satisfiedRequirements: [],
 });
 
 describe('protocol analysis severity contract', () => {
-  it('requires the AI to explicitly provide a requirement link or null', () => {
+  it('accepts the documented response without an internal requirement ID', () => {
     const response: any = sectionAnalysis('warning');
     delete response.issues[0].requirementId;
+    expect(validateAiResponse('/v1/ai/analyze-section', response)).toEqual(response);
+  });
+  it('accepts satisfied requirements and preserves attachment evidence', () => {
+    const response = { ...sectionAnalysis('warning'), satisfiedRequirements: [{
+      name: 'Follow-up schedule', status: 'satisfied', source: 'attachment',
+      sourceName: 'PMCF Plan', evidence: 'Visits are scheduled at 30 days.',
+    }] };
+    expect(validateAiResponse('/v1/ai/analyze-section', response)).toEqual(response);
+  });
+  it.each(['unknown', null, 1])('rejects an invalid satisfied requirement source %p', source => {
+    const response = { ...sectionAnalysis('warning'), satisfiedRequirements: [{
+      name: 'Follow-up', status: 'satisfied', source, sourceName: null, evidence: 'Schedule',
+    }] };
     expect(() => validateAiResponse('/v1/ai/analyze-section', response)).toThrow(BadGatewayException);
   });
   it.each(['blocker', 'warning', 'cross_reference', 'recommendation', 'human_decision_required'])(

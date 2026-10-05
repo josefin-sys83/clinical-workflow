@@ -79,9 +79,11 @@ class AiService:
         intendedUse: str,
         requiredElements: list[Any] | None = None,
         amendmentContext: dict[str, Any] | None = None,
-        crossSectionContext: list[dict[str, str]] | None = None,
-        acceptedRequirements: str | None = None,
+        crossSectionContext: list[Any] | None = None,
+        acceptedRequirements: Any = None,
         synopsisExcerpt: str | None = None,
+        protocolAttachments: list[Any] | None = None,
+        previousDecisions: list[Any] | None = None,
     ):
         return await self.protocol.analyze_section(
             sectionTitle,
@@ -94,7 +96,17 @@ class AiService:
             crossSectionContext,
             acceptedRequirements,
             synopsisExcerpt,
+            protocolAttachments,
+            previousDecisions,
         )
+
+    async def checkProtocolAttachments(
+        self,
+        issue: str,
+        requirement: str | None,
+        attachments: list[Any],
+    ):
+        return await self.protocol.check_attachments(issue, requirement, attachments)
 
     async def generateReportSection(
         self,

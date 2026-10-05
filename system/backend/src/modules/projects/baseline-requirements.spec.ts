@@ -106,9 +106,10 @@ describe('accepted baseline requirements', () => {
       { assertDocumentNotSigned: jest.fn(), assertProtocolEditable: jest.fn() } as any, { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);
     await controller.analyzeSection('project', { sectionId: '1', sectionTitle: section.title, sectionContent: section.content });
     const accepted = ai.analyzeSection.mock.calls[0][8];
-    expect(accepted).toContain('ISO-14971');
-    expect(accepted).toContain('ISO-13485');
-    expect(JSON.parse(accepted)).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Study requirement', description: 'Specific constraint' })]));
-    expect(accepted).not.toContain('ISO-14155');
+    expect(accepted.map((r: any) => r.name)).toEqual(expect.arrayContaining([
+      expect.stringContaining('ISO-14971'), expect.stringContaining('ISO-13485'),
+    ]));
+    expect(accepted).toEqual(expect.arrayContaining([{ name: 'Study requirement', description: 'Specific constraint' }]));
+    expect(accepted.map((r: any) => r.name)).not.toEqual(expect.arrayContaining([expect.stringContaining('ISO-14155')]));
   });
 });
