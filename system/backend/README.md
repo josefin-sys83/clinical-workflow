@@ -206,9 +206,11 @@ Example AI response:
 }
 ```
 
-The documented AI response does not contain internal `requirementId` values. The
-backend maps an issue's `source` to an accepted requirement only when it exactly
-matches a unique name or description; otherwise the finding remains unlinked.
+The AI response does not contain internal `requirementId` values. Each issue carries
+`requirement`: the accepted requirement name it was sent, or `null`. The backend maps
+that name to a unique accepted requirement; if it is absent or unknown, it falls back
+to an exact, unique match of `source` against a name or description; otherwise the
+finding remains unlinked. `requirement` is not stored.
 Legacy explicit IDs are still validated against accepted requirements.
 Allowed issue severities are `blocker`, `warning`, `cross_reference`,
 `recommendation`, and `human_decision_required`. Required element statuses are
@@ -309,7 +311,8 @@ Expected AI response:
 ```
 
 The adapter maps `resolves` to existing verification status `satisfied`,
-`partially_resolves` to `warning`, and `does_not_resolve` to `blocker`. `explanation`
+`partially_resolves` to `warning`, and `does_not_resolve` to the finding's original
+severity, so a document never escalates a warning. `explanation`
 becomes the stored verification reason. The same 24,000-character content limit
 applies. Missing/unreadable evidence, HTTP failures, or invalid responses produce
 saved verification status `failed`; the attachment remains linked and the UI offers

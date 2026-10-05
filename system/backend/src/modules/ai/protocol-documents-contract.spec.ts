@@ -59,6 +59,15 @@ describe('protocol supporting document AI requests', () => {
     document: { ...document, extractedText: 'PMCF follow-up schedule', extractionError: null },
   };
 
+  it('keeps a warning a warning when the document does not resolve it', async () => {
+    const service = new AiService();
+    jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify({
+      outcome: 'does_not_resolve', explanation: 'No schedule', sources: [],
+    })));
+    await expect(service.checkFindingDocument({ ...check, issue: { ...check.issue, severity: 'warning' } }))
+      .resolves.toEqual({ status: 'warning', reason: 'No schedule' });
+  });
+
   it.each([
     ['resolves', 'satisfied'], ['partially_resolves', 'warning'], ['does_not_resolve', 'blocker'],
   ])('maps attachment outcome %s to the existing status %s', async (outcome, status) => {

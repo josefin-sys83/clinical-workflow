@@ -75,6 +75,17 @@ describe('protocol section analysis API contract', () => {
     expect(protocols.finishSectionAnalysis).toHaveBeenCalledWith('project', '1', 'request', result, null, undefined);
   });
 
+  it('links by the requirement name the AI was sent before falling back to source', async () => {
+    ai.analyzeSection.mockResolvedValue({ issues: [
+      { id: 'named', requirement: 'Safety', source: 'ISO 14155 §6.4' },
+      { id: 'unknown', requirement: 'Not sent', source: 'Follow-up' },
+    ], requiredElements: [], satisfiedRequirements: [] });
+    const [named, unknown] = (await analyze(controller)).issues;
+    expect(named).toMatchObject({ id: 'named', requirementId: 'req-2' });
+    expect(named).not.toHaveProperty('requirement');
+    expect(unknown.requirementId).toBe('req-1');
+  });
+
   it('keeps ambiguous sources unlinked', async () => {
     project.data.scope.requirements = [...requirements, { ...requirements[0], id: 'duplicate' }];
     ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', source: 'Follow-up' }] });

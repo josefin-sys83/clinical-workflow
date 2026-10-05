@@ -255,7 +255,8 @@ export class AiService {
       requirement: body.requirement.title,
       attachments: [{ name: body.document.label, content: body.document.extractedText }],
     }, true);
-    const statuses = { resolves: 'satisfied', partially_resolves: 'warning', does_not_resolve: 'blocker' } as const;
+    // A document that does not resolve the finding leaves its severity unchanged.
+    const statuses = { resolves: 'satisfied', partially_resolves: 'warning', does_not_resolve: body.issue.severity } as const;
     return { status: statuses[result.outcome], reason: result.explanation };
   }
 

@@ -258,7 +258,7 @@ def test_existing_prompt_factory_and_legacy_string_calls_remain_unchanged():
 
 
 @pytest.mark.parametrize("model,payload", [
-    (AnalyzeSectionResponse, {"issues": [], "requiredElements": []}),
+    (AnalyzeSectionResponse, {"issues": [], "requiredElements": [], "satisfiedRequirements": []}),
     (GenerateRequiredElementsResponse, {"requiredElements": [
         {"id": "r1", "name": "Existing requirement", "reference": "Existing source", "status": "missing"},
     ]}),
