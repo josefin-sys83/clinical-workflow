@@ -53,6 +53,18 @@ describe('protocol supporting document AI requests', () => {
     });
   });
 
+  it('accepts the Python response with an explicit requirement name and no source', async () => {
+    const service = new AiService();
+    const response = { issues: [{
+      id: 'finding', severity: 'warning', subsection: 'Design', description: 'Missing follow-up visits.',
+      requirement: 'PMCF', source: null, targetSection: null, remediation: null,
+      raisedBy: 'AI Regulatory Review', raisedDate: '2026-10-05', status: 'open', dueDate: '7 days', textQuote: null,
+    }], requiredElements: [], satisfiedRequirements: [] };
+    jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify(response)));
+    await expect(service.analyzeSection('Design', 'CIP', [], '', '', [], null, [],
+      [{ name: 'PMCF', description: 'Follow-up' }])).resolves.toEqual(response);
+  });
+
   const check = {
     issue: { id: 'finding', description: 'Missing plan', severity: 'blocker' },
     requirement: { id: 'req-1', title: 'PMCF' }, section: { content: 'CIP' },

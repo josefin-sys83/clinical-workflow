@@ -13,6 +13,7 @@ const protocolIssue = z.object({
   severity: protocolIssueSeverity,
   subsection: text,
   description: text,
+  requirement: text.nullable(),
   source: text.nullable(),
   requirementId: z.string().nullable().optional(),
   targetSection: text.nullable(),

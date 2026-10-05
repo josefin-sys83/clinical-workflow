@@ -183,6 +183,7 @@ Example AI response:
       "severity": "blocker",
       "subsection": "Assessment procedure",
       "description": "The required procedure is missing from the available evidence.",
+      "requirement": "ISO 14155",
       "source": "ISO 14155",
       "targetSection": "Study Procedures & Assessments",
       "remediation": "Provide the required procedure or supporting evidence.",
@@ -206,9 +207,11 @@ Example AI response:
 }
 ```
 
-The documented AI response does not contain internal `requirementId` values. The
-backend maps an issue's `source` to an accepted requirement only when it exactly
-matches a unique name or description; otherwise the finding remains unlinked.
+The AI response includes `requirement`: the exact accepted requirement name, or
+`null` for a non-requirement finding. The backend maps this name to an internal
+`requirementId` only when it exactly matches a unique accepted requirement title;
+otherwise the finding remains unlinked. `source` is display context and is not used
+to associate requirements.
 Legacy explicit IDs are still validated against accepted requirements.
 Allowed issue severities are `blocker`, `warning`, `cross_reference`,
 `recommendation`, and `human_decision_required`. Required element statuses are
@@ -216,7 +219,7 @@ Allowed issue severities are `blocker`, `warning`, `cross_reference`,
 
 Each satisfied requirement contains `name`, `status: "satisfied"`, `source`
 (`section` or `attachment`), nullable `sourceName`, and `evidence`. The response
-schema is strict. Nullable issue fields (`source`, `targetSection`, `remediation`,
+schema is strict. Nullable issue fields (`requirement`, `source`, `targetSection`, `remediation`,
 `textQuote`) must be present; non-null strings must be nonblank. The backend saves
 validated findings on the section and records analysis as `succeeded`, or records
 `failed` and an error when analysis fails.

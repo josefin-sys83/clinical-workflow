@@ -39,7 +39,9 @@ describe.each(['protocol', 'report'])('%s section finding requirements', kind =>
 
   it('passes accepted requirements to AI and preserves the returned link through persistence', async () => {
     const analyze = kind === 'protocol' ? ai.analyzeSection : ai.analyzeReportSection;
-    analyze.mockResolvedValue({ issues: [{ id: 'finding', requirementId: 'req-1' }] });
+    analyze.mockResolvedValue({ issues: [kind === 'protocol'
+      ? { id: 'finding', requirement: 'Safety', source: null }
+      : { id: 'finding', requirementId: 'req-1' }] });
     const result = await run();
     if (kind === 'protocol') {
       expect(analyze.mock.calls[0][8]).toEqual([{ name: 'Safety', description: 'Monitoring' }]);
