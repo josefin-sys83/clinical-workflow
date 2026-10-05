@@ -1,0 +1,90 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="author"></div><div id="review"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import App from '/src/modules/Makeprotokoll/App.tsx';
+import ReviewPage from '/src/modules/Protocolreview/app/pages/ReviewPageCopy.tsx';
+
+const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['author'] };
+const cases = [
+  { id: 'linked', requirementId: 'req-8', expected: 'Real-World Performance Monitoring Plan' },
+  { id: 'unknown', requirementId: 'missing', expected: 'Linked requirement unavailable' },
+  { id: 'blank', requirementId: 'blank-title', expected: 'Linked requirement unavailable' },
+  { id: 'unaccepted', requirementId: 'suggested', expected: 'Linked requirement unavailable' },
+  { id: 'unlinked', requirementId: null, expected: undefined },
+];
+const issues = cases.map(item => ({ ...item, description: `Finding ${item.id}`, requirement: 'Stale AI name',
+  severity: 'blocker', status: 'open', raisedBy: 'Writer', source: 'EU MDR Article 61 and IMDRF N41' }));
+const section = { id: '1', title: 'Study Rationale & Objectives', content: '<p>Study rationale.</p>',
+  status: 'draft', aiGenerated: true, analysisStatus: 'succeeded', issues, requiredElements: [] };
+const project = { id: 'fixture', targetMarkets: [], roles: [], data: { projectData: {},
+  protocol: { status: 'draft', sections: [section] }, scope: { requirements: [
+    { id: 'req-8', title: 'Real-World Performance Monitoring Plan', status: 'accepted' },
+    { id: 'blank-title', title: '   ', status: 'accepted' },
+    { id: 'suggested', title: 'Unaccepted requirement', status: 'suggested' },
+  ] },
+} };
+const errors = [];
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+window.fetch = async input => {
+  const url = String(input);
+  let payload = {};
+  if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: [] };
+  else if (url.endsWith('/workflow')) payload = { steps: {} };
+  else if (url.endsWith('/milestones')) payload = { milestones: [] };
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+const el = React.createElement;
+const mount = (root, Component) => root.render(el(CurrentUserProvider, { user, status: 'ready' },
+  el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
+    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(Component) })))));
+const assert = (value, message) => { if (!value) throw new Error(message); };
+const waitFor = async predicate => {
+  for (let attempt = 0; attempt < 160; attempt++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for finding cards: ${errors.join('; ')}`);
+};
+const checkCards = cards => {
+  assert(cards.length === cases.length, 'Finding count changed');
+  for (const item of cases) {
+    const card = [...cards].find(card => card.textContent.includes(`Finding ${item.id}`));
+    const details = card?.querySelector('[data-finding-details]');
+    assert(details, `Missing details for ${item.id}`);
+    const fields = Object.fromEntries([...details.children].map(row =>
+      [row.querySelector('dt').textContent, row.querySelector('dd').textContent]));
+    assert(fields.Requirement === item.expected, `Wrong requirement for ${item.id}: ${fields.Requirement}`);
+    assert(fields.Source === 'EU MDR Article 61 and IMDRF N41', 'Source citation changed');
+    assert(!details.textContent.includes('req-8') && !details.textContent.includes('Stale AI name'), 'ID or stale AI name leaked into display');
+  }
+};
+try {
+  const author = document.getElementById('author');
+  let authorRoot = createRoot(author);
+  mount(authorRoot, App);
+  await waitFor(() => author.querySelectorAll('[data-finding-id]').length === cases.length);
+  checkCards(author.querySelectorAll('[data-finding-id]'));
+  await waitFor(() => author.querySelectorAll('[data-panel-finding-severity]').length === cases.length);
+  checkCards(author.querySelectorAll('[data-panel-finding-severity]'));
+  authorRoot.unmount();
+  authorRoot = createRoot(author);
+  mount(authorRoot, App);
+  await waitFor(() => author.querySelectorAll('[data-finding-id]').length === cases.length);
+  checkCards(author.querySelectorAll('[data-finding-id]'));
+  const review = document.getElementById('review');
+  const reviewRoot = createRoot(review);
+  mount(reviewRoot, ReviewPage);
+  await waitFor(() => review.querySelectorAll('[data-review-finding-severity]').length === cases.length);
+  checkCards(review.querySelectorAll('[data-review-finding-severity]'));
+  assert(issues[0].requirementId === 'req-8', 'Display changed the linked ID');
+  assert(!errors.length, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: requirement names in authoring, sidebar, reload and review; unknown, blank, unaccepted and unlinked requirements; preserved IDs and source citations';
+} catch (error) { document.getElementById('result').textContent = `FAIL: ${error.message}`; }
+</script></body></html>

@@ -92,6 +92,7 @@ interface ProtocolSectionProps {
   };
   targetMarkets?: string[];
   deviceCategory?: string;
+  requirements?: readonly { id: string; title: string }[];
   isExpanded: boolean;
   onToggle: () => void;
   isHighlighted?: boolean;
@@ -220,7 +221,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', requirements = [], isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -908,7 +909,7 @@ function ProtocolSectionComponent(
                       <p className={`text-xs leading-relaxed mb-1 ${presentation.text}`}>
                         {issue.description}
                       </p>
-                      <FindingDetails finding={issue} />
+                      <FindingDetails finding={issue} requirements={requirements} />
                       <FindingDocumentControl finding={issue} attachments={attachments} disabled={documentLinksLocked}
                         onDecide={onFindingDocument} />
                       <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 mt-1.5">
