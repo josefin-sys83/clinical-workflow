@@ -65,6 +65,13 @@ describe('protocol supporting document AI requests', () => {
       [{ name: 'PMCF', description: 'Follow-up' }])).resolves.toEqual(response);
   });
 
+  it('sends the project id so the AI service can read the project context', async () => {
+    const service = new AiService();
+    const fetch = jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify([])));
+    await service.analyzeSynopsis('Synopsis', ['EU'], 'project-1');
+    expect(JSON.parse((fetch.mock.calls[0][1] as any).body)).toEqual({ projectId: 'project-1', text: 'Synopsis', targetMarkets: ['EU'] });
+  });
+
   const check = {
     issue: { id: 'finding', description: 'Missing plan', severity: 'blocker' },
     requirement: { id: 'req-1', title: 'PMCF' }, section: { content: 'CIP' },

@@ -65,9 +65,10 @@ describe('protocol generation', () => {
       [], expect.any(String),
       { intendedUse: 'diagnostic', requirements: [], deviceCategory: 'active', targetMarkets: ['EU'] },
       expect.any(Function),
+      'project',
     );
     expect(ai.generateRequiredElements).toHaveBeenCalledWith(
-      expect.any(String), ['EU'], 'active', 'diagnostic',
+      expect.any(String), ['EU'], 'active', 'diagnostic', 'project',
     );
   });
 

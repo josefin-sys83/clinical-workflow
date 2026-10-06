@@ -108,7 +108,7 @@ export class ProtocolFindingDocumentsService {
           targetSection: decision.target_section, remediation: decision.remediation, textQuote: decision.text_quote,
         }, requirement,
         section: { id: decision.section_key, title: decision.title, content: decision.content }, document,
-      });
+      }, projectId);
       status = result.status;
       reason = result.reason;
     } catch (error) {

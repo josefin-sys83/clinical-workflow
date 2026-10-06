@@ -146,6 +146,7 @@ export class ProtocolsController {
       protocol = await this.ai.generateProtocol(
         aiProjectData, roles, synopsisText, scope,
         (title) => this.generationProgress.increment(progressKey, title),
+        projectId,
       );
     } catch (err) {
       // Audit the failure and preserve upstream status codes with a safe client message.
@@ -187,7 +188,8 @@ export class ProtocolsController {
             section.title,
             targetMarkets,
             deviceCategory,
-            intendedUse
+            intendedUse,
+            projectId,
           );
           section.requiredElements = elements;
         })
@@ -382,7 +384,7 @@ export class ProtocolsController {
       protocolAttachments: attachmentMetadata,
     }));
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments);
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments, project.id);
 
     if (result?.error) return result;
 
@@ -618,7 +620,7 @@ export class ProtocolsController {
       content: s.content || '',
     })).filter((s: any) => s.content);
 
-    return this.ai.checkSynopsisConsistency(synopsisText, protocolSections);
+    return this.ai.checkSynopsisConsistency(synopsisText, protocolSections, projectId);
   }
 
 @Post('/:projectId/workflow/force-protocol-draft')

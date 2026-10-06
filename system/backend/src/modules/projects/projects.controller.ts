@@ -474,7 +474,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const existingSynopsis = existing?.data?.synopsis || {};
     const targetMarkets = normalizeAiMarkets(existing.targetMarkets);
 
-    const results = await this.ai.analyzeSynopsis(text, targetMarkets);
+    const results = await this.ai.analyzeSynopsis(text, targetMarkets, projectId);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
 
     // Persist extracted text and checklist so downstream steps (protocol generation, complexity) can use them
@@ -498,14 +498,14 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const project = await this.projects.get(projectId);
     const synopsisText = project?.data?.synopsis?.extractedText;
     if (!synopsisText) return { deviceCategory: '', intendedUse: '', confidence: 'low' };
-    return this.ai.deriveScopeFromSynopsis(synopsisText);
+    return this.ai.deriveScopeFromSynopsis(synopsisText, projectId);
   }
 
   @Post('/:projectId/analyze-scope')
   @UseGuards(AiThrottlerGuard)
   async analyzeScope(@Param('projectId') projectId: string, @Body() body: { prompt: string }) {
     this.logger.log({ event: 'analyze-scope.request', projectId, body });
-    const results = await this.ai.analyzeScope(body.prompt);
+    const results = await this.ai.analyzeScope(body.prompt, projectId);
     return results;
   }
 

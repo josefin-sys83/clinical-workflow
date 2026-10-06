@@ -139,7 +139,7 @@ export class ReportsController {
     }
     await this.ai.mapInBatches(sectionsToGenerate, 3, async s => {
       const content = await this.ai.generateReportSection(
-        s.title, s.number, protocolSections, enrichedSynopsis, scope, aiProjectData, roles, []
+        s.title, s.number, protocolSections, enrichedSynopsis, scope, aiProjectData, roles, [], projectId,
       );
       generatedContents.set(s.id, requireGeneratedText(content, s.title));
     });
@@ -219,6 +219,7 @@ export class ReportsController {
       aiProjectData,
       roles,
       [],
+      projectId,
     );
 
     // Sanitized immediately for the same reason as generateReport(): this value is
@@ -287,7 +288,7 @@ export class ReportsController {
     const requestId = await this.reports.beginSectionAnalysis(projectId, body.sectionId, content, req.user);
     try {
       const requirements = project?.data?.scope?.requirements;
-      const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext, findingRequirementsText(requirements));
+      const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext, findingRequirementsText(requirements), projectId);
       if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
       result.issues = validateFindingRequirements(result.issues, requirements, 'ai');
       const savedSection = await this.reports.finishSectionAnalysis(projectId, body.sectionId, requestId, result, null, req.user);
@@ -339,7 +340,7 @@ export class ReportsController {
       content: data.content || '',
     })).filter((s: any) => s.content);
 
-    const result = await this.ai.checkCrossConsistency(protocolSections, reportSections, targetMarkets, deviceCategory);
+    const result = await this.ai.checkCrossConsistency(protocolSections, reportSections, targetMarkets, deviceCategory, projectId);
 
     // Persist the report analysis so the frontend only has to re-run this (AI,
     // non-deterministic wording) check on an explicit user action, not on every page
@@ -376,7 +377,8 @@ export class ReportsController {
     const aiCrossCheck = await this.ai.checkStatisticalConsistency(
       statisticalContent,
       resultsContent,
-      targetMarkets
+      targetMarkets,
+      projectId,
     );
 
     return {
