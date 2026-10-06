@@ -41,7 +41,7 @@ describe('protocol section analysis API contract', () => {
       { ...document, id: 'unreadable', extractedText: '', extractionError: 'Unreadable PDF' },
     ]) };
     controller = new ProtocolsController({ get: jest.fn(async () => project) } as any,
-      protocols, ai, {} as any, {} as any, { assertDocumentNotSigned: jest.fn() } as any, attachments);
+      protocols, ai, {} as any, {} as any, { assertDocumentNotSigned: jest.fn(), assertProtocolEditable: jest.fn() } as any, attachments);
   });
 
   const analyze = (controller: ProtocolsController) => controller.analyzeSection('project', {
@@ -51,7 +51,8 @@ describe('protocol section analysis API contract', () => {
   it('sends only contract fields and logs the same request, with one attachment link per requirement', async () => {
     await analyze(controller);
     const args = ai.analyzeSection.mock.calls[0];
-    expect(args).toHaveLength(10);
+    expect(args).toHaveLength(11);
+    expect(args[10]).toBe('project');
     expect(args[5]).toEqual([{ id: 'element', name: 'Schedule', reference: 'Define visits.' }]);
     expect(args[6]).toEqual({ number: 1, title: 'Visits', reason: 'Clarification', description: 'Visit windows' });
     expect(args[7]).toEqual([{ title: 'Safety', content: 'Other section' }]);

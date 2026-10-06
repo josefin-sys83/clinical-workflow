@@ -14,6 +14,7 @@ import { ProtocolFindingDocumentsService } from '../protocols/protocol-finding-d
 import { ProtocolsController } from '../protocols/protocols.controller';
 import { ReportsController } from '../reports/reports.controller';
 import { DocumentWorkflowService } from './document-workflow.service';
+import { ProjectContextController } from './project-context.controller';
 import { ResultsController } from '../results/results.controller';
 import { ResultsService } from '../results/results.service';
 
@@ -21,7 +22,7 @@ import { ResultsService } from '../results/results.service';
 // project context without circular module dependencies.
 @Module({
   imports: [AiModule, AuditModule, WorkflowModule, AdminModule],
-  controllers: [ProjectsController, ProtocolsController, ReportsController, ResultsController],
+  controllers: [ProjectsController, ProtocolsController, ReportsController, ResultsController, ProjectContextController],
   providers: [ProjectsService, ProtocolsService, ReportsService, MilestoneService, DocumentWorkflowService, ProtocolAttachmentsService, ProtocolFindingDocumentsService, ResultsService],
   exports: [ProjectsService, ProtocolsService, ReportsService],
 })

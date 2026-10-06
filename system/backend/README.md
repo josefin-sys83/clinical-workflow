@@ -314,7 +314,8 @@ Expected AI response:
 ```
 
 The adapter maps `resolves` to existing verification status `satisfied`,
-`partially_resolves` to `warning`, and `does_not_resolve` to `blocker`. `explanation`
+`partially_resolves` to `warning`, and `does_not_resolve` to the finding's original
+severity, so a document never escalates a warning. `explanation`
 becomes the stored verification reason. The same 24,000-character content limit
 applies. Missing/unreadable evidence, HTTP failures, or invalid responses produce
 saved verification status `failed`; the attachment remains linked and the UI offers

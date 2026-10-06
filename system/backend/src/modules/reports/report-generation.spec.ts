@@ -76,7 +76,7 @@ describe('report generation', () => {
         projectName: 'Canonical study', deviceName: 'Device',
         deviceCategory: 'active', targetMarkets: ['EU'],
       }),
-      [], [],
+      [], [], 'project',
     );
   });
 

@@ -9,6 +9,7 @@ import { AiService } from '../ai/ai.service';
 import { normalizeAiMarkets } from './project-generation-context';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
+import { DocumentWorkflowService } from './document-workflow.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -38,6 +39,7 @@ export class ProjectsController {
     private readonly ai: AiService,
     private readonly workflow: WorkflowService,
     private readonly milestones: MilestoneService,
+    private readonly documentWorkflow: DocumentWorkflowService,
   ) {}
 
  @Get('/requirements')
@@ -165,6 +167,12 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     if (protocolFinal) {
       return { error: 'Scope is locked after protocol finalization', locked: true };
     }
+  }
+
+  // 3. A protocol out for signature or finalized is frozen: its content changes only
+  //    through Request Changes (before finalizing) or an approved amendment (after).
+  if (body.data?.protocol !== undefined) {
+    await this.documentWorkflow.assertProtocolEditable(projectId);
   }
 
   // Build readable audit events before the write, then hand them to ProjectsService so
@@ -466,7 +474,7 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const existingSynopsis = existing?.data?.synopsis || {};
     const targetMarkets = normalizeAiMarkets(existing.targetMarkets);
 
-    const results = await this.ai.analyzeSynopsis(text, targetMarkets);
+    const results = await this.ai.analyzeSynopsis(text, targetMarkets, projectId);
     console.log('[analyzeSynopsis] AI response:', JSON.stringify(results));
 
     // Persist extracted text and checklist so downstream steps (protocol generation, complexity) can use them
@@ -490,14 +498,14 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
     const project = await this.projects.get(projectId);
     const synopsisText = project?.data?.synopsis?.extractedText;
     if (!synopsisText) return { deviceCategory: '', intendedUse: '', confidence: 'low' };
-    return this.ai.deriveScopeFromSynopsis(synopsisText);
+    return this.ai.deriveScopeFromSynopsis(synopsisText, projectId);
   }
 
   @Post('/:projectId/analyze-scope')
   @UseGuards(AiThrottlerGuard)
   async analyzeScope(@Param('projectId') projectId: string, @Body() body: { prompt: string }) {
     this.logger.log({ event: 'analyze-scope.request', projectId, body });
-    const results = await this.ai.analyzeScope(body.prompt);
+    const results = await this.ai.analyzeScope(body.prompt, projectId);
     return results;
   }
 

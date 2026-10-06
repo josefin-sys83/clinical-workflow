@@ -2,11 +2,12 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   parseResultTable,
   previewResultUpload,
+  suggestResult,
   type ResultInput,
   type ResultsWorkspace,
   type ResultSuggestion,
 } from '@/shared/api/results';
-import { apiErrorMessage } from '@/shared/api/http';
+import { ApiError, apiErrorMessage } from '@/shared/api/http';
 import { ResultContent } from './ResultContent';
 import { Popover, PopoverTrigger, PopoverContent } from '@/shared/ui/popover';
 
@@ -53,7 +54,9 @@ export function ResultEditor({
   onCancel,
   draftKey,
   onDraftChange,
-  suggestion,
+  suggestion: importedSuggestion,
+  placementStale = false,
+  placementOnly = false,
 }: {
   projectId: string;
   initial?: ResultInput;
@@ -61,11 +64,20 @@ export function ResultEditor({
   draftKey?: string;
   onDraftChange?: (key: string, input: ResultInput) => void;
   suggestion?: ResultSuggestion;
+  placementStale?: boolean;
+  placementOnly?: boolean;
   mode: 'manual' | 'paste' | 'upload' | 'edit';
   busy: boolean;
   onSave: (input: ResultInput) => Promise<void>;
   onCancel: () => void;
 }) {
+  const canSuggest = mode === 'paste' || mode === 'manual';
+  const [localSuggestion, setLocalSuggestion] = useState<ResultSuggestion>();
+  const suggestion = canSuggest ? localSuggestion : importedSuggestion;
+  const [analyzing, setAnalyzing] = useState(false);
+  const [aiStale, setAiStale] = useState(false);
+  const aiRequest = useRef<AbortController | null>(null);
+  const sourceEdited = useRef(false);
   const [title, setTitle] = useState(initial?.title ?? '');
   const [type, setType] = useState<ResultInput['type']>(
     initial?.type ?? 'table',
@@ -87,32 +99,38 @@ export function ResultEditor({
     descriptionOrigin: initial?.descriptionOrigin,
   });
   const humanEdits = useRef({
+    // Defaults have no human origin. User input, including clearing a field, does.
     title: initial?.titleOrigin === 'human',
     section: initial?.sectionOrigin === 'human',
     description: initial?.descriptionOrigin === 'human',
   });
   const placementHelpId = useId();
-  const showPlacementHelp = !section && suggestion?.reportSectionKey === null && !!suggestion.limitation;
+  const showPlacementHelp = !placementStale && !section && suggestion?.reportSectionKey === null && !!suggestion.limitation;
   const alternativeTitles = sections
     .filter(s => suggestion?.alternativeSectionKeys?.includes(s.id.replace(/^key:/, '')))
     .map(s => s.title);
+  const appliedSuggestion = useRef<ResultSuggestion>();
   useEffect(() => {
-    if (!suggestion) return;
+    if (!suggestion || appliedSuggestion.current === suggestion) return;
+    appliedSuggestion.current = suggestion;
     const next: Partial<typeof origins> = {};
-    if (suggestion.title !== null && !humanEdits.current.title) {
-      setTitle(suggestion.title);
-      next.titleOrigin = 'ai';
+    if (!placementOnly && !humanEdits.current.title &&
+        (suggestion.title !== null || (canSuggest && origins.titleOrigin === 'ai'))) {
+      setTitle(suggestion.title ?? '');
+      next.titleOrigin = suggestion.title === null ? undefined : 'ai';
     }
-    if (suggestion.reportSectionKey !== null && !humanEdits.current.section) {
-      setSection(`key:${suggestion.reportSectionKey}`);
-      next.sectionOrigin = 'ai';
+    if (!placementStale && !humanEdits.current.section &&
+        (suggestion.reportSectionKey !== null || placementOnly || (canSuggest && origins.sectionOrigin === 'ai'))) {
+      setSection(suggestion.reportSectionKey === null ? '' : `key:${suggestion.reportSectionKey}`);
+      next.sectionOrigin = suggestion.reportSectionKey === null ? undefined : 'ai';
     }
-    if (suggestion.description !== null && !humanEdits.current.description) {
-      setDescription(suggestion.description);
-      next.descriptionOrigin = 'ai';
+    if (!placementOnly && !humanEdits.current.description &&
+        (suggestion.description !== null || (canSuggest && origins.descriptionOrigin === 'ai'))) {
+      setDescription(suggestion.description ?? '');
+      next.descriptionOrigin = suggestion.description === null ? undefined : 'ai';
     }
     setOrigins((previous) => ({ ...previous, ...next }));
-  }, [suggestion]);
+  }, [suggestion, placementStale, placementOnly]);
   const [content, setContent] = useState<Record<string, unknown> | null>(
     initial?.content ?? null,
   );
@@ -157,6 +175,29 @@ export function ResultEditor({
     setTableEdited(true);
   };
 
+  function stopAnalysis() {
+    aiRequest.current?.abort();
+    aiRequest.current = null;
+    setAnalyzing(false);
+  }
+
+  function invalidateAnalysis() {
+    if (aiRequest.current || localSuggestion) {
+      stopAnalysis();
+      setAiStale(true);
+    }
+  }
+
+  // Only evidence changes invalidate an analysis; metadata edits retain field protection.
+  useEffect(() => {
+    if (canSuggest) invalidateAnalysis();
+  }, [projectId, mode, type, paste, grid, text, content, source, location]);
+
+  useEffect(() => () => {
+    aiRequest.current?.abort();
+    aiRequest.current = null;
+  }, [projectId, mode]);
+
   // Keep import previews current so split/merge retains edited metadata.
   useEffect(() => {
     if (draftKey && onDraftChange && content)
@@ -188,46 +229,82 @@ export function ResultEditor({
     initial?.originalReference,
   ]);
 
+  async function prepareInput(): Promise<ResultInput> {
+    const nextContent =
+      manual || tableEdited
+        ? type === 'table'
+          ? { ...content, headers: grid[0], rows: grid.slice(1) }
+          : { ...content, text }
+        : mode === 'paste'
+          ? await parseResultTable(projectId, paste)
+          : content;
+    if (!nextContent) throw new Error('Add content before saving');
+    if (
+      editableTable &&
+      !grid.slice(1).some((row) => row.some((cell) => cell.trim()))
+    )
+      throw new Error('Enter at least one data row');
+    if (
+      manual &&
+      type !== 'table' &&
+      !text.trim() &&
+      !(type === 'figure' && content?.image)
+    )
+      throw new Error('Enter the result content');
+    return {
+      title: title.trim(),
+      type,
+      description,
+      sourceFilename: source.trim(),
+      sourceLocation: location,
+      reportSectionId: section.startsWith('key:') ? null : section || null,
+      reportSectionKey: section.startsWith('key:')
+        ? section.slice(4)
+        : undefined,
+      originalReference: initial?.originalReference,
+      ...origins,
+      content: nextContent,
+    };
+  }
+
+  async function analyze() {
+    if (!canSuggest || disabled || aiRequest.current) return;
+    const controller = new AbortController();
+    aiRequest.current = controller;
+    setAnalyzing(true);
+    setError('');
+    try {
+      if (!source.trim()) throw new Error('Enter a source filename or label');
+      const input = await prepareInput();
+      if (controller.signal.aborted) return;
+      const result = await suggestResult(projectId, input, controller.signal);
+      if (controller.signal.aborted) return;
+      setLocalSuggestion(result);
+      setAiStale(false);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setError(
+        err instanceof ApiError && err.status === 429
+          ? 'Too many AI requests. Wait a minute and try again. Your input is still available.'
+          : apiErrorMessage(err, err instanceof Error
+              ? err.message
+              : 'AI suggestions are unavailable. Try again or fill in the fields manually.'),
+      );
+    } finally {
+      if (aiRequest.current === controller) {
+        aiRequest.current = null;
+        setAnalyzing(false);
+      }
+    }
+  }
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
+    stopAnalysis();
     setSaving(true);
     setError('');
     try {
-      const nextContent =
-        manual || tableEdited
-          ? type === 'table'
-            ? { ...content, headers: grid[0], rows: grid.slice(1) }
-            : { ...content, text }
-          : mode === 'paste'
-            ? await parseResultTable(projectId, paste)
-            : content;
-      if (!nextContent) throw new Error('Add content before saving');
-      if (
-        editableTable &&
-        !grid.slice(1).some((row) => row.some((cell) => cell.trim()))
-      )
-        throw new Error('Enter at least one data row');
-      if (
-        manual &&
-        type !== 'table' &&
-        !text.trim() &&
-        !(type === 'figure' && content?.image)
-      )
-        throw new Error('Enter the result content');
-      await onSave({
-        title: title.trim(),
-        type,
-        description,
-        sourceFilename: source.trim(),
-        sourceLocation: location,
-        reportSectionId: section.startsWith('key:') ? null : section || null,
-        reportSectionKey: section.startsWith('key:')
-          ? section.slice(4)
-          : undefined,
-        originalReference: initial?.originalReference,
-        ...origins,
-        content: nextContent,
-      });
+      await onSave(await prepareInput());
     } catch (err) {
       setError(
         apiErrorMessage(
@@ -297,6 +374,9 @@ export function ResultEditor({
               origin={origins.sectionOrigin}
               field="report section"
             />
+            {!placementStale && suggestion?.placementBasisLabel && !humanEdits.current.section && (
+              <p className="text-xs text-slate-600">{suggestion.placementBasisLabel}</p>
+            )}
             <label className="block text-xs text-slate-600">
               Report section
               <select
@@ -320,6 +400,14 @@ export function ResultEditor({
                 ))}
               </select>
             </label>
+            {!placementStale && placementOnly && suggestion && humanEdits.current.section && (
+              <div role="status" className="mt-1 text-xs text-slate-600">
+                New AI placement suggestion: {sections.find(s => s.id === `key:${suggestion.reportSectionKey}`)?.title ?? 'Not assigned yet'}.
+                {' '}Your manual selection is unchanged.
+                {suggestion.limitation && <p>{suggestion.limitation}</p>}
+                {alternativeTitles.length > 0 && <p>Suggested alternatives: {alternativeTitles.join('; ')}.</p>}
+              </div>
+            )}
             {showPlacementHelp && (
               <div id={placementHelpId} className="mt-1 text-xs text-slate-600">
                 {alternativeTitles.length >= 2
@@ -441,6 +529,7 @@ export function ResultEditor({
                   const file = event.target.files?.[0];
                   event.target.value = '';
                   if (!file) return;
+                  if (canSuggest) invalidateAnalysis();
                   setLoadingImage(true);
                   setError('');
                   try {
@@ -451,8 +540,8 @@ export function ResultEditor({
                     if (!image)
                       throw new Error('Choose a PNG or JPEG figure image');
                     setContent((previous) => ({ ...previous, image }));
-                    if (!title.trim()) setTitle(preview.drafts[0].title);
-                    if (source === 'Manual entry') setSource(file.name);
+                    if (!title.trim() && !humanEdits.current.title) setTitle(preview.drafts[0].title);
+                    if (source === 'Manual entry' && !sourceEdited.current) setSource(file.name);
                   } catch (err) {
                     setError(
                       apiErrorMessage(
@@ -539,7 +628,10 @@ export function ResultEditor({
               maxLength={1000}
               readOnly={mode === 'upload'}
               value={source}
-              onChange={(e) => setSource(e.target.value)}
+              onChange={(e) => {
+                sourceEdited.current = true;
+                setSource(e.target.value);
+              }}
               className={inputClass}
             />
           </label>
@@ -555,8 +647,24 @@ export function ResultEditor({
             />
           </label>
         </div>
+        {canSuggest && (
+          <div className="space-y-2">
+            <button type="button" disabled={analyzing} onClick={analyze} className={buttonClass}>
+              Suggest with AI
+            </button>
+            <p role="status" className="text-sm text-slate-600">
+              {analyzing
+                ? 'Preparing AI suggestions. You can edit and save meanwhile.'
+                : aiStale
+                  ? 'Source changed. Review the fields or request new AI suggestions before saving.'
+                  : localSuggestion
+                    ? localSuggestion.limitation || 'AI suggestions ready. Review all fields before saving.'
+                    : 'Add source content, then request suggestions. Your own field edits will be kept.'}
+            </p>
+          </div>
+        )}
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onCancel} className={buttonClass}>
+          <button type="button" onClick={() => { stopAnalysis(); onCancel(); }} className={buttonClass}>
             Cancel
           </button>
           <button

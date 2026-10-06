@@ -12,6 +12,7 @@ export function ImportReview({
   drafts,
   setDrafts,
   projectId,
+  tflRevision,
   sections,
   busy,
   onSave,
@@ -19,26 +20,30 @@ export function ImportReview({
   drafts: ImportDraft[];
   setDrafts: React.Dispatch<React.SetStateAction<ImportDraft[]>>;
   projectId: string;
+  tflRevision: number;
   sections: ResultsWorkspace['sections'];
   busy: boolean;
   onSave: (input: ResultInput, key: string) => Promise<void>;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [activeDraft, setActiveDraft] = useState<ImportDraft | null>(null);
+  const [activeDraft, setActiveDraft] = useState<(ImportDraft & { tflRevision: number }) | null>(null);
+  const isPlacementStale = (draft: ImportDraft) =>
+    (draft.suggestionTflRevision !== undefined && draft.suggestionTflRevision !== tflRevision) ||
+    (activeDraft?.key === draft.key && activeDraft.tflRevision !== tflRevision);
   // One object at a time. Editing metadata does not restart or duplicate requests.
   useEffect(() => {
     if (activeDraft || busy) return;
     const next = drafts.find((d) => !d.aiStatus);
     if (next) {
-      setActiveDraft(next);
+      setActiveDraft({ ...next, tflRevision });
       setDrafts((previous) =>
         previous.map((draft) =>
           draft.key === next.key ? { ...draft, aiStatus: 'loading' } : draft,
         ),
       );
     }
-  }, [drafts, activeDraft, busy, setDrafts]);
+  }, [drafts, activeDraft, busy, setDrafts, tflRevision]);
   useEffect(() => {
     if (!activeDraft) return;
     const draftToAnalyze = activeDraft;
@@ -55,7 +60,7 @@ export function ImportReview({
         setDrafts((previous) =>
           previous.map((draft) =>
             draft.key === draftToAnalyze.key
-              ? { ...draft, aiStatus: 'done', suggestion }
+              ? { ...draft, aiStatus: 'done', suggestion, suggestionTflRevision: draftToAnalyze.tflRevision }
               : draft,
           ),
         );
@@ -147,10 +152,29 @@ export function ImportReview({
                 ? 'Preparing AI suggestions. You can edit and save meanwhile.'
                 : draft.aiStatus === 'error'
                   ? `${draft.aiError} Your imported data is still available.`
-                  : draft.suggestion?.limitation ||
+                  : (isPlacementStale(draft) ? null : draft.suggestion?.limitation) ||
                     'AI suggestions ready. Review all fields before saving.'}
           </p>
-          {draft.aiStatus === 'error' && (
+          {isPlacementStale(draft) && (
+            <p role="status" className="text-sm text-amber-800">
+              TFL files have been added, removed, or replaced. Click “Reanalyze placement” to update this suggestion.
+            </p>
+          )}
+          {(isPlacementStale(draft) || (draft.aiStatus === 'error' && draft.placementOnly)) && (
+            <button
+              type="button"
+              className={buttonClass}
+              disabled={busy || !draft.aiStatus || draft.aiStatus === 'loading'}
+              onClick={() => setDrafts(previous => previous.map(d =>
+                d.key === draft.key && (d.aiStatus === 'done' || d.aiStatus === 'error')
+                  ? { ...d, aiStatus: undefined, aiError: undefined, placementOnly: true }
+                  : d,
+              ))}
+            >
+              Reanalyze placement
+            </button>
+          )}
+          {draft.aiStatus === 'error' && !draft.placementOnly && !isPlacementStale(draft) && (
             <button
               type="button"
               className={buttonClass}
@@ -213,6 +237,8 @@ export function ImportReview({
             projectId={projectId}
             initial={draft.input}
             suggestion={draft.suggestion}
+            placementStale={isPlacementStale(draft)}
+            placementOnly={draft.placementOnly}
             mode="upload"
             sections={sections}
             busy={busy}

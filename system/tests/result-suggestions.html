@@ -18,18 +18,54 @@ const state = { results: [], sections: [], supportingDocuments: [], locked: fals
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const pending = [];
 let active = 0, maxActive = 0;
+let saveFailure = false, ignoreAbort = false, holdParse = false;
+const savedInputs = [], parsedInputs = [], pendingParses = [];
+const tableText = 'Group\tN\nTreatment\t42';
+const tableContent = { headers: ['Group', 'N'], rows: [['Treatment', '42']] };
+const tableSuggestion = { title: 'Study population', reportSectionKey: 'performance',
+  description: 'The table reports 42 in the Treatment group.', limitation: null };
+const figureImage = { dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN2kAAAAASUVORK5CYII=' };
+let failNextSave = false;
+let failNextRefresh = false;
+let nextDocumentId = 0;
+window.confirm = () => true;
 const suggestion = { title: 'Infusion volume accuracy', reportSectionKey: 'performance',
+  placementBasisLabel: 'no TFL, based on content',
   description: '190 episodes (95%) were within ±5%.', limitation: null };
 const source = { headers: ['Outcome', 'Episodes', '%'], rows: [['Within ±5%', 190, 95], ['Outside', 10, 5]],
   provenance: { header: [{ filename: 'synthetic.xlsx', rowStart: 1, rowEnd: 1, columnStart: 1, columnEnd: 3 }],
     rows: [2, 3].map(n => [{ filename: 'synthetic.xlsx', rowStart: n, rowEnd: n, columnStart: 1, columnEnd: 3 }]) } };
 window.fetch = async (url, init = {}) => {
   const path = String(url);
-  if (path.endsWith('/workspace')) return response(state);
+  if (path.endsWith('/workspace')) {
+    if (failNextRefresh) { failNextRefresh = false; return response({ message: 'Refresh failed.' }, 503); }
+    return response(state);
+  }
+  if (path.endsWith('/supporting-documents') && init.method === 'POST') {
+    const doc = { id: `support-${++nextDocumentId}`, type: init.body.get('type'), filename: init.body.get('file').name,
+      uploadedAt: '2026-09-30T12:00:00Z', uploaderName: 'Test author', sizeBytes: 10 };
+    state.supportingDocuments.push(doc);
+    return response({ id: doc.id }, 201);
+  }
+  if (path.includes('/supporting-documents/') && init.method === 'DELETE') {
+    state.supportingDocuments = state.supportingDocuments.filter(doc => doc.id !== path.split('/').pop());
+    return new Response(null, { status: 204 });
+  }
   if (path.endsWith('/milestones')) return response({ milestones: [] });
+  if (path.endsWith('/parse-table')) {
+    const text = JSON.parse(init.body).text;
+    parsedInputs.push(text);
+    const parsed = () => text === tableText
+      ? response(structuredClone(tableContent))
+      : response({ message: 'Include a header and at least one data row' }, 400);
+    if (holdParse) return new Promise(resolve => pendingParses.push(() => resolve(parsed())));
+    return parsed();
+  }
   if (path.endsWith('/preview')) {
     const filename = init.body.get('file').name;
-    return response({ issues: [], drafts: Array.from({ length: filename === 'five.xlsx' ? 5 : 1 }, (_, i) => ({
+    if (filename.endsWith('.png')) return response({ issues: [], drafts: [{ title: filename,
+      type: 'figure', content: { image: figureImage }, sourceFilename: filename }] });
+    return response({ issues: [], drafts: Array.from({ length: filename === 'twelve.xlsx' ? 12 : filename === 'five.xlsx' ? 5 : 1 }, (_, i) => ({
       title: `${filename} sheet ${i + 1}`, type: filename.endsWith('.txt') ? 'listing' : 'table',
       content: filename.endsWith('.txt')
         ? { text: 'Synthetic dataset: volume accuracy and adverse event results.' }
@@ -45,14 +81,19 @@ window.fetch = async (url, init = {}) => {
         finished = true; active--; resolve(response(body, status));
       };
       init.signal?.addEventListener('abort', () => {
+        if (ignoreAbort) return; // Exercise late responses even when transport cancellation fails.
         if (finished) return;
         finished = true; active--; reject(new DOMException('Aborted', 'AbortError'));
       });
-      pending.push({ body: JSON.parse(init.body), finish });
+      const fail = () => { if (!finished) { finished = true; active--; reject(new TypeError('Network unavailable')); } };
+      pending.push({ body: JSON.parse(init.body), signal: init.signal, finish, fail });
     });
   }
   if (path.endsWith('/results') && init.method === 'POST') {
+    if (failNextSave) { failNextSave = false; return response({ message: 'Save failed. Try again.' }, 503); }
     const body = JSON.parse(init.body);
+    if (saveFailure) { saveFailure = false; return response({ message: 'Save unavailable' }, 500); }
+    savedInputs.push(body);
     const item = { titleOrigin: 'human', sectionOrigin: 'human', descriptionOrigin: 'human', ...body,
       id: `r-${state.results.length}`, reportSectionId: body.reportSectionKey ? 'saved-section' : null,
       version: 1, status: 'draft', placement: 'unplaced', reportNumber: state.results.length + 1, lastDecision: null };
@@ -85,6 +126,54 @@ const upload = filename => {
   el.files = files.files; el.dispatchEvent(new Event('change', { bubbles: true }));
 };
 const submit = form => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+const field = (form, name) => [...form.querySelectorAll('label')]
+  .find(label => label.textContent.trim().startsWith(name)).querySelector('input, textarea, select');
+const setField = (element, value) => {
+  const prototype = element.tagName === 'SELECT' ? HTMLSelectElement.prototype
+    : element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
+  element.dispatchEvent(new Event(element.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+};
+const openEntry = async mode => {
+  button(mode).click();
+  await wait(() => document.querySelector('form') && button('Suggest with AI'), `${mode} form missing`);
+  return document.querySelector('form');
+};
+const fillTable = (form, mode) => {
+  if (mode === 'Paste table') setField(field(form, 'Table data'), tableText);
+  else for (const [label, value] of [['Header column 1', 'Group'], ['Header column 2', 'N'], ['Row 1 column 1', 'Treatment'], ['Row 1 column 2', '42']])
+    setField(form.querySelector(`[aria-label="${label}"]`), value);
+};
+const startSuggestion = async form => {
+  const index = pending.length;
+  const trigger = button('Suggest with AI', form);
+  trigger.click(); trigger.click();
+  await wait(() => pending.length === index + 1, 'Explicit AI request missing or duplicated');
+  assert(trigger.disabled, 'AI button not disabled during request');
+  return pending[index];
+};
+const closeEntry = async form => {
+  button('Cancel', form).click();
+  await wait(() => !document.querySelector('form'), 'Entry form not closed');
+};
+const preview = () => document.querySelector('[aria-label="Import preview"]');
+const staleMessage = 'TFL files have been added, removed, or replaced. Click “Reanalyze placement” to update this suggestion.';
+const attach = (type, filename) => {
+  const input = button(`Attach ${type}`).parentElement.querySelector('input[type=file]');
+  const files = new DataTransfer(); files.items.add(new File(['synthetic mapping'], filename));
+  input.files = files.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+};
+const startPlacementAnalysis = async () => {
+  const index = pending.length;
+  const control = button('Reanalyze placement');
+  control.click(); control.click();
+  await wait(() => pending.length === index + 1 && control.disabled, 'Placement analysis did not start once');
+  return pending[index];
+};
+const setSelect = (element, value) => {
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(element, value);
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+};
 try {
   render('initial');
   await wait(() => button('Upload file') && !button('Upload file').disabled, 'Workspace did not load');
@@ -102,6 +191,7 @@ try {
   assert(forms()[0].querySelector('input').value === 'My chosen title', 'AI overwrote a human edit');
   assert(forms()[0].textContent.includes('Human-edited'), 'Human origin missing');
   assert(forms()[1].querySelectorAll('select')[1].value === 'key:performance', 'Preview section not assigned');
+  assert(forms()[1].textContent.includes('no TFL, based on content'), 'Content basis label missing');
   const info = forms()[1].querySelector('[aria-label="About the AI suggestion for title"]');
   info.click();
   await wait(() => document.querySelector('[role="dialog"]')?.textContent.includes('Review and edit'), 'AI help did not open');
@@ -110,6 +200,7 @@ try {
   submit(forms()[1]);
   await wait(() => state.results.length === 1 && forms().length === 4, 'AI draft not saved');
   assert(state.results[0].titleOrigin === 'ai' && state.results[0].sectionOrigin === 'ai' && state.results[0].descriptionOrigin === 'ai', 'AI origins not sent on save');
+  assert(!('placementBasisLabel' in state.results[0]), 'Suggestion basis was persisted');
   assert(JSON.stringify(state.results[0].content) === JSON.stringify(source), 'AI changed source values');
   submit(forms()[0]);
   await wait(() => state.results.length === 2 && forms().length === 3, 'Human-edited draft not saved');
@@ -117,6 +208,7 @@ try {
   render('reload');
   await wait(() => document.body.textContent.includes('Infusion volume accuracy') && !forms().length, 'Reload lost saved result');
   assert(document.querySelector('[aria-label="Result review"]').textContent.includes('AI suggestion'), 'Saved AI label missing');
+  assert(!document.body.textContent.includes('no TFL, based on content'), 'Suggestion basis survived reload');
 
   upload('one.csv');
   await wait(() => pending.length === 6 && forms().length === 1, 'Failure test not imported');
@@ -132,6 +224,7 @@ try {
   button('Split detection').click();
   await wait(() => forms().length === 2 && pending.length === 8, 'Split did not queue fresh suggestions');
   assert(forms().every(f => f.querySelector('textarea').value === ''), 'Split kept stale descriptions');
+  assert(forms().every(f => !f.textContent.includes('no TFL, based on content')), 'Split kept stale basis labels');
   const boxes = [...document.querySelectorAll('[aria-label="Import preview"] input[type=checkbox]')];
   boxes[0].click(); boxes[2].click();
   await wait(() => !button('Merge selected detections').disabled, 'Merge selection missing');
@@ -156,6 +249,7 @@ try {
   upload('mixed.txt');
   await wait(() => pending.length === 11 && forms().length === 1, 'Mixed-result input missing');
   const mixed = { title: 'Performance and safety results', reportSectionKey: null,
+    placementBasisLabel: 'no TFL, based on content',
     alternativeSectionKeys: ['performance', 'safety'],
     description: 'This synthetic dataset contains performance and safety results.',
     limitation: 'Performance and safety span different sections. Choose placement manually.' };
@@ -184,6 +278,7 @@ try {
   pending[11].finish(mixed);
   await wait(() => forms()[0].querySelector('textarea').value === mixed.description, 'Manual-placement suggestion missing');
   assert(section.value === 'key:performance' && forms()[0].textContent.includes('Human-edited'), 'Abstention overwrote human placement');
+  assert(!forms()[0].textContent.includes('no TFL, based on content'), 'Late response labelled human placement');
   assert(!section.hasAttribute('aria-describedby'), 'Unassigned help remains after manual selection');
   button('Cancel', forms()[0]).click();
   await wait(() => !forms().length, 'Manual-placement draft not cancelled');
@@ -195,8 +290,371 @@ try {
     limitation: 'Source text is unreadable.', alternativeSectionKeys: [] });
   await wait(() => forms()[0].textContent.includes('AI did not suggest a section.'), 'Generic abstention help missing');
   assert(!forms()[0].textContent.includes('Multiple result topics.'), 'Unreadable source labelled as mixed content');
+  button('Cancel', forms()[0]).click();
+  await wait(() => !forms().length, 'Unreadable draft not cancelled');
+
+  upload('tfl-mapped.csv');
+  await wait(() => pending.length === 14 && forms().length === 1, 'TFL test input missing');
+  pending[13].finish({ ...suggestion, placementBasisLabel: 'Using TFL mapping' });
+  await wait(() => forms()[0].textContent.includes('Using TFL mapping'), 'TFL mapping label missing');
+  const tflSection = forms()[0].querySelectorAll('select')[1];
+  const changeSection = value => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(tflSection, value);
+    tflSection.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  changeSection('key:safety');
+  await wait(() => !forms()[0].textContent.includes('Using TFL mapping'), 'Manual change kept TFL label');
+  changeSection('key:performance');
+  await wait(() => tflSection.value === 'key:performance', 'Section was not restored');
+  assert(!forms()[0].textContent.includes('Using TFL mapping') && forms()[0].textContent.includes('Human-edited'), 'Changing back restored stale TFL attribution');
+  setInput(forms()[0].querySelector('input'), 'Keep edited TFL result');
+  failNextSave = true;
+  submit(forms()[0]);
+  await wait(() => forms()[0]?.textContent.includes('Save failed'), 'Save error missing');
+  assert(forms()[0].querySelector('input').value === 'Keep edited TFL result' && tflSection.value === 'key:performance', 'Save failure discarded edits');
+  assert(!forms()[0].textContent.includes('Using TFL mapping'), 'Save failure restored TFL label');
+  button('Cancel', forms()[0]).click();
+  await wait(() => !forms().length, 'TFL draft not cancelled');
+
+  upload('tfl-unavailable.csv');
+  await wait(() => pending.length === 15 && forms().length === 1, 'Unavailable TFL input missing');
+  pending[14].finish({ ...suggestion, reportSectionKey: null, placementBasisLabel: null,
+    alternativeSectionKeys: [], limitation: 'The attached TFL has conflicting mappings. Select a section manually.' });
+  await wait(() => forms()[0].querySelector('textarea').value === suggestion.description, 'TFL abstention lost description');
+  assert(forms()[0].querySelectorAll('select')[1].value === '', 'Unavailable TFL caused automatic placement');
+  assert(!forms()[0].textContent.includes('Using TFL mapping') && !forms()[0].textContent.includes('no TFL, based on content'), 'Unavailable TFL mislabelled');
+  assert(document.querySelector('[aria-label="Import preview"]').textContent.includes('conflicting mappings'), 'TFL limitation missing');
+  button('Cancel', forms()[0]).click();
+  await wait(() => !forms().length, 'TFL draft not cancelled');
+
+  // Attachment changes invalidate placement only; all API requests remain intercepted.
+  let nextRequest = pending.length;
+  upload('reanalyze.txt');
+  await wait(() => pending.length === nextRequest + 1 && forms().length === 1, 'Reanalysis input missing');
+  pending[nextRequest].finish(mixed);
+  await wait(() => forms()[0].querySelector('textarea').value === mixed.description, 'Initial mixed suggestion missing');
+  const requestCount = pending.length;
+  attach('SAP', 'control-sap.txt');
+  await wait(() => document.querySelector('[aria-label="Remove control-sap.txt"]') && !button('Attach SAP').disabled, 'SAP not attached');
+  assert(!preview().textContent.includes(staleMessage) && !button('Reanalyze placement'), 'SAP invalidated placement');
+  assert(preview().textContent.includes(mixed.limitation), 'SAP hid valid placement help');
+
+  forms()[0].querySelector('[aria-label="Why no report section was selected"]').click();
+  await wait(() => document.querySelector('[role="dialog"]')?.textContent.includes(mixed.limitation), 'Old explanation not open');
+  failNextRefresh = true;
+  attach('TFL', 'current-tfl.txt');
+  await wait(() => preview().textContent.includes(staleMessage) && !button('Reanalyze placement').disabled, 'TFL upload did not invalidate despite failed refresh');
+  assert(!document.body.textContent.includes(mixed.limitation), 'Old placement explanation remains visible');
+  assert(!forms()[0].textContent.includes('Multiple result topics.') && !forms()[0].querySelector('[aria-label="Why no report section was selected"]'), 'Old alternatives/help remain visible');
+  assert(!preview().textContent.includes('no TFL, based on content'), 'Stale basis label remains visible');
+  assert(pending.length === requestCount, 'Attachment change automatically called AI');
+
+  const mapped = { ...suggestion, title: 'Do not replace title', description: 'Do not replace description', placementBasisLabel: 'Using TFL mapping' };
+  (await startPlacementAnalysis()).finish(mapped);
+  await wait(() => forms()[0].querySelectorAll('select')[1].value === 'key:performance' && !preview().textContent.includes(staleMessage), 'Fresh TFL placement not applied');
+  assert(forms()[0].querySelector('input').value === mixed.title && forms()[0].querySelector('textarea').value === mixed.description, 'Placement analysis changed title/description');
+  assert(forms()[0].textContent.includes('Using TFL mapping'), 'Fresh basis label missing');
+
+  window.dispatchEvent(new Event('results:refresh'));
+  await wait(() => document.querySelector('[aria-label="Remove current-tfl.txt"]'), 'Attachment refresh failed');
+  assert(!preview().textContent.includes(staleMessage), 'Delayed attachment refresh invalidated fresh analysis');
+  document.querySelector('[aria-label="Remove current-tfl.txt"]').click();
+  await wait(() => preview().textContent.includes(staleMessage) && !button('Reanalyze placement').disabled, 'TFL removal did not invalidate');
+  assert(forms()[0].querySelectorAll('select')[1].value === 'key:performance', 'TFL removal erased the existing value');
+  const unassigned = { ...mixed, title: 'Ignored title', description: 'Ignored description', limitation: 'No suitable destination in the new assessment.' };
+  (await startPlacementAnalysis()).finish(unassigned);
+  await wait(() => forms()[0].querySelectorAll('select')[1].value === '' && !preview().textContent.includes(staleMessage), 'New abstention did not clear old AI placement');
+  assert(forms()[0].querySelector('textarea').value === mixed.description, 'Abstention changed description');
+
+  // A different session's attachment update is detected through workspace refresh.
+  state.supportingDocuments.push({ id: 'external-tfl', type: 'tfl', filename: 'external.txt' });
+  window.dispatchEvent(new Event('results:refresh'));
+  await wait(() => preview().textContent.includes(staleMessage), 'External TFL update was not detected');
+  assert(!preview().textContent.includes(unassigned.limitation), 'Stale status explanation remains');
+  const manualSection = forms()[0].querySelectorAll('select')[1];
+  setSelect(manualSection, 'key:performance');
+  await wait(() => forms()[0].textContent.includes('Human-edited'), 'Manual section origin missing');
+  setSelect(manualSection, 'key:safety');
+  setSelect(manualSection, 'key:performance');
+  const manualRequest = await startPlacementAnalysis();
+  setInput(forms()[0].querySelector('input'), 'Keep my title during reanalysis');
+  const descriptionInput = forms()[0].querySelector('textarea');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(descriptionInput, 'Keep my description during reanalysis');
+  descriptionInput.dispatchEvent(new Event('input', { bubbles: true }));
+  manualRequest.finish({ ...mapped, reportSectionKey: 'safety' });
+  await wait(() => forms()[0].textContent.includes('New AI placement suggestion: Safety Analysis'), 'New proposal not shown separately');
+  assert(manualSection.value === 'key:performance' && forms()[0].textContent.includes('Your manual selection is unchanged.'), 'Reanalysis replaced manual section');
+  assert(!forms()[0].textContent.includes('Using TFL mapping'), 'Manual section received AI basis label');
+  assert(forms()[0].querySelector('input').value === 'Keep my title during reanalysis' && descriptionInput.value === 'Keep my description during reanalysis', 'Reanalysis replaced human text edits');
+
+  state.supportingDocuments = state.supportingDocuments.filter(doc => doc.type !== 'tfl');
+  window.dispatchEvent(new Event('results:refresh'));
+  await wait(() => preview().textContent.includes(staleMessage), 'External TFL removal was not detected');
+  assert(!forms()[0].textContent.includes('New AI placement suggestion'), 'Old manual-review proposal remains visible');
+  (await startPlacementAnalysis()).finish({ message: 'AI request timed out.' }, 504);
+  await wait(() => preview().textContent.includes('AI request timed out.') && !button('Reanalyze placement').disabled, 'Reanalysis failure cannot be retried');
+  assert(preview().textContent.includes(staleMessage) && manualSection.value === 'key:performance', 'AI failure erased warning or manual selection');
+  assert(forms()[0].querySelector('input').value === 'Keep my title during reanalysis' && descriptionInput.value === 'Keep my description during reanalysis', 'AI failure erased edits');
+  (await startPlacementAnalysis()).finish({ ...mapped, reportSectionKey: 'safety' });
+  await wait(() => !preview().textContent.includes(staleMessage), 'Successful retry did not clear warning');
+  failNextSave = true;
+  submit(forms()[0]);
+  await wait(() => forms()[0].textContent.includes('Save failed'), 'Reanalyzed save failure missing');
+  assert(manualSection.value === 'key:performance' && descriptionInput.value === 'Keep my description during reanalysis', 'Save failure lost reanalyzed human edits');
+  button('Cancel', forms()[0]).click();
+  await wait(() => !forms().length, 'Reanalysis draft not cancelled');
+
+  nextRequest = pending.length;
+  upload('in-flight-tfl.csv');
+  await wait(() => pending.length === nextRequest + 1 && forms().length === 1, 'In-flight input missing');
+  attach('TFL', 'during-request.txt');
+  await wait(() => preview().textContent.includes(staleMessage) && !button('Attach TFL').disabled, 'Running request not marked stale');
+  pending[nextRequest].finish(mapped);
+  await wait(() => forms()[0].querySelector('textarea').value === mapped.description && !button('Reanalyze placement').disabled, 'Old running response missing');
+  assert(forms()[0].querySelectorAll('select')[1].value === '' && preview().textContent.includes(staleMessage), 'Old response applied stale placement');
+  assert(!forms()[0].textContent.includes('Using TFL mapping'), 'Old running response restored stale label');
+  const overlapping = await startPlacementAnalysis();
+  attach('TFL', 'during-reanalysis.txt');
+  await wait(() => document.querySelector('[aria-label="Remove during-reanalysis.txt"]') && !button('Attach TFL').disabled, 'Second concurrent attachment missing');
+  overlapping.finish(suggestion);
+  await wait(() => !button('Reanalyze placement').disabled, 'Overlapping reanalysis did not finish');
+  assert(preview().textContent.includes(staleMessage) && forms()[0].querySelectorAll('select')[1].value === '', 'Overlapping reanalysis marked old context fresh');
+  const late = await startPlacementAnalysis();
+  const savedCount = state.results.length;
+  submit(forms()[0]);
+  await wait(() => !forms().length && state.results.length === savedCount + 1, 'Save while reanalyzing failed');
+  late.finish(mapped);
+  assert(state.results[savedCount].reportSectionId === null && !('placementOnly' in state.results[savedCount]), 'Late reanalysis changed saved data');
+  assert(maxActive === 1, 'Reanalysis duplicated AI requests');
+
+  const batchStart = pending.length;
+  const savedBeforeBatch = state.results.length;
+  upload('twelve.xlsx');
+  await wait(() => forms().length === 12 && pending.length === batchStart + 1, 'Rate-limit batch not imported');
+  for (const index of [10, 11]) {
+    const form = forms()[index];
+    setInput(form.querySelector('input'), `Human title ${index}`);
+    const description = form.querySelector('textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(description, `Human description ${index}`);
+    description.dispatchEvent(new Event('input', { bubbles: true }));
+    const section = form.querySelectorAll('select')[1];
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(section, 'key:safety');
+    section.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  for (let i = 0; i < 12; i++) {
+    await wait(() => pending.length > batchStart + i, `Missing batch request ${i}`);
+    pending[batchStart + i].finish(i < 10 ? suggestion : { message: 'ThrottlerException: Too Many Requests' }, i < 10 ? 200 : 429);
+  }
+  await wait(() => [...document.querySelectorAll('button')].filter(b => b.textContent.trim() === 'Retry AI suggestions').length === 2,
+    'Rate-limited drafts did not offer manual retry');
+  assert(forms().length === 12 && state.results.length === savedBeforeBatch, 'Rate limit removed or saved drafts');
+  assert(forms().slice(0, 10).every(f => f.querySelector('textarea').value === suggestion.description), 'Rate limit changed completed suggestions');
+  const assertHumanFields = (form, index) => {
+    assert(form.querySelector('input').value === `Human title ${index}`, 'Rate limit or retry replaced human title');
+    assert(form.querySelector('textarea').value === `Human description ${index}`, 'Rate limit or retry replaced human description');
+    assert(form.querySelectorAll('select')[1].value === 'key:safety', 'Rate limit or retry replaced human section');
+    assert((form.textContent.match(/Human-edited/g) || []).length === 3, 'Human origins lost after rate limit or retry');
+    assert(form.querySelector('table'), 'Rate limit removed source table');
+  };
+  assertHumanFields(forms()[10], 10);
+  assertHumanFields(forms()[11], 11);
+  assert(document.querySelector('[aria-label="Import preview"]').textContent.includes('Too Many Requests'), 'Rate-limit error not displayed');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert(pending.length === batchStart + 12, 'Rate limit triggered an automatic retry');
+  submit(forms()[10]);
+  await wait(() => state.results.length === savedBeforeBatch + 1 && forms().length === 11, 'Rate limit blocked manual save');
+  const saved = state.results[savedBeforeBatch];
+  assert(saved.title === 'Human title 10' && saved.description === 'Human description 10', 'Manual save lost human edits');
+  assert(saved.titleOrigin === 'human' && saved.sectionOrigin === 'human' && saved.descriptionOrigin === 'human', 'Manual save lost human origins');
+  assert(JSON.stringify(saved.content) === JSON.stringify(source), 'Rate limit changed saved source data');
+  button('Retry AI suggestions').click();
+  await wait(() => pending.length === batchStart + 13, 'Manual retry did not call AI');
+  pending[batchStart + 12].finish();
+  await wait(() => !button('Retry AI suggestions') && active === 0, 'Manual retry did not finish');
+  assertHumanFields(forms()[10], 11);
+  assert(maxActive === 1, 'Batch launched concurrent AI requests');
+
+  // New entry modes share the import suggestion contract. These checks do not assess model quality.
+  state.results = []; state.sections = [];
+  state.sectionOptions.forEach(section => { section.id = null; });
+  render('entry-modes');
+  await wait(() => !document.querySelector('form') && button('Paste table') && !button('Paste table').disabled, 'Entry workspace missing');
+  for (const mode of ['Paste table', 'Build manually']) {
+    let form = await openEntry(mode);
+    const before = pending.length;
+    button('Suggest with AI', form).click();
+    await wait(() => form.querySelector('[role="alert"]'), 'Empty evidence did not show validation error');
+    assert(pending.length === before, 'Empty evidence reached AI');
+    if (mode === 'Paste table') {
+      setField(field(form, 'Table data'), 'invalid');
+      button('Suggest with AI', form).click();
+      await wait(() => parsedInputs.includes('invalid'), 'Paste parser not called');
+      assert(field(form, 'Table data').value === 'invalid', 'Parser failure erased pasted text');
+    }
+    fillTable(form, mode);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert(pending.length === before, 'Typing started AI automatically');
+    setField(field(form, 'Source filename'), '');
+    button('Suggest with AI', form).click();
+    await wait(() => form.textContent.includes('Enter a source filename or label'), 'Missing source not validated');
+    setField(field(form, 'Source filename'), mode === 'Paste table' ? 'Pasted table' : 'Manual entry');
+    let call = await startSuggestion(form);
+    assert(JSON.stringify(call.body.content) === JSON.stringify(tableContent), 'Analysis did not use current table evidence');
+    assert(!('title' in call.body) && !('description' in call.body) && !('sections' in call.body), 'Client metadata leaked into AI input');
+    call.finish(tableSuggestion);
+    await wait(() => field(form, 'Title').value === tableSuggestion.title, 'Untouched fields not filled');
+    assert(field(form, 'Report section').value === 'key:performance', 'Catalogue destination missing');
+    assert(field(form, 'Description').value === tableSuggestion.description, 'Description not filled');
+    assert(form.querySelectorAll('[aria-label^="About the AI suggestion"]').length === 3, 'AI origins missing');
+    saveFailure = true;
+    const count = state.results.length;
+    button('Save draft', form).click();
+    await wait(() => form.textContent.includes('Save unavailable') && !form.querySelector('fieldset').disabled, 'Save failure not retained in form');
+    assert(field(form, 'Title').value === tableSuggestion.title && state.results.length === count, 'Failed save lost draft');
+    button('Save draft', form).click();
+    await wait(() => state.results.length === count + 1 && !document.querySelector('form'), 'AI draft not saved');
+    const savedInput = savedInputs.at(-1);
+    assert(savedInput.reportSectionKey === 'performance' && savedInput.reportSectionId === null, 'Section key not saved');
+    assert(['titleOrigin', 'sectionOrigin', 'descriptionOrigin'].every(key => savedInput[key] === 'ai'), 'Saved AI origins missing');
+    assert(JSON.stringify(savedInput.content) === JSON.stringify(tableContent), 'Saving changed analyzed evidence');
+    assert(pending.length === before + 1, 'Saving triggered another AI call');
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    setField(field(form, 'Title'), 'My title');
+    setField(field(form, 'Description'), 'Delete this');
+    setField(field(form, 'Description'), '');
+    setField(field(form, 'Report section'), 'key:safety');
+    setField(field(form, 'Report section'), '');
+    call = await startSuggestion(form);
+    setField(field(form, 'Title'), 'Changed while waiting');
+    call.finish(tableSuggestion);
+    await wait(() => !button('Suggest with AI', form).disabled, 'Human-edit analysis not finished');
+    assert(field(form, 'Title').value === 'Changed while waiting', 'AI overwrote pending human edit');
+    assert(field(form, 'Description').value === '' && field(form, 'Report section').value === '', 'AI filled intentionally cleared fields');
+    assert((form.textContent.match(/Human-edited/g) || []).length === 3, 'Human origins missing');
+    for (const status of [429, 503, 504, 'network']) {
+      call = await startSuggestion(form);
+      if (status === 'network') call.fail();
+      else call.finish({ message: `Synthetic AI failure ${status}` }, status);
+      await wait(() => form.querySelector('[role="alert"]') && !button('Suggest with AI', form).disabled, 'AI failure not displayed');
+      assert(field(form, 'Title').value === 'Changed while waiting' && field(form, 'Description').value === '' && field(form, 'Report section').value === '', 'AI failure changed human fields');
+      const attempts = pending.length;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert(pending.length === attempts, 'AI failure retried automatically');
+    }
+    call = await startSuggestion(form);
+    call.finish(tableSuggestion);
+    await wait(() => !button('Suggest with AI', form).disabled, 'Manual retry did not finish');
+    const countBeforeManualSave = state.results.length;
+    button('Save draft', form).click();
+    await wait(() => !document.querySelector('form') && state.results.length === countBeforeManualSave + 1, 'Human draft not saved');
+    assert(['titleOrigin', 'sectionOrigin', 'descriptionOrigin'].every(key => savedInputs.at(-1)[key] === 'human'), 'Save lost human origins');
+    assert(savedInputs.at(-1).description === '' && savedInputs.at(-1).reportSectionId === null, 'Save lost intentional blanks');
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    call = await startSuggestion(form);
+    call.finish(tableSuggestion);
+    await wait(() => field(form, 'Title').value === tableSuggestion.title, 'Initial suggestion missing');
+    if (mode === 'Paste table') setField(field(form, 'Table data'), `${tableText}\nControl\t10`);
+    else setField(form.querySelector('[aria-label="Row 1 column 2"]'), '43');
+    await wait(() => form.textContent.includes('Source changed.'), 'Changed source not marked stale');
+    assert(field(form, 'Title').value === tableSuggestion.title, 'Source change erased existing fields');
+    fillTable(form, mode);
+    call = await startSuggestion(form);
+    call.finish({ ...mixed, description: 'Synthetic mixed table content.' });
+    await wait(() => field(form, 'Report section').value === '', 'Abstention left stale AI destination');
+    assert(form.textContent.includes('Multiple result topics.'), 'Alternative sections not shown');
+    assert(form.querySelectorAll('[aria-label^="About the AI suggestion"]').length === 2, 'Empty AI section incorrectly labelled');
+    call = await startSuggestion(form);
+    ignoreAbort = true;
+    if (mode === 'Paste table') setField(field(form, 'Table data'), `${tableText}\nControl\t10`);
+    else setField(form.querySelector('[aria-label="Row 1 column 2"]'), '43');
+    await wait(() => call.signal.aborted, 'Changed evidence did not cancel request');
+    call.finish({ ...tableSuggestion, title: 'STALE response' });
+    ignoreAbort = false;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert(field(form, 'Title').value === mixed.title, 'Stale response applied to changed evidence');
+    await closeEntry(form);
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    setField(field(form, 'Title'), 'Save without waiting');
+    call = await startSuggestion(form);
+    ignoreAbort = true;
+    button('Save draft', form).click();
+    await wait(() => !document.querySelector('form'), 'Pending AI blocked save');
+    call.finish({ ...tableSuggestion, title: 'LATE saved response' });
+    ignoreAbort = false;
+    assert(savedInputs.at(-1).title === 'Save without waiting' && !savedInputs.at(-1).description, 'Late response changed saved draft');
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    call = await startSuggestion(form);
+    ignoreAbort = true;
+    button(mode === 'Paste table' ? 'Build manually' : 'Paste table').click();
+    await wait(() => call.signal.aborted && document.querySelector('form') !== form, 'Mode change did not cancel analysis');
+    call.finish({ ...tableSuggestion, title: 'LATE mode response' });
+    ignoreAbort = false;
+    const replacement = document.querySelector('form');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert(field(replacement, 'Title').value === '', 'Previous mode response filled new form');
+    await closeEntry(replacement);
+
+    form = await openEntry(mode);
+    fillTable(form, mode);
+    setField(field(form, 'Title'), 'Entirely manual');
+    const attempts = pending.length;
+    button('Save draft', form).click();
+    await wait(() => !document.querySelector('form'), 'Saving without AI failed');
+    assert(pending.length === attempts && savedInputs.at(-1).title === 'Entirely manual', 'Manual save invoked AI');
+  }
+
+  let form = await openEntry('Paste table');
+  fillTable(form, 'Paste table');
+  holdParse = true;
+  const attemptsBeforeParse = pending.length;
+  button('Suggest with AI', form).click();
+  await wait(() => pendingParses.length === 1, 'Deferred parser not called');
+  setField(field(form, 'Table data'), 'Different source');
+  await wait(() => !button('Suggest with AI', form).disabled, 'Changed paste did not cancel analysis');
+  pendingParses[0](); holdParse = false;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert(pending.length === attemptsBeforeParse, 'Obsolete parsed content reached AI');
+  await closeEntry(form);
+
+  for (const type of ['listing', 'figure']) {
+    form = await openEntry('Build manually');
+    setField(field(form, 'Type'), type);
+    await wait(() => field(form, type === 'listing' ? 'Listing content' : 'Figure data'), 'Text input missing');
+    setField(field(form, type === 'listing' ? 'Listing content' : 'Figure data'), 'Synthetic source text');
+    const call = await startSuggestion(form);
+    assert(call.body.type === type && call.body.content.text === 'Synthetic source text', 'Manual text evidence changed');
+    call.finish({ ...tableSuggestion, description: 'Synthetic source text.' });
+    await wait(() => field(form, 'Title').value === tableSuggestion.title, 'Text suggestion missing');
+    await closeEntry(form);
+  }
+
+  for (const clearTitle of [false, true]) {
+    form = await openEntry('Build manually');
+    setField(field(form, 'Type'), 'figure');
+    await wait(() => form.querySelector('input[type=file]'), 'Figure input missing');
+    if (clearTitle) { setField(field(form, 'Title'), 'Remove me'); setField(field(form, 'Title'), ''); }
+    const files = new DataTransfer(); files.items.add(new File(['synthetic'], 'default-title.png', { type: 'image/png' }));
+    const fileInput = form.querySelector('input[type=file]');
+    fileInput.files = files.files; fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(() => form.querySelector('img') && !form.querySelector('fieldset').disabled, 'Figure preview missing');
+    assert(field(form, 'Title').value === (clearTitle ? '' : 'default-title.png'), 'Filename default overwrote human blank');
+    const call = await startSuggestion(form);
+    assert(call.body.content.image.dataUrl === figureImage.dataUrl, 'Figure image not sent unchanged');
+    call.finish({ ...tableSuggestion, title: 'Suggested figure title' });
+    await wait(() => !button('Suggest with AI', form).disabled, 'Figure suggestion not finished');
+    assert(field(form, 'Title').value === (clearTitle ? '' : 'Suggested figure title'), 'Default title blocked AI or AI overwrote human blank');
+    await closeEntry(form);
+  }
   assert(failures.length === 0, failures.join('\n'));
-  document.getElementById('result').textContent = 'PASS: five sequential suggestions, user-edit protection, info popover, origins on save/reload, timeout/retry, split/merge invalidation, unchanged evidence, save before AI response, and partial suggestions with manual placement';
+  document.getElementById('result').textContent = 'PASS: TFL/SAP placement invalidation, placement-only reanalysis and overlapping requests; file import regression and twelve-result 429 batch; Paste table and Build manually explicit AI, validation, human edits and blanks, save/failure/retry, stale responses, manual save, listing/figure evidence and automatic defaults. Simulated flows only; model quality not evaluated.';
 } catch (error) {
   document.getElementById('result').textContent = `FAIL: ${error.message}\n${failures.join('\n')}`;
 }

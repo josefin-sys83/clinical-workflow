@@ -1,4 +1,4 @@
-import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, Patch, Post, Req, UseGuards, BadRequestException, HttpException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
+import { Delete, UseFilters, UseInterceptors, UploadedFile, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards, BadRequestException, HttpException, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from '../projects/projects.service';
 import { DocumentWorkflowService } from '../projects/document-workflow.service';
@@ -66,6 +66,7 @@ export class ProtocolsController {
     @Body() body: UpdateSectionContentDto,
     @Req() req: any,
   ) {
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
     return this.protocols.updateSection(
       projectId,
       sectionId,
@@ -79,6 +80,39 @@ export class ProtocolsController {
       },
       req.user,
     );
+  }
+
+  @Post('/:projectId/protocol/sections/:sectionId/comments')
+  async addComment(
+    @Param('projectId') projectId: string,
+    @Param('sectionId') sectionId: string,
+    @Body() body: { content?: string; type?: string; parentCommentKey?: string },
+    @Req() req: any,
+  ) {
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
+    return this.protocols.addComment(projectId, sectionId, body, req.user);
+  }
+
+  @Post('/:projectId/protocol/sections/:sectionId/risk-acceptances')
+  async acceptRisk(
+    @Param('projectId') projectId: string,
+    @Param('sectionId') sectionId: string,
+    @Body() body: { description?: string; reason?: string },
+    @Req() req: any,
+  ) {
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
+    return this.protocols.acceptRisk(projectId, sectionId, body, req.user);
+  }
+
+  @Delete('/:projectId/protocol/sections/:sectionId/risk-acceptances/:acceptanceId')
+  async revokeRiskAcceptance(
+    @Param('projectId') projectId: string,
+    @Param('sectionId') sectionId: string,
+    @Param('acceptanceId', ParseUUIDPipe) acceptanceId: string,
+    @Req() req: any,
+  ) {
+    await this.documentWorkflow.assertProtocolEditable(projectId, sectionId);
+    return this.protocols.revokeRiskAcceptance(projectId, sectionId, acceptanceId, req.user);
   }
 
   @Get('/:projectId/generate-protocol/progress')
@@ -112,6 +146,7 @@ export class ProtocolsController {
       protocol = await this.ai.generateProtocol(
         aiProjectData, roles, synopsisText, scope,
         (title) => this.generationProgress.increment(progressKey, title),
+        projectId,
       );
     } catch (err) {
       // Audit the failure and preserve upstream status codes with a safe client message.
@@ -153,7 +188,8 @@ export class ProtocolsController {
             section.title,
             targetMarkets,
             deviceCategory,
-            intendedUse
+            intendedUse,
+            projectId,
           );
           section.requiredElements = elements;
         })
@@ -213,7 +249,7 @@ export class ProtocolsController {
     @Body() body: { sectionTitle: string; sectionContent: string; sectionId?: string; requiredElements?: any[] },
     @Req() req?: any,
   ) {
-    await this.documentWorkflow.assertDocumentNotSigned(projectId, 'protocol-pdf');
+    await this.documentWorkflow.assertProtocolEditable(projectId, body.sectionId);
     const project = await this.projects.get(projectId);
     if (!body.sectionId) throw new BadRequestException('sectionId is required');
     const { section, requestId } = await this.protocols.beginSectionAnalysis(projectId, body.sectionId, body.sectionContent, req?.user);
@@ -348,7 +384,7 @@ export class ProtocolsController {
       protocolAttachments: attachmentMetadata,
     }));
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments);
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments, project.id);
 
     if (result?.error) return result;
 
@@ -584,7 +620,7 @@ export class ProtocolsController {
       content: s.content || '',
     })).filter((s: any) => s.content);
 
-    return this.ai.checkSynopsisConsistency(synopsisText, protocolSections);
+    return this.ai.checkSynopsisConsistency(synopsisText, protocolSections, projectId);
   }
 
 @Post('/:projectId/workflow/force-protocol-draft')

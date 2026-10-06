@@ -123,3 +123,31 @@ export function buildGenerationMetadataLog(
     projectManager,
   };
 }
+
+type ProtocolContext = ReturnType<typeof buildProtocolGenerationContext>;
+
+// Named project values for internal services such as the AI service. Each is
+// defined once, from the same context generation requests already use, so every
+// consumer gets the same answer. Add a field here to make it available.
+const PROJECT_CONTEXT_FIELDS: Record<string, (context: ProtocolContext, project: Project | any) => unknown> = {
+  projectName: context => context.aiProjectData.projectName,
+  sponsor: context => context.aiProjectData.sponsor ?? '',
+  deviceName: context => context.aiProjectData.deviceName ?? '',
+  deviceCategory: context => context.aiProjectData.deviceCategory,
+  risk: context => context.aiProjectData.risk,
+  targetMarkets: context => context.aiProjectData.targetMarkets,
+  intendedUse: context => context.intendedUse,
+  acceptedRequirements: context => context.scope.requirements.map((requirement: any) => ({
+    id: requirement.id ?? null,
+    title: requirement.title ?? '',
+    description: requirement.description ?? '',
+  })),
+  synopsis: (_context, project) => sourceSynopsisText(project?.data?.synopsis),
+};
+
+export const PROJECT_CONTEXT_FIELD_NAMES = Object.keys(PROJECT_CONTEXT_FIELDS);
+
+export function selectProjectContext(project: Project | any, fields: string[]): Record<string, unknown> {
+  const context = buildProtocolGenerationContext(project);
+  return Object.fromEntries(fields.map(field => [field, PROJECT_CONTEXT_FIELDS[field](context, project)]));
+}

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
@@ -213,7 +213,7 @@ export class ProtocolsService {
       approvedAt?: string;
     },
     actor?: AuditActor,
-  ): Promise<{ ok: true; content: string; updatedAt: string }> {
+  ): Promise<{ ok: true; content: string; updatedAt: string; revision: number }> {
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -258,6 +258,7 @@ export class ProtocolsService {
           sectionId,
           sectionTitle: result.title,
           updatedAt: result.updatedAt,
+          revision: result.revision,
           editedBy: actor?.name ?? "Unknown user",
           reason: values.reason || "",
           previousContent,
@@ -266,13 +267,162 @@ export class ProtocolsService {
       }, client);
 
       await client.query("COMMIT");
-      return { ok: true, content: result.content, updatedAt: result.updatedAt };
+      return { ok: true, content: result.content, updatedAt: result.updatedAt, revision: result.revision };
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
     } finally {
       client.release();
     }
+  }
+
+  // Runs a write against one protocol section as the signed-in user, in a single
+  // transaction with its audit entry, and returns the section as read back.
+  private async writeSection(
+    projectId: string,
+    sectionKey: string,
+    actor: AuditActor,
+    write: (context: {
+      client: PoolClient;
+      section: { id: string; title: string };
+      user: { id: string; name: string; role: string | null };
+    }) => Promise<Omit<RecordAuditEvent, 'projectId' | 'actor'>>,
+  ): Promise<any> {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const user = (await client.query('select id, name from users where id = $1', [actor?.userId])).rows[0];
+      if (!user) throw new ForbiddenException('Authenticated user not found');
+      const role = (await client.query(
+        'select role_title from project_members where project_id = $1 and user_id = $2 order by created_at limit 1',
+        [projectId, user.id],
+      )).rows[0]?.role_title ?? null;
+
+      const protocolId = await this.ensureForProject(projectId, client);
+      const section = (await client.query(
+        'select id, title from protocol_section where protocol_id = $1 and section_key = $2',
+        [protocolId, sectionKey],
+      )).rows[0];
+      if (!section) throw new NotFoundException('Protocol section not found');
+
+      const event = await write({ client, section, user: { ...user, role } });
+      await this.audit.record({ ...event, projectId, actor }, client);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    const protocol = await this.getByProject(projectId);
+    return protocol?.sections?.find((s: any) => s.id === sectionKey);
+  }
+
+  // Adds a review comment, or a reply when parentCommentKey is given. The author is
+  // always the signed-in user, never a name supplied by the client.
+  async addComment(
+    projectId: string,
+    sectionKey: string,
+    body: { content?: string; type?: string; parentCommentKey?: string },
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const content = requiredText(body.content, 'Comment');
+    const type = ['general', 'issue', 'approval-request'].includes(body.type ?? '') ? body.type : 'general';
+    const isReply = Boolean(body.parentCommentKey);
+
+    const updated = await this.writeSection(projectId, sectionKey, actor, async ({ client, section, user }) => {
+      if (isReply) {
+        const parent = (await client.query(
+          'select id from protocol_section_comment where section_id = $1 and comment_key = $2',
+          [section.id, body.parentCommentKey],
+        )).rows[0];
+        if (!parent) throw new NotFoundException('Comment not found');
+        await client.query(
+          `insert into protocol_section_comment_reply (comment_id, reply_key, author_user_id, author_name, author_role, content)
+           values ($1, $2, $3, $4, $5, $6)`,
+          [parent.id, `r-${randomUUID()}`, user.id, user.name, user.role, content],
+        );
+      } else {
+        await client.query(
+          `insert into protocol_section_comment (section_id, comment_key, author_user_id, author_name, author_role, content, comment_type)
+           values ($1, $2, $3, $4, $5, $6, $7)`,
+          [section.id, `c-${randomUUID()}`, user.id, user.name, user.role, content, type],
+        );
+      }
+      return {
+        stepId: 'protocol-review',
+        type: isReply ? 'protocol.comment.replied' : 'protocol.comment.added',
+        message: `${isReply ? 'Reply' : 'Comment'} added to section "${section.title}"`,
+        entityType: 'protocol_section',
+        entityId: sectionKey,
+        entityLabel: section.title,
+        metadata: { content, type: isReply ? 'reply' : type },
+      };
+    });
+    return updated?.comments ?? [];
+  }
+
+  // Records a reviewer's decision to accept the risk of an open finding. Findings are
+  // recreated whenever a section is analysed, so the decision is matched back to its
+  // finding by description — the same rule "won't fix" uses.
+  async acceptRisk(
+    projectId: string,
+    sectionKey: string,
+    body: { description?: string; reason?: string },
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const description = requiredText(body.description, 'Finding description');
+    const reason = requiredText(body.reason, 'Reason');
+
+    const updated = await this.writeSection(projectId, sectionKey, actor, async ({ client, section, user }) => {
+      const existing = await client.query(
+        'select 1 from protocol_risk_acceptance where section_id = $1 and finding_description = $2 and revoked_at is null',
+        [section.id, description],
+      );
+      if (existing.rows.length) throw new ConflictException('This risk has already been accepted');
+      await client.query(
+        `insert into protocol_risk_acceptance (section_id, finding_description, reason, accepted_by_user_id, accepted_by_name)
+         values ($1, $2, $3, $4, $5)`,
+        [section.id, description, reason, user.id, user.name],
+      );
+      return {
+        stepId: 'protocol-review',
+        type: 'protocol.risk.accepted',
+        message: `Risk accepted on section "${section.title}"`,
+        entityType: 'protocol_section',
+        entityId: sectionKey,
+        entityLabel: section.title,
+        metadata: { finding: description, reason },
+      };
+    });
+    return updated?.riskAcceptances ?? [];
+  }
+
+  async revokeRiskAcceptance(
+    projectId: string,
+    sectionKey: string,
+    acceptanceId: string,
+    actor: AuditActor,
+  ): Promise<any[]> {
+    const updated = await this.writeSection(projectId, sectionKey, actor, async ({ client, section, user }) => {
+      const revoked = (await client.query(
+        `update protocol_risk_acceptance set revoked_at = now(), revoked_by_user_id = $3, revoked_by_name = $4
+         where id = $1 and section_id = $2 and revoked_at is null
+         returning finding_description, reason`,
+        [acceptanceId, section.id, user.id, user.name],
+      )).rows[0];
+      if (!revoked) throw new NotFoundException('Risk acceptance not found');
+      return {
+        stepId: 'protocol-review',
+        type: 'protocol.risk.revoked',
+        message: `Risk acceptance withdrawn on section "${section.title}"`,
+        entityType: 'protocol_section',
+        entityId: sectionKey,
+        entityLabel: section.title,
+        metadata: { finding: revoked.finding_description, reason: revoked.reason },
+      };
+    });
+    return updated?.riskAcceptances ?? [];
   }
 
   async ensureForProject(projectId: string, client: PoolClient): Promise<string> {
@@ -296,7 +446,7 @@ export class ProtocolsService {
     if (!protocolRow) return null;
 
     const [sectionsResult, issuesResult, elementsResult, commentsResult, repliesResult, amendmentsResult,
-      amendmentSectionsResult, reportSectionsResult, approvalsResult] = await Promise.all([
+      amendmentSectionsResult, reportSectionsResult, approvalsResult, acceptancesResult] = await Promise.all([
       db.query(
         `select ps.*, pa.amendment_key
          from protocol_section ps
@@ -357,7 +507,26 @@ export class ProtocolsService {
          where a.protocol_id = $1 order by x.role_key`,
         [protocolRow.id],
       ),
+      db.query(
+        `select a.* from protocol_risk_acceptance a
+         join protocol_section s on s.id = a.section_id
+         where s.protocol_id = $1 and a.revoked_at is null order by a.accepted_at`,
+        [protocolRow.id],
+      ),
     ]);
+
+    const acceptancesBySection = new Map<string, any[]>();
+    for (const row of acceptancesResult.rows) {
+      const values = acceptancesBySection.get(row.section_id) ?? [];
+      values.push({
+        id: row.id,
+        description: row.finding_description,
+        reason: row.reason,
+        acceptedBy: row.accepted_by_name,
+        acceptedAt: iso(row.accepted_at),
+      });
+      acceptancesBySection.set(row.section_id, values);
+    }
 
     const issuesBySection = new Map<string, any[]>();
     for (const row of issuesResult.rows) {
@@ -496,6 +665,7 @@ export class ProtocolsService {
       analysisStatus: row.analysis_status,
       analysisError: row.analysis_error,
       analysisRequestId: row.analysis_request_id,
+      revision: row.revision,
       approvalStatus: row.approval_status,
       approvedBy: row.approved_by_name,
       approvedAt: iso(row.approved_at),
@@ -505,6 +675,7 @@ export class ProtocolsService {
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
       comments: commentsBySection.get(row.id) ?? [],
+      riskAcceptances: acceptancesBySection.get(row.id) ?? [],
       issues: issuesBySection.get(row.id) ?? [],
       requiredElements: elementsBySection.get(row.id) ?? [],
     }));
@@ -528,7 +699,7 @@ export class ProtocolsService {
               s.timezone, s.ip_address, s.document_hash
        from protocol_signature s
        join protocol p on p.id = s.protocol_id
-       where p.project_id = $1
+       where p.project_id = $1 and s.invalidated_at is null
        order by s.role_key, s.signed_at desc, s.id desc`,
       [projectId],
     );
@@ -771,6 +942,8 @@ export class ProtocolsService {
            amendment_number, created_at, updated_at, analysis_status, analysis_error, analysis_request_id
          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          on conflict (protocol_id, section_key) do update set
+           revision = case when protocol_section.content is distinct from excluded.content
+             then protocol_section.revision + 1 else protocol_section.revision end,
            section_number = excluded.section_number,
            position = excluded.position,
            title = excluded.title,
@@ -1104,7 +1277,7 @@ export class ProtocolsService {
     },
     actor: AuditActor | undefined,
     client: PoolClient,
-  ): Promise<{ title: string; content: string; updatedAt: string }> {
+  ): Promise<{ title: string; content: string; updatedAt: string; revision: number }> {
     const protocolId = await this.ensureForProject(projectId, client);
     const previous = await client.query('select content from protocol_section where protocol_id=$1 and section_key=$2', [protocolId, sectionKey]);
     if (previous.rows[0] && values.previousContent !== undefined &&
@@ -1115,6 +1288,7 @@ export class ProtocolsService {
     const approvedBy = values.approvedBy ?? null;
     const { rows } = await client.query(
       `update protocol_section set
+         revision = case when content is distinct from $3 then revision + 1 else revision end,
          content = $3,
          approval_status = coalesce($4, approval_status),
          approved_by_user_id = coalesce($6, approved_by_user_id),
@@ -1122,7 +1296,7 @@ export class ProtocolsService {
          approved_at = coalesce($7, approved_at),
          updated_at = $8
        where protocol_id = $1 and section_key = $2
-       returning title, content, updated_at`,
+       returning title, content, updated_at, revision`,
       [
         protocolId,
         sectionKey,
@@ -1144,6 +1318,7 @@ export class ProtocolsService {
       title: rows[0].title,
       content: rows[0].content,
       updatedAt: iso(rows[0].updated_at) || now,
+      revision: rows[0].revision,
     };
   }
 
@@ -1218,4 +1393,11 @@ export class ProtocolsService {
       }
     }
   }
+}
+
+function requiredText(value: unknown, label: string): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) throw new BadRequestException(`${label} cannot be empty`);
+  if (text.length > 10000) throw new BadRequestException(`${label} is too long`);
+  return text;
 }

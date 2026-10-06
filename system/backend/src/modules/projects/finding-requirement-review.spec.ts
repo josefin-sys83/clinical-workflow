@@ -26,7 +26,7 @@ describe.each(['protocol', 'report'])('%s section finding requirements', kind =>
       finishSectionAnalysis: jest.fn(async (_project, _section, _request, result) => result),
       listAttachmentsForAnalysis: jest.fn().mockResolvedValue([]),
     };
-    const workflow: any = { assertDocumentNotSigned: jest.fn() };
+    const workflow: any = { assertDocumentNotSigned: jest.fn(), assertProtocolEditable: jest.fn() };
     const body = { sectionId: section.id, sectionTitle: section.title, sectionContent: section.content };
     if (kind === 'protocol') {
       const controller = new ProtocolsController(projects, storage, ai, {} as any, {} as any, workflow, { supportingDocuments: jest.fn().mockResolvedValue([]) } as any);

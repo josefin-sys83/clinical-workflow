@@ -19,12 +19,13 @@ SOURCE = {
     "originalReference": "Table 14.2.1",
     "sections": [{"key": "performance", "title": "Clinical Performance Results"}],
 }
-SUGGESTION = {
+METADATA = {
     "title": "Infusion volume accuracy", "reportSectionKey": "performance",
     "description": "Synthetic results in Table 14.2.1 report 190 episodes (95%) within ±5% and 10 episodes (5%) outside.",
     "limitation": None,
     "alternativeSectionKeys": [],
 }
+SUGGESTION = {**METADATA, "tflEvidence": []}
 PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
 
 
@@ -61,7 +62,7 @@ def test_types_use_one_structured_call(kind, content):
     client, provider = client_for()
     response = post(client, {**SOURCE, "type": kind, "content": content})
     assert response.status_code == 200
-    assert response.json() == SUGGESTION
+    assert response.json() == METADATA
     assert len(provider.requests) == 1
     request = provider.requests[0]
     assert request.response_schema_name == "ResultSuggestion"
@@ -100,10 +101,11 @@ def test_insufficient_evidence_can_abstain():
     result = dict.fromkeys(("title", "reportSectionKey", "description"))
     result["limitation"] = "This text does not contain study results."
     result["alternativeSectionKeys"] = []
+    result["tflEvidence"] = []
     client, _ = client_for(result)
     response = post(client, {**SOURCE, "content": {"text": "Encyclopedia text"}})
     assert response.status_code == 200
-    assert response.json() == result
+    assert response.json() == {key: value for key, value in result.items() if key != "tflEvidence"}
 
 
 @pytest.mark.parametrize("extension", ["pdf", "txt", "docx"])
@@ -124,6 +126,7 @@ def test_mixed_document_preserves_full_source_and_allows_manual_placement(extens
                        "adverse events and user satisfaction, with individual records of the same events.",
         "limitation": "Performance and safety results span different sections. Choose placement manually.",
         "alternativeSectionKeys": ["performance", "safety"],
+        "tflEvidence": [],
     }
     source = {**SOURCE, "type": "listing", "content": {"text": text},
               "sourceFilename": f"results.{extension}", "originalReference": None,
@@ -131,7 +134,7 @@ def test_mixed_document_preserves_full_source_and_allows_manual_placement(extens
     client, provider = client_for(result)
     response = post(client, source)
     assert response.status_code == 200
-    assert response.json() == result
+    assert response.json() == {key: value for key, value in result.items() if key != "tflEvidence"}
     system, user = provider.requests[0].messages
     payload = json.loads(user["content"].split("\n", 1)[1])
     assert payload["content"]["text"] == text
@@ -152,7 +155,7 @@ def test_quality_rules_and_filename_reach_model_without_contract_changes():
     # This verifies prompt wiring, not that a real model will obey the rules.
     client, provider = client_for()
     response = post(client)
-    assert response.json() == SUGGESTION
+    assert response.json() == METADATA
     system, user = provider.requests[0].messages
     assert json.loads(user["content"].split("\n", 1)[1])["sourceFilename"] == "synthetic.xlsx"
     rules = " ".join(system["content"].split())
@@ -174,7 +177,7 @@ def test_live_fixtures_are_valid_and_check_known_failures_without_ai_calls():
         description="Synthetic volume accuracy, alarm times, adverse-event summaries and satisfaction "
                     "results, including individual event records. Eight events occurred in six "
                     "participants within a safety population of 100.",
-        limitation="Multiple result topics.", alternativeSectionKeys=["section-7", "section-8"],
+        limitation="Multiple result topics.", alternativeSectionKeys=["section-7", "section-8"], tflEvidence=[],
     )
     assert review_flags(mixed, good) == []
     for bad in (
@@ -255,7 +258,7 @@ def test_existing_prompt_factory_and_legacy_string_calls_remain_unchanged():
 
 
 @pytest.mark.parametrize("model,payload", [
-    (AnalyzeSectionResponse, {"issues": [], "requiredElements": []}),
+    (AnalyzeSectionResponse, {"issues": [], "requiredElements": [], "satisfiedRequirements": []}),
     (GenerateRequiredElementsResponse, {"requiredElements": [
         {"id": "r1", "name": "Existing requirement", "reference": "Existing source", "status": "missing"},
     ]}),

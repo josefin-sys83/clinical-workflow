@@ -3,7 +3,7 @@
 <script type="module">
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import App from '/src/modules/Makeprotokoll/App.tsx';
 import ReviewPage from '/src/modules/Protocolreview/app/pages/ReviewPageCopy.tsx';
@@ -86,6 +86,8 @@ window.fetch = async (input, init = {}) => {
     if (finding) riskAccepted.push(finding.description);
     section.issues = section.issues.filter(issue => !riskAccepted.includes(issue.description));
     payload = project.data.protocol;
+  } else if (url.endsWith('/risk-acceptances') && init.method === 'POST') {
+    payload = [{ id: 'acceptance-1', description: body.description, reason: body.reason, acceptedBy: user.name, acceptedAt: '2026-09-27T12:00:00Z' }];
   } else if (url.endsWith('/projects/fixture')) payload = project;
   else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
   else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: synopsisCount ? [synopsisFinding] : [] };
@@ -94,9 +96,12 @@ window.fetch = async (input, init = {}) => {
   return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
 const el = React.createElement;
+// Accept the editor's discard-changes prompt; native dialogs block headless Chrome.
+window.confirm = () => true;
 createRoot(document.getElementById('root')).render(el(CurrentUserProvider, { user, status: 'ready' },
-  el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
-    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(App) })))));
+  // The editor's unsaved-changes warning needs a data router, as in the app.
+  el(RouterProvider, { router: createMemoryRouter([{ path: '/projects/:projectId', element: el(App) }],
+    { initialEntries: ['/projects/fixture'] }) })));
 const assert = (value, message) => { if (!value) throw new Error(message); };
 let stage = 'initial render';
 const waitFor = async (predicate) => {
@@ -186,7 +191,10 @@ const closeRemediation = async mark => {
 const save = async () => {
   button('Edit').click();
   await waitFor(() => document.querySelector('[contenteditable="true"]'));
-  document.querySelector('[contenteditable="true"]').innerHTML = '<p>Updated eligibility criteria.</p>';
+  const editor = document.querySelector('[contenteditable="true"]');
+  editor.innerHTML = '<p>Updated eligibility criteria.</p>';
+  editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+  await waitFor(() => !button('Save').disabled);
   button('Save').click();
   await waitFor(() => document.querySelector('textarea'));
   setReason();
@@ -301,6 +309,13 @@ try {
   const blockerCard = [...reviewContainer.querySelectorAll('[data-review-finding-severity]')]
     .find(card => card.textContent.includes(blocker.description));
   blockerCard.querySelector('button').nextElementSibling.click();
+  stage = 'accept-risk reason';
+  await waitFor(() => reviewContainer.querySelector('textarea[placeholder^="Why is it acceptable"]'));
+  const reason = reviewContainer.querySelector('textarea[placeholder^="Why is it acceptable"]');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(reason, 'Synthetic accepted risk');
+  reason.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => !reason.closest('.fixed').querySelectorAll('button')[2]?.disabled);
+  [...reason.closest('.fixed').querySelectorAll('button')].find(b => b.textContent.trim() === 'Accept Risk').click();
   stage = 'accepted-risk highlight';
   await waitFor(() => blockerCard.textContent.includes('Risk Accepted'));
   const acceptedMark = [...reviewContainer.querySelectorAll('section[id="1"] mark[data-review-finding-ids]')]

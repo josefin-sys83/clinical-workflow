@@ -72,6 +72,8 @@ export interface RegulatoryFinding {
   acceptedRisk?: boolean;
   acceptedBy?: string;
   acceptedAt?: Date;
+  acceptanceId?: string;
+  acceptanceReason?: string;
   textHighlight?: string;
 }
 

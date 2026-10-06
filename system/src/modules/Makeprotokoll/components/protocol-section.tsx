@@ -6,7 +6,10 @@ import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
 import { ReviewRemediation } from '@/shared/editor/ReviewRemediation';
 import { FindingDetails } from '@/shared/protocol/FindingDetails';
 import { FindingDocumentControl } from '@/shared/protocol/FindingDocumentControl';
-import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2 } from 'lucide-react';
+import { SaveStatus } from '@/shared/editor/SaveStatus';
+import { apiErrorMessage } from '@/shared/api/http';
+import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2, List, ListOrdered } from 'lucide-react';
+import { editTable, tableCellAt, TABLE_ACTIONS, type TableAction } from '@/shared/editor/table-editing';
 import type { ProtocolAttachment } from '@/shared/api/documents';
 import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueMetadata, type IssueSeverity } from '@/shared/protocol/issues';
@@ -89,6 +92,7 @@ interface ProtocolSectionProps {
     amendmentNumber?: number;
     analysisStatus?: 'not-run' | 'running' | 'succeeded' | 'failed';
     analysisError?: string;
+    revision?: number;
   };
   targetMarkets?: string[];
   deviceCategory?: string;
@@ -98,6 +102,7 @@ interface ProtocolSectionProps {
   isHighlighted?: boolean;
   isReviewMode?: boolean;
   onSaved?: (newContent: string, previousContent: string, reason: string) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
   onWontFix?: (issueId: string, comment: string) => void;
   onAddComment?: (content: string, type: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -235,13 +240,21 @@ function ProtocolSectionComponent(
   const [isEditing, setIsEditing] = useState(false);
   const [editorFindings, setEditorFindings] = useState<ReviewFinding[]>([]);
   const [isSaving, setIsSaving] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Lets the page warn before navigation while this section has unsaved edits.
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [changeReason, setChangeReason] = useState('');
   const [wontFixModal, setWontFixModal] = useState<string | null>(null); // issueId or null
   const [wontFixComment, setWontFixComment] = useState('');
   const [hoveredRoleTerm, setHoveredRoleTerm] = useState<'reviewer' | 'approver' | null>(null);
   const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set(['normal']));
+  const [inTable, setInTable] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const editorSelectionRef = useRef<Range | null>(null);
 
@@ -272,6 +285,8 @@ function ProtocolSectionComponent(
       // on entry so toolbar updates cannot replace the user's in-progress edits.
       editorRef.current.innerHTML = renderContent(section.content || '') || '<p><br></p>';
       editorRef.current.focus();
+      // Enter starts a new paragraph in every browser, instead of a <div> or <br>.
+      document.execCommand('defaultParagraphSeparator', false, 'p');
       return trackReviewEditor(editorRef.current, openIssues, setEditorFindings);
     }
   }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -295,12 +310,15 @@ function ProtocolSectionComponent(
       if (document.queryCommandState('bold'))      active.add('bold');
       if (document.queryCommandState('italic'))    active.add('italic');
       if (document.queryCommandState('underline')) active.add('underline');
+      if (document.queryCommandState('insertUnorderedList')) active.add('ul');
+      if (document.queryCommandState('insertOrderedList'))   active.add('ol');
       const block = document.queryCommandValue('formatBlock').toLowerCase().replace(/[^a-z0-9]/g, '');
       if      (block === 'h1') active.add('h1');
       else if (block === 'h2') active.add('h2');
       else                     active.add('normal');
     } catch { active.add('normal'); }
     setActiveFormats(active);
+    setInTable(Boolean(tableCellAt(editorRef.current)));
     rememberEditorSelection();
   };
 
@@ -338,6 +356,17 @@ function ProtocolSectionComponent(
   const handleH1        = () => execFmt('formatBlock', 'h1');
   const handleH2        = () => execFmt('formatBlock', 'h2');
   const handleNormal    = () => execFmt('formatBlock', 'p');
+  const handleBulletList   = () => execFmt('insertUnorderedList');
+  const handleNumberedList = () => execFmt('insertOrderedList');
+
+  const handleTable = (action: TableAction) => {
+    const cell = tableCellAt(editorRef.current);
+    if (!cell) return;
+    editTable(cell, action);
+    setIsDirty(true); // structural edits don't fire the editor's input event
+    editorRef.current?.focus();
+    updateActiveFormats();
+  };
 
   const handleInsertTable = () => {
     const th = (n: number) =>
@@ -434,7 +463,7 @@ function ProtocolSectionComponent(
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    const findings = analysisStatus === 'running' || isAnalyzing ? [] : (section.issues || []).filter(isOpenIssue);
+    const findings = analysisStatus === 'running' ? [] : (section.issues || []).filter(isOpenIssue);
     if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), findings);
     // Legacy markdown fallback
     let h = content
@@ -933,7 +962,7 @@ function ProtocolSectionComponent(
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
-              <ReviewRemediation findings={analysisStatus === 'running' || isAnalyzing ? [] : (isEditing ? editorFindings : openIssues)}>
+              <ReviewRemediation findings={analysisStatus === 'running' ? [] : (isEditing ? editorFindings : openIssues)}>
               {section.content ? (() => {
                 if (isEditing) {
                   const btnBase: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 4, border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', flexShrink: 0 };
@@ -953,6 +982,10 @@ function ProtocolSectionComponent(
                         <button title="Heading 1" style={activeFormats.has('h1') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('h1')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleH1}><Heading1 size={13} /></button>
                         <button title="Heading 2" style={activeFormats.has('h2') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('h2')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleH2}><Heading2 size={13} /></button>
                         <button title="Normal text" style={activeFormats.has('normal') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('normal')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleNormal}><Type size={13} /></button>
+                        {divider}
+                        {/* List group */}
+                        <button title="Bulleted list" style={activeFormats.has('ul') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('ul')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleBulletList}><List size={13} /></button>
+                        <button title="Numbered list" style={activeFormats.has('ol') ? btnActive : btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => { if (!activeFormats.has('ol')) e.currentTarget.style.backgroundColor = 'transparent'; }} onClick={handleNumberedList}><ListOrdered size={13} /></button>
                         {divider}
                         {/* Insert group */}
                         <button title="Insert table" style={btnBase} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')} onClick={handleInsertTable}><Table2 size={13} /></button>
@@ -978,11 +1011,28 @@ function ProtocolSectionComponent(
                           </select>
                         )}
                       </div>
+                      {/* ── Table tools, shown while the caret is in a table ── */}
+                      {inTable && (
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, padding: '4px 6px', backgroundColor: '#f1f5f9', borderLeft: '2px solid #3b82f6', borderRight: '2px solid #3b82f6', fontSize: 12, color: '#475569' }}>
+                          <span style={{ marginRight: 4 }}>Table</span>
+                          {TABLE_ACTIONS.map(([action, label]) => (
+                            <button
+                              key={action}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => handleTable(action)}
+                              style={{ padding: '2px 8px', border: '1px solid #cbd5e1', borderRadius: 4, background: 'white', cursor: 'pointer', color: action === 'deleteTable' ? '#b91c1c' : '#334155' }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       {/* ── WYSIWYG contentEditable editor ── */}
                       <div
                         ref={editorRef}
-                        contentEditable
+                        contentEditable={!isSaving}
                         suppressContentEditableWarning
+                        onInput={() => setIsDirty(true)}
                         onKeyUp={updateActiveFormats}
                         onMouseUp={updateActiveFormats}
                         onSelect={updateActiveFormats}
@@ -990,23 +1040,45 @@ function ProtocolSectionComponent(
                         style={{ width: '100%', minHeight: '200px', fontSize: '0.9rem', lineHeight: '1.7', padding: '0.75rem', border: '2px solid #3b82f6', borderTop: 'none', borderRadius: '0 0 0.375rem 0.375rem', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', overflowY: 'auto' }}
                       />
                       {/* ── Save / Cancel ── */}
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <button onClick={() => { setChangeReason(''); setShowReasonModal(true); }} style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Save</button>
-                        <button onClick={() => setIsEditing(false)} style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', alignItems: 'center' }}>
+                        <button
+                          disabled={!isDirty || isSaving}
+                          onClick={() => { setChangeReason(''); setShowReasonModal(true); }}
+                          style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', fontSize: '0.875rem', cursor: !isDirty || isSaving ? 'not-allowed' : 'pointer', opacity: !isDirty || isSaving ? 0.5 : 1 }}
+                        >Save</button>
+                        <button
+                          disabled={isSaving}
+                          onClick={() => {
+                            if (isDirty && !window.confirm('Discard your unsaved changes?')) return;
+                            setIsDirty(false);
+                            setSaveError(null);
+                            setIsEditing(false);
+                          }}
+                          style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: isSaving ? 'not-allowed' : 'pointer', fontSize: '0.875rem' }}
+                        >Cancel</button>
+                        <SaveStatus
+                          state={isSaving ? 'saving' : saveError ? 'failed' : isDirty ? 'dirty' : 'saved'}
+                          updatedAt={section.updated}
+                          revision={section.revision}
+                          error={saveError}
+                        />
                       </div>
                     </div>
                   );
                 }
                 const editButton = (
-                  <div key="edit-button" style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem'}}>
-                    <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
+                  <div key="edit-button" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem'}}>
+                    <SaveStatus state="saved" updatedAt={section.updated} revision={section.revision} />
+                    {!section.locked && (
+                      <button onClick={() => setIsEditing(true)} style={{padding: '0.25rem 0.75rem', fontSize: '0.75rem', backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', color: '#374151'}}>Edit</button>
+                    )}
                   </div>
                 );
                 return (
                   <div key="section-view">
                     {editButton}
-                    <div className="relative min-h-24" aria-busy={analysisStatus === 'running' || isAnalyzing}>
-                      {(analysisStatus === 'running' || isAnalyzing) && <SectionAnalysisOverlay />}
+                    <div className="relative min-h-24" aria-busy={analysisStatus === 'running'}>
+                      {analysisStatus === 'running' && <SectionAnalysisOverlay />}
                       <div style={{lineHeight: '1.7', fontSize: '0.9rem'}} dangerouslySetInnerHTML={{__html: renderContent(section.content || '')}} />
                     </div>
                   </div>
@@ -1111,24 +1183,25 @@ function ProtocolSectionComponent(
               <button
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
+                  if (!onSaved) return;
                   const prevContent = section.content || '';
                   const newContent = stripReviewHighlights(editorRef.current?.innerHTML || '');
                   const reason = changeReason.trim();
-                  // Close the modal and editing state immediately for responsive UX
-                  setIsSaving(true);
                   setShowReasonModal(false);
-                  setIsEditing(false);
-                  // Delegate persist + audit to the parent — it owns user context and
-                  // is the single source of truth for every content-change audit entry.
-                  if (onSaved) {
-                    setIsAnalyzing(true);
-                    try {
-                      await onSaved(newContent, prevContent, reason);
-                    } finally {
-                      setIsAnalyzing(false);
-                    }
+                  setSaveError(null);
+                  setIsSaving(true);
+                  try {
+                    // The editor stays open until the server confirms. On failure the
+                    // user's text is still here and can be saved again. The parent owns
+                    // persistence and the audit entry.
+                    await onSaved(newContent, prevContent, reason);
+                    setIsDirty(false);
+                    setIsEditing(false);
+                  } catch (error) {
+                    setSaveError(apiErrorMessage(error, 'The server did not confirm the save.'));
+                  } finally {
+                    setIsSaving(false);
                   }
-                  setIsSaving(false);
                 }}
                 style={{padding: '0.5rem 1rem', backgroundColor: changeReason.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: changeReason.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500}}
               >

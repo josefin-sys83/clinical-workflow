@@ -9,7 +9,8 @@ import {
 import { acceptedRequirementsText } from '../projects/project-generation-context';
 import { acceptedFindingRequirements, findingRequirementsText } from '../projects/finding-requirements';
 import { validateAiResponse } from './ai-response-contract';
-import type { ResultSuggestion, SuggestResultDto } from '../results/dto';
+import type { SuggestResultDto } from '../results/dto';
+import type { AiResultSuggestion, TflContext } from '../results/tfl-mapping';
 import { logGenerateProtocolRequest } from '../../common/analysis-request-logger';
 
 export const PROTOCOL_SECTION_TITLES = [
@@ -75,20 +76,20 @@ export class AiService {
     return validateResponse ? validateAiResponse<T>(path, payload) : payload as T;
   }
 
-  async analyzeSynopsis(text: string, targetMarkets: string[] = []): Promise<any[]> {
-    return this.post('/v1/ai/analyze-synopsis', { text, targetMarkets }, true);
+  async analyzeSynopsis(text: string, targetMarkets: string[] = [], projectId?: string): Promise<any[]> {
+    return this.post('/v1/ai/analyze-synopsis', { projectId, text, targetMarkets }, true);
   }
 
-  async suggestResult(input: SuggestResultDto, sections: { key: string; title: string }[]): Promise<ResultSuggestion> {
-    return this.post('/v1/ai/suggest-result', { ...input, sections }, true);
+  async suggestResult(input: SuggestResultDto, sections: { key: string; title: string }[], tfl: TflContext | null): Promise<AiResultSuggestion> {
+    return this.post('/v1/ai/suggest-result', { ...input, sections, ...(tfl === null ? {} : { tfl }) }, true);
   }
 
-  async deriveScopeFromSynopsis(text: string): Promise<{ deviceCategory: string; intendedUse: string; confidence: 'high' | 'medium' | 'low' }> {
-    return this.post('/v1/ai/derive-scope-from-synopsis', { text }, true);
+  async deriveScopeFromSynopsis(text: string, projectId?: string): Promise<{ deviceCategory: string; intendedUse: string; confidence: 'high' | 'medium' | 'low' }> {
+    return this.post('/v1/ai/derive-scope-from-synopsis', { projectId, text }, true);
   }
 
-  async analyzeScope(clientPrompt: string): Promise<any[]> {
-    return this.post('/v1/ai/analyze-scope', { clientPrompt }, true);
+  async analyzeScope(clientPrompt: string, projectId?: string): Promise<any[]> {
+    return this.post('/v1/ai/analyze-scope', { projectId, clientPrompt }, true);
   }
 
   async generateProtocolSection(
@@ -131,6 +132,7 @@ export class AiService {
     synopsis: string,
     scope: any,
     onSectionDone?: (title: string) => void,
+    projectId?: string,
   ): Promise<any> {
     const requirements = acceptedFindingRequirements(scope?.requirements);
     scope = {
@@ -138,7 +140,7 @@ export class AiService {
       requirements,
       findingRequirements: findingRequirementsText(scope?.requirements),//"[{\"id\":\"REQ-1\",\"title\":\"ISO 14155\",\"accepted\":true}]"
     };
-    const request = { projectData, roles, synopsis, scope };
+    const request = { projectId, projectData, roles, synopsis, scope };
     const endpoint = onSectionDone ? '/v1/ai/generate-protocol/stream' : '/v1/ai/generate-protocol';
     await logGenerateProtocolRequest({ endpoint, request });
     if (!onSectionDone) {
@@ -211,8 +213,9 @@ export class AiService {
     return finalResult;
   }
 
-  async generateRequiredElements(sectionTitle: string, targetMarkets: string[], deviceCategory: string, intendedUse: string): Promise<any[]> {
+  async generateRequiredElements(sectionTitle: string, targetMarkets: string[], deviceCategory: string, intendedUse: string, projectId?: string): Promise<any[]> {
     return this.post('/v1/ai/generate-required-elements', {
+      projectId,
       sectionTitle,
       targetMarkets,
       deviceCategory,
@@ -231,8 +234,10 @@ export class AiService {
     crossSectionContext?: { title: string; content: string }[],
     acceptedRequirements?: { name: string; description: string }[],
     protocolAttachments: { name: string; content: string; requirement: string }[] = [],
+    projectId?: string,
   ): Promise<any> {
     return this.post('/v1/ai/analyze-section', {
+      projectId,
       sectionTitle,
       sectionContent,
       targetMarkets,
@@ -246,15 +251,17 @@ export class AiService {
     }, true);
   }
 
-  async checkFindingDocument(body: { issue: any; requirement: any; section: any; document: any }): Promise<{ status: 'satisfied' | 'warning' | 'blocker'; reason: string }> {
+  async checkFindingDocument(body: { issue: any; requirement: any; section: any; document: any }, projectId?: string): Promise<{ status: 'satisfied' | 'warning' | 'blocker'; reason: string }> {
     const result = await this.post<{
       outcome: 'resolves' | 'partially_resolves' | 'does_not_resolve'; explanation: string;
     }>('/v1/ai/check-protocol-attachments', {
+      projectId,
       issue: body.issue.description,
       requirement: body.requirement.title,
       attachments: [{ name: body.document.label, content: body.document.extractedText }],
     }, true);
-    const statuses = { resolves: 'satisfied', partially_resolves: 'warning', does_not_resolve: 'blocker' } as const;
+    // A document that does not resolve the finding leaves its severity unchanged.
+    const statuses = { resolves: 'satisfied', partially_resolves: 'warning', does_not_resolve: body.issue.severity } as const;
     return { status: statuses[result.outcome], reason: result.explanation };
   }
 
@@ -267,8 +274,10 @@ export class AiService {
     projectData: any,
     roles: any[],
     existingReportSections: any[],
+    projectId?: string,
   ): Promise<string> {
     return this.post('/v1/ai/generate-report-section', {
+      projectId,
       sectionTitle,
       sectionNumber,
       protocolSections,
@@ -289,8 +298,10 @@ export class AiService {
     appendicesList?: string[],
     amendmentContext?: { number: number; title: string; reason: string; description: string } | null,
     acceptedRequirements?: string,
+    projectId?: string,
   ): Promise<any> {
     return this.post('/v1/ai/analyze-report-section', {
+      projectId,
       sectionTitle,
       sectionContent,
       targetMarkets,
@@ -393,8 +404,10 @@ export class AiService {
     statisticalMethodsContent: string,
     resultsContent: string,
     targetMarkets: string[],
+    projectId?: string,
   ): Promise<{ issues: { description: string; severity: 'blocker' | 'warning' }[] }> {
     return this.post('/v1/ai/check-statistical-consistency', {
+      projectId,
       statisticalMethodsContent,
       resultsContent,
       targetMarkets,
@@ -406,8 +419,10 @@ export class AiService {
     reportSections: { title: string; content: string }[],
     targetMarkets: string[],
     deviceCategory: string,
+    projectId?: string,
   ): Promise<{ issues: { section1: string; section2: string; description: string; severity: 'blocker' | 'warning' }[] }> {
     return this.post('/v1/ai/check-cross-consistency', {
+      projectId,
       protocolSections,
       reportSections,
       targetMarkets,
@@ -418,7 +433,8 @@ export class AiService {
   async checkSynopsisConsistency(
     synopsisText: string,
     protocolSections: { title: string; content: string }[],
+    projectId?: string,
   ): Promise<{ issues: { description: string; severity: 'blocker' | 'warning' }[] }> {
-    return this.post('/v1/ai/check-synopsis-consistency', { synopsisText, protocolSections }, true);
+    return this.post('/v1/ai/check-synopsis-consistency', { projectId, synopsisText, protocolSections }, true);
   }
 }

@@ -13,7 +13,10 @@ interface FindingsPanelProps {
   aiFindings: AIFinding[];
   onFindingClick: (sectionId: string) => void;
   onDismissAIFinding: (findingId: string) => void;
-  onAcceptRisk: (findingId: string) => void;
+  /** Accepts the risk of a finding with a reason. Omit to make findings read-only. */
+  onAcceptRisk?: (findingId: string, reason: string) => Promise<void>;
+  /** Withdraws an accepted risk. */
+  onRevokeRisk?: (findingId: string) => Promise<void>;
   /** Called when the user submits a new comment. Parent owns the API call. */
   onAddComment?: (content: string, type: CommentType) => Promise<void>;
   /** Called when the user submits a reply. Parent owns the API call. */
@@ -30,6 +33,7 @@ export function FindingsPanel({
   onFindingClick,
   onDismissAIFinding,
   onAcceptRisk,
+  onRevokeRisk,
   onAddComment,
   onAddReply,
   activeSectionTitle,
@@ -44,6 +48,31 @@ export function FindingsPanel({
   const [commentText, setCommentText] = useState('');
   const [commentType, setCommentType] = useState<CommentType>('general');
   const [submitting, setSubmitting] = useState(false);
+
+  // ── Accept Risk modal state ───────────────────────────────────────────────
+  const [acceptingFinding, setAcceptingFinding] = useState<RegulatoryFinding | null>(null);
+  const [acceptReason, setAcceptReason] = useState('');
+  const [accepting, setAccepting] = useState(false);
+
+  const handleConfirmAccept = async () => {
+    if (!acceptingFinding || !acceptReason.trim() || !onAcceptRisk) return;
+    setAccepting(true);
+    try {
+      await onAcceptRisk(acceptingFinding.id, acceptReason.trim());
+      setAcceptingFinding(null);
+      setAcceptReason('');
+    } catch {
+      // The page has shown the error; keep the reason so it can be sent again.
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  const handleRevoke = (findingId: string) => {
+    if (onRevokeRisk && window.confirm('Withdraw this risk acceptance? The finding will need a decision again.')) {
+      void onRevokeRisk(findingId);
+    }
+  };
 
   const toggleComment = (commentId: string) => {
     setExpandedComments((prev) => {
@@ -64,10 +93,12 @@ export function FindingsPanel({
     setReplySubmitting(true);
     try {
       await onAddReply?.(commentId, replyText.trim());
-    } finally {
-      setReplySubmitting(false);
       setReplyingTo(null);
       setReplyText('');
+    } catch {
+      // The page has shown the error; keep the text so it can be sent again.
+    } finally {
+      setReplySubmitting(false);
     }
   };
 
@@ -85,6 +116,8 @@ export function FindingsPanel({
       setCommentModalOpen(false);
       setCommentText('');
       setCommentType('general');
+    } catch {
+      // The page has shown the error; keep the comment open so it can be sent again.
     } finally {
       setSubmitting(false);
     }
@@ -165,6 +198,9 @@ export function FindingsPanel({
                     <div className="mb-4 p-2 bg-neutral-100 rounded text-xs text-neutral-600">
                       <div>Risk accepted by <span className="font-medium">{finding.acceptedBy}</span></div>
                       <div>{formatTimestamp(finding.acceptedAt)}</div>
+                      {finding.acceptanceReason && (
+                        <div className="mt-1 text-neutral-800">Reason: {finding.acceptanceReason}</div>
+                      )}
                     </div>
                   )}
 
@@ -192,12 +228,20 @@ export function FindingsPanel({
                       Navigate to Section {finding.sectionId.replace('section-', '')} &gt;
                     </button>
 
-                    {!finding.acceptedRisk && (
+                    {!finding.acceptedRisk && onAcceptRisk && (
                       <button
-                        onClick={() => onAcceptRisk(finding.id)}
+                        onClick={() => { setAcceptReason(''); setAcceptingFinding(finding); }}
                         className="ml-auto text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-1 border border-neutral-300 rounded hover:bg-neutral-100"
                       >
                         Accept Risk
+                      </button>
+                    )}
+                    {finding.acceptedRisk && onRevokeRisk && (
+                      <button
+                        onClick={() => handleRevoke(finding.id)}
+                        className="ml-auto text-sm font-medium text-neutral-600 hover:text-neutral-900 px-3 py-1 border border-neutral-300 rounded hover:bg-neutral-100"
+                      >
+                        Undo
                       </button>
                     )}
                   </div>
@@ -318,7 +362,7 @@ export function FindingsPanel({
                           </button>
                         </div>
                       </div>
-                    ) : (
+                    ) : onAddReply && (
                       <button
                         onClick={() => setReplyingTo(comment.id)}
                         className="text-sm px-3 py-1.5 text-blue-600 border border-blue-200 rounded hover:bg-blue-50 cursor-pointer transition-colors font-medium"
@@ -332,17 +376,70 @@ export function FindingsPanel({
             ))}
           </div>
 
-          <button
-            onClick={handleOpenCommentModal}
-            className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md border border-neutral-300 bg-white text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
-          >
-            <MessageSquare className="h-4 w-4" />
-            Add New Comment
-          </button>
+          {onAddComment && (
+            <button
+              onClick={handleOpenCommentModal}
+              className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md border border-neutral-300 bg-white text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Add New Comment
+            </button>
+          )}
         </div>
       </div>
 
       {/* ── Add Comment Modal ───────────────────────────────────────────────── */}
+      {acceptingFinding && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-lg mx-4 flex flex-col">
+            <div className="p-5 border-b border-neutral-200 flex items-start justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-neutral-900">Accept Risk</h2>
+                <p className="text-xs text-neutral-500 mt-0.5">{acceptingFinding.location}</p>
+              </div>
+              <button
+                onClick={() => setAcceptingFinding(null)}
+                className="p-1 hover:bg-neutral-100 rounded transition-colors"
+              >
+                <X className="h-4 w-4 text-neutral-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-neutral-800 leading-relaxed">{acceptingFinding.description}</p>
+              <div>
+                <label className="block text-xs font-medium text-neutral-700 mb-2">Reason</label>
+                <textarea
+                  value={acceptReason}
+                  onChange={(e) => setAcceptReason(e.target.value)}
+                  placeholder="Why is it acceptable to proceed with this finding open?"
+                  rows={4}
+                  className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm text-neutral-900 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+                <p className="text-xs text-neutral-400 mt-1">
+                  Recorded in the audit trail with your name and timestamp.
+                </p>
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-neutral-200 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setAcceptingFinding(null)}
+                className="px-4 py-2 text-sm text-neutral-700 border border-neutral-300 rounded-md hover:bg-neutral-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmAccept}
+                disabled={!acceptReason.trim() || accepting}
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {accepting ? 'Saving…' : 'Accept Risk'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {commentModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-lg mx-4 flex flex-col">

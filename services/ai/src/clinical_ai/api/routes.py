@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from clinical_ai.ai_service import AiService
 from clinical_ai.modules.protocol.rules import PROTOCOL_SECTION_TITLES
-from clinical_ai.modules.study_results.models import SuggestResultRequest, ResultSuggestion
+from clinical_ai.modules.study_results.models import SuggestResultRequest, ResultSuggestion, ResultSuggestionMetadata
 from clinical_ai.modules.protocol.models import (
     AnalyzeSectionRequest,
     AnalyzeSectionResponse,
@@ -76,9 +76,13 @@ async def analyze_synopsis(req: AnalyzeSynopsisRequest, ai: AiService = Depends(
     return await ai.analyzeSynopsis(req.text, req.targetMarkets)
 
 
-@router.post('/v1/ai/suggest-result', response_model=ResultSuggestion, dependencies=[Depends(require_internal_token)])
+@router.post('/v1/ai/suggest-result', response_model=ResultSuggestion | ResultSuggestionMetadata, dependencies=[Depends(require_internal_token)])
 async def suggest_result(req: SuggestResultRequest, ai: AiService = Depends(get_ai)):
-    return await ai.results.suggest(req)
+    result = await ai.results.suggest(req)
+    if req.tfl is None:
+        # Task 46 callers reject fields outside the original metadata contract.
+        return ResultSuggestionMetadata.model_validate(result.model_dump(exclude={'tflEvidence'}))
+    return result
 
 
 @router.post('/v1/ai/derive-scope-from-synopsis', dependencies=[Depends(require_internal_token)])
