@@ -273,8 +273,10 @@ finalized. These writes share a project lock with workflow transitions.
 
 ### New backend-to-AI attachment verification request
 
-After committing a document link, `verify(projectId, findingId, requestId)` loads the
-finding, its accepted requirement, and the chosen attachment. The AI adapter sends
+After committing a document link, `verify(projectId, findingId, requestId, actor)` loads the
+finding, its accepted requirement, and the chosen attachment. Both the link and
+verification audit events use the authenticated user who initiated the link;
+the verification message identifies the assessment as an AI check. The AI adapter sends
 only the finding text, requirement name, and selected attachment evidence to:
 
 ```http

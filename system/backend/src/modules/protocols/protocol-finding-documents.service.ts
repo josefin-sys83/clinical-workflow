@@ -77,7 +77,7 @@ export class ProtocolFindingDocumentsService {
       }, client);
       const result = await this.protocols.getByProject(projectId, client);
       await client.query('COMMIT');
-      if (verification) void this.verify(projectId, verification.id, verification.requestId).catch(() => {});
+      if (verification) void this.verify(projectId, verification.id, verification.requestId, actor).catch(() => {});
       return result;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -85,7 +85,7 @@ export class ProtocolFindingDocumentsService {
     } finally { client.release(); }
   }
 
-  private async verify(projectId: string, id: string, requestId: string) {
+  private async verify(projectId: string, id: string, requestId: string, actor: AuditActor) {
     const { rows } = await getPool().query(
       `select d.*,p.data,ps.section_key,ps.title,ps.content from protocol_section_issue d
        join protocol_section ps on ps.id=d.section_id join protocol pr on pr.id=ps.protocol_id
@@ -127,7 +127,7 @@ export class ProtocolFindingDocumentsService {
       );
       if (updated.length) await this.audit.record({
         projectId, stepId: 'protocol-make', type: 'protocol.finding.document.checked',
-        message: `Supporting document check: ${status}`, actor: { name: 'AI Document Review' },
+        message: `AI supporting document check: ${status}`, actor,
         entityType: 'protocol_section', entityId: decision.section_key,
         metadata: { attachmentId: decision.attachment_id, requirementId: decision.requirement_id, status, reason },
       }, client);
