@@ -82,6 +82,7 @@ const link = async () => {
 try {
   mount();
   await waitFor(() => list()?.textContent.includes('Missing PMCF plan'));
+  assert(list().querySelector('[data-finding-details] dd').textContent === 'PMCF Plan', 'Finding should display the linked requirement name');
   stage = 'requirement selection';
   const requirements = document.querySelector('[aria-label="Requirements covered by PMCF Plan v2.1"]');
   assert(requirements.querySelectorAll('input').length === 2, 'Only accepted requirements should be listed');
@@ -93,6 +94,7 @@ try {
   await link();
   assert(blockers() === '0', 'Checking document should immediately remove the blocker');
   await waitFor(() => control()?.textContent.includes('Satisfied by Appendix 4 - PMCF Plan v2.1'));
+  assert(section.issues[0].requirementId === 'req-1', 'Displaying the name must preserve the requirement ID for document linking');
   stage = 'refresh';
   root.unmount(); mount();
   await waitFor(() => control()?.textContent.includes('Satisfied by Appendix 4 - PMCF Plan v2.1'));

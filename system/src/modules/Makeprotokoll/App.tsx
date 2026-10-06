@@ -1149,6 +1149,7 @@ export default function App() {
                         section={section}
                         targetMarkets={projectData?.targetMarkets || []}
                         deviceCategory={projectData?.deviceCategory || ''}
+                        requirements={acceptedRequirements}
                         isExpanded={expandedSections.includes(section.id)}
                         onToggle={() => toggleSection(section.id)}
                         onNavigate={() => navigateToSection(section.id)}
@@ -1359,7 +1360,7 @@ export default function App() {
                             <p className="text-xs text-slate-600 leading-relaxed mb-2">
                               {issue.description}
                             </p>
-                            <FindingDetails finding={issue} />
+                            <FindingDetails finding={issue} requirements={acceptedRequirements} />
                             <FindingDocumentControl finding={issue} attachments={protocolAttachments} disabled={documentLinksLocked || generatingProtocol}
                               onDecide={(issueId, attachmentId) => handleFindingDocument(section.id, issueId, attachmentId)} />
 

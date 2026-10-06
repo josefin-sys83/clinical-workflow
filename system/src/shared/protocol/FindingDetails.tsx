@@ -1,16 +1,21 @@
 import { findingText, type IssueMetadata } from './issues';
 
 /** The same finding context appears in authoring and review cards. */
-export function FindingDetails({ finding }: { finding: IssueMetadata }) {
+export function FindingDetails({ finding, requirements = [] }: {
+  finding: IssueMetadata;
+  requirements?: readonly { id: string; title: string }[];
+}) {
+  const requirementId = findingText(finding.requirementId);
+  const requirementName = findingText(requirements.find(requirement => requirement.id === requirementId)?.title);
   const source = findingText(finding.source);
   const reference = findingText(finding.reference);
   const remediation = findingText(finding.remediation);
   return (
     <dl className="my-2 space-y-2 text-xs text-slate-700" data-finding-details>
-      {findingText(finding.requirementId) && (
+      {requirementId && (
         <div>
           <dt className="font-medium text-slate-900">Requirement</dt>
-          <dd className="break-words">{finding.requirementId}</dd>
+          <dd className="break-words">{requirementName || 'Linked requirement unavailable'}</dd>
         </div>
       )}
       <div>

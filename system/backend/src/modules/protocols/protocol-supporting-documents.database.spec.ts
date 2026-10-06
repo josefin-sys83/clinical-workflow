@@ -82,7 +82,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     const data = (await pool.query('select data from projects where id=$1', [projectId])).rows[0].data;
     expect((await attachments.supportingDocuments(projectId, data.scope.requirements))[0].requirementIds).toEqual(['req-1']);
     verifier.mockRestore();
-    await (documents as any).verify(projectId, finding.id, finding.verification_request_id);
+    await (documents as any).verify(projectId, finding.id, finding.verification_request_id, actor);
     expect((await protocols.getByProject(projectId)).sections[0].issues[0].documentLink.status).toBe('satisfied');
     await expect(assertNoProtocolBlockers(pool, projectId)).resolves.toBeUndefined();
     const unlinked = await documents.decide(projectId, '1', 'i-1', 'unlink', actor);
@@ -104,7 +104,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     // A late check for the removed row cannot attach to the recreated issue,
     // even when the AI reuses the same public ID, requirement, and description.
     verifier.mockRestore();
-    await (documents as any).verify(projectId, pending.id, pending.verification_request_id);
+    await (documents as any).verify(projectId, pending.id, pending.verification_request_id, actor);
     expect((await protocols.getByProject(projectId)).sections[0].issues[0]).not.toHaveProperty('documentLink');
     verifier = jest.spyOn(documents as any, 'verify').mockResolvedValue(undefined);
     await documents.decide(projectId, '1', 'i-1', 'document', actor, attachmentId);

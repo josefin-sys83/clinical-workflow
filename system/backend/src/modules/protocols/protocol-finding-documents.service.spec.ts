@@ -47,13 +47,23 @@ describe('protocol finding document decisions', () => {
     expect(insert[1][3]).toBe('reviewer');
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ actor, type: 'protocol.finding.document.linked', metadata: expect.objectContaining({ requirementId: 'req-1' }) }), expect.anything());
     expect(query).toHaveBeenLastCalledWith('COMMIT');
-    expect(verify).toHaveBeenCalledWith('project', insert[1][0], insert[1][2]);
+    expect(verify).toHaveBeenCalledWith('project', insert[1][0], insert[1][2], actor);
   });
 
   it('rejects an attachment outside this project without creating a decision', async () => {
     await expect(service.decide('project', '1', 'issue', 'document', actor, 'foreign')).rejects.toThrow('not found in this project');
     expect(query.mock.calls.some(([sql]) => sql.startsWith("update protocol_section_issue set attachment_id=$2"))).toBe(false);
     expect(query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('rolls back and does not start verification when the link audit fails', async () => {
+    audit.record.mockRejectedValue(new Error('Audit storage unavailable'));
+    await expect(service.decide('project', '1', 'issue', 'document', actor, 'file')).rejects.toThrow('Audit storage unavailable');
+    expect(query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(query).not.toHaveBeenCalledWith('COMMIT');
+    expect(verify).not.toHaveBeenCalled();
   });
 
   it.each(['document', 'unlink', 'risk_accepted'] as const)('refuses %s while out for signature or finalized', async action => {
@@ -68,18 +78,23 @@ describe('protocol finding document decisions', () => {
       issue_key: 'issue', severity: 'blocker', description: 'Missing plan', section_key: '1', title: 'Follow-up', content: 'CIP section', data: { scope: { requirements: [requirement] } } };
     if (status === 'failed') ai.checkFindingDocument.mockRejectedValue(new Error('AI endpoint unavailable'));
     else ai.checkFindingDocument.mockResolvedValue({ status, reason: 'Document evidence assessed' });
-    await (service as any).verify('project', 'decision', 'request');
+    await (service as any).verify('project', 'decision', 'request', actor);
     const update = query.mock.calls.find(([sql]) => sql.startsWith('update protocol_section_issue set verification_status=$4'))!;
     expect(update[1].slice(0, 4)).toEqual(['decision', 'request', 'file', status]);
     expect(query.mock.calls.some(([sql]) => sql.startsWith('delete from protocol_section_issue'))).toBe(false);
-    expect(ai.checkFindingDocument).toHaveBeenCalledWith(expect.objectContaining({ document, requirement: expect.objectContaining({ id: 'req-1' }), issue: expect.objectContaining({ id: 'issue', requirementId: 'req-1', description: 'Missing plan' }) }), 'project');
+    expect(ai.checkFindingDocument).toHaveBeenCalledWith(expect.objectContaining({ document, requirement: expect.objectContaining({ id: 'req-1' }), issue: expect.objectContaining({ id: 'issue', requirementId: 'req-1', description: 'Missing plan' }) }));
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'protocol.finding.document.checked', actor,
+      message: `AI supporting document check: ${status}`,
+      metadata: expect.objectContaining({ attachmentId: 'file', status }),
+    }), expect.anything());
   });
 
   it('ignores a late check when a newer request replaced the link', async () => {
     verify.mockRestore();
     existing = { attachment_id: 'file', requirement_id: 'req-1', verification_request_id: 'new-request',
       issue_key: 'issue', severity: 'blocker', description: 'Missing plan', data: { scope: { requirements: [requirement] } } };
-    await (service as any).verify('project', 'decision', 'old-request');
+    await (service as any).verify('project', 'decision', 'old-request', actor);
     expect(audit.record).not.toHaveBeenCalled();
     const update = query.mock.calls.find(([sql]) => sql.startsWith('update protocol_section_issue set verification_status=$4'))!;
     expect(update[0]).toContain('verification_request_id=$2');

@@ -8,6 +8,7 @@ type CommentType = 'general' | 'issue' | 'approval-request';
 
 interface FindingsPanelProps {
   findings: RegulatoryFinding[];
+  requirements?: readonly { id: string; title: string }[];
   comments: ReviewerComment[];
   aiFindings: AIFinding[];
   onFindingClick: (sectionId: string) => void;
@@ -26,6 +27,7 @@ interface FindingsPanelProps {
 
 export function FindingsPanel({
   findings,
+  requirements = [],
   comments,
   aiFindings,
   onFindingClick,
@@ -190,7 +192,7 @@ export function FindingsPanel({
                   <p className="text-sm text-neutral-900 mb-4 leading-relaxed">
                     {finding.description}
                   </p>
-                  <FindingDetails finding={{ ...finding, source: finding.requirementSource }} />
+                  <FindingDetails finding={{ ...finding, source: finding.requirementSource }} requirements={requirements} />
 
                   {finding.acceptedRisk && finding.acceptedBy && finding.acceptedAt && (
                     <div className="mb-4 p-2 bg-neutral-100 rounded text-xs text-neutral-600">

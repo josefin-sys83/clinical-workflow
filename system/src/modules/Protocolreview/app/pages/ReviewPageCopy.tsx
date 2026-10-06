@@ -37,6 +37,7 @@ export default function ReviewPageCopy() {
   const [projectData, setProjectData] = useState<any>(null);
   const [protocol, setProtocol] = useState<any>(null);
   const [roles, setRoles] = useState<any[]>([]);
+  const [acceptedRequirements, setAcceptedRequirements] = useState<Array<{ id: string; title: string }>>([]);
   const [loading, setLoading] = useState(true);
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ export default function ReviewPageCopy() {
             targetMarkets: p.targetMarkets || [],
           });
           setRoles(p.roles || []);
+          setAcceptedRequirements((p.data.scope?.requirements || []).filter((requirement: any) => requirement.status === 'accepted'));
           if (p.data.protocol) setProtocol(p.data.protocol);
         }
       })
@@ -364,6 +366,7 @@ export default function ReviewPageCopy() {
 
           <FindingsPanel
             findings={findings}
+            requirements={acceptedRequirements}
             comments={reviewerComments}
             aiFindings={aiFindings}
             onFindingClick={handleFindingClick}
