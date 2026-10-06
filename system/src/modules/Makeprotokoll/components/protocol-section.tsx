@@ -226,7 +226,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', requirements = [], isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
+  { section, targetMarkets = [], deviceCategory = '', requirements = [], isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onDirtyChange, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
