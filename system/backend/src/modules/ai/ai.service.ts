@@ -12,6 +12,7 @@ import { validateAiResponse } from './ai-response-contract';
 import type { SuggestResultDto } from '../results/dto';
 import type { AiResultSuggestion, TflContext } from '../results/tfl-mapping';
 import { logGenerateProtocolRequest } from '../../common/analysis-request-logger';
+import type { PreviousAnalysisDecision, LinkedAnalysisIssue } from '../protocols/protocol-analysis-history';
 
 export const PROTOCOL_SECTION_TITLES = [
   'Protocol Overview',
@@ -235,6 +236,8 @@ export class AiService {
     acceptedRequirements?: { name: string; description: string }[],
     protocolAttachments: { name: string; content: string; requirement: string }[] = [],
     projectId?: string,
+    previousDecisions: PreviousAnalysisDecision[] = [],
+    linkedIssues: LinkedAnalysisIssue[] = [],
   ): Promise<any> {
     return this.post('/v1/ai/analyze-section', {
       projectId,
@@ -248,6 +251,8 @@ export class AiService {
       crossSectionContext,
       acceptedRequirements,
       protocolAttachments,
+      previousDecisions,
+      linkedIssues,
     }, true);
   }
 

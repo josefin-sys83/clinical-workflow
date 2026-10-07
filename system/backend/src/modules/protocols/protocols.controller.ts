@@ -29,6 +29,7 @@ import { buildGenerationMetadataLog, buildProtocolGenerationContext, sourceSynop
 import { acceptedFindingRequirements, validateFindingRequirements } from '../projects/finding-requirements';
 import { ConflictException } from '@nestjs/common';
 import { isDeepStrictEqual } from 'node:util';
+import { sectionAnalysisHistory } from './protocol-analysis-history';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
@@ -254,10 +255,10 @@ export class ProtocolsController {
     if (!body.sectionId) throw new BadRequestException('sectionId is required');
     const { section, requestId } = await this.protocols.beginSectionAnalysis(projectId, body.sectionId, body.sectionContent, req?.user);
     try {
-      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements);
+      const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements, section);
       if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
-      await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, result, null, req?.user);
-      return result;
+      const saved = await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, result, null, req?.user, section.issues || []);
+      return { ...result, issues: saved?.issues || result.issues, requiredElements: saved?.requiredElements || result.requiredElements };
     } catch (error) {
       await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, null,
         error instanceof Error ? error.message : 'Section analysis failed', req?.user);
@@ -292,13 +293,13 @@ export class ProtocolsController {
     return { results };
   }
 
-  private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined) {
+  private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined, savedSection?: any) {
     const { aiProjectData, intendedUse } = buildProtocolGenerationContext(project);
     const targetMarkets = aiProjectData.targetMarkets;
     const deviceCategory = aiProjectData.deviceCategory;
 
     const protocol = project?.data?.protocol || {};
-    const section = (protocol.sections || []).find((s: any) => s.title === sectionTitle || s.id === sectionId);
+    const section = savedSection || (protocol.sections || []).find((s: any) => s.id === sectionId || (!sectionId && s.title === sectionTitle));
     const amendment = section?.amended && section?.amendmentId
       ? (protocol.amendments || []).find((a: any) => a.id === section.amendmentId) || null
       : null;
@@ -313,6 +314,11 @@ export class ProtocolsController {
 
     const requirements = project?.data?.scope?.requirements;
     const accepted = acceptedFindingRequirements(requirements);
+    const { previousDecisions, linkedIssues } = sectionAnalysisHistory(section, requirements);
+    const excludedRequirements = new Set((section?.issues || [])
+      .filter((issue: any) => issue.documentLink && issue.requirementId)
+      .map((issue: any) => issue.requirementId));
+    const filterLinkedRequirements = (issues: any[]) => issues.filter(issue => !excludedRequirements.has(issue.requirementId));
     const acceptedRequirements = accepted.map(({ title, description }) => ({ name: title, description }));
 
     const protocolAttachments = await this.attachments.supportingDocuments(project.id, requirements, true);
@@ -350,6 +356,7 @@ export class ProtocolsController {
       aiRequestSent: attachmentIssues.length === 0,
       endpoint: '/v1/ai/analyze-section',
       request: {
+        projectId: project.id,
         sectionTitle,
         sectionContent,
         targetMarkets,
@@ -360,6 +367,8 @@ export class ProtocolsController {
         crossSectionContext,
         acceptedRequirements,
         protocolAttachments: aiAttachments,
+        previousDecisions,
+        linkedIssues,
       },
       // Keep a metadata summary alongside the complete AI request payload.
       protocolAttachments: attachmentMetadata,
@@ -370,7 +379,7 @@ export class ProtocolsController {
     // integration is configured. Once fixed, the normal AI review runs below.
     if (attachmentIssues.length > 0) {
       return {
-        issues: validateFindingRequirements(mergeIssues(ruleIssues, attachmentIssues), requirements),
+        issues: filterLinkedRequirements(validateFindingRequirements(mergeIssues(ruleIssues, attachmentIssues), requirements)),
         requiredElements: requiredElements || [],
         analysisSource: 'deterministic',
       };
@@ -384,7 +393,7 @@ export class ProtocolsController {
       protocolAttachments: attachmentMetadata,
     }));
 
-    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments, project.id);
+    const result = await this.ai.analyzeSection(sectionTitle, sectionContent, targetMarkets, deviceCategory, intendedUse, requiredElementInputs, amendmentContext, crossSectionContext, acceptedRequirements, aiAttachments, project.id, previousDecisions, linkedIssues);
 
     if (result?.error) return result;
 
@@ -397,10 +406,10 @@ export class ProtocolsController {
     });
     // Deterministic rule-based checks always run alongside the AI analysis, so
     // regulatory-reference and specificity gaps are caught even if the AI misses them.
-    result.issues = validateFindingRequirements(mergeIssues(
+    result.issues = filterLinkedRequirements(validateFindingRequirements(mergeIssues(
       mergeIssues(validateFindingRequirements(aiIssues, requirements, 'ai'), ruleIssues),
       attachmentIssues,
-    ), requirements);
+    ), requirements));
     return result;
   }
 

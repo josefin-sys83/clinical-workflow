@@ -55,8 +55,9 @@ export class ProtocolFindingDocumentsService {
         await client.query(
           `update protocol_section_issue set attachment_id=null,verification_status=null,verification_request_id=null,
            verification_reason=null,verified_at=null,document_linked_by_user_id=null,document_linked_at=null,
-           status=case when $2 then 'resolved' else status end where id=$1`,
-          [findingId, action === 'risk_accepted'],
+           status=case when $2 then 'resolved' else status end,
+           wont_fix_reason=case when $2 then $3 else wont_fix_reason end where id=$1`,
+          [findingId, action === 'risk_accepted', reason?.trim() || null],
         );
         if (issue.documentLink) document = { id: issue.documentLink.attachmentId, label: issue.documentLink.label };
       } else {

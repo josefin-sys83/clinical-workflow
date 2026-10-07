@@ -463,7 +463,7 @@ function ProtocolSectionComponent(
 
   const renderContent = (content: string): string => {
     if (!content) return '';
-    const findings = analysisStatus === 'running' ? [] : (section.issues || []).filter(isOpenIssue);
+    const findings = (section.issues || []).filter(isOpenIssue);
     if (/<[a-z][\s\S]*>/i.test(content)) return highlightReviewHtml(sanitizeForRender(content), findings);
     // Legacy markdown fallback
     let h = content
@@ -962,7 +962,7 @@ function ProtocolSectionComponent(
 
             {/* 6. PROTOCOL CONTENT (EDITABLE) - Clearly Separated */}
             <ProtocolTextSeparator>
-              <ReviewRemediation findings={analysisStatus === 'running' ? [] : (isEditing ? editorFindings : openIssues)}>
+              <ReviewRemediation findings={isEditing ? editorFindings : openIssues}>
               {section.content ? (() => {
                 if (isEditing) {
                   const btnBase: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 4, border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', flexShrink: 0 };

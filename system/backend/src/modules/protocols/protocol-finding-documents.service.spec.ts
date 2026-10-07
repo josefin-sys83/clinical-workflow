@@ -82,7 +82,7 @@ describe('protocol finding document decisions', () => {
     const update = query.mock.calls.find(([sql]) => sql.startsWith('update protocol_section_issue set verification_status=$4'))!;
     expect(update[1].slice(0, 4)).toEqual(['decision', 'request', 'file', status]);
     expect(query.mock.calls.some(([sql]) => sql.startsWith('delete from protocol_section_issue'))).toBe(false);
-    expect(ai.checkFindingDocument).toHaveBeenCalledWith(expect.objectContaining({ document, requirement: expect.objectContaining({ id: 'req-1' }), issue: expect.objectContaining({ id: 'issue', requirementId: 'req-1', description: 'Missing plan' }) }));
+    expect(ai.checkFindingDocument).toHaveBeenCalledWith(expect.objectContaining({ document, requirement: expect.objectContaining({ id: 'req-1' }), issue: expect.objectContaining({ id: 'issue', requirementId: 'req-1', description: 'Missing plan' }) }), 'project');
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
       type: 'protocol.finding.document.checked', actor,
       message: `AI supporting document check: ${status}`,

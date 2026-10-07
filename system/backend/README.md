@@ -63,7 +63,9 @@ the backend-to-AI payloads; they do not establish the outcome of a live AI revie
 ### Backend changes and storage
 
 Apply [033_protocol_supporting_documents.sql](db/migrations/033_protocol_supporting_documents.sql)
-after the existing migrations.
+after the existing migrations. Apply
+[037_protocol_wont_fix_reason.sql](db/migrations/037_protocol_wont_fix_reason.sql)
+before running the updated backend to persist authoring "won't fix" reasons.
 
 | Table | Added fields and purpose |
 |---|---|
@@ -75,10 +77,11 @@ against accepted requirements in that project and validates attachment ownership
 There is no separate finding decision table. A finding can have one attachment link;
 an attachment can support several findings.
 
-Document links survive refresh and leaving the page while the current finding exists.
-Editing/re-analysis and regeneration replace findings and discard their links; there
-is no matching against previous findings. Direct requirement assignments on the
-attachment remain available independently of those findings.
+Finding IDs, quotes, document links, verification results, and human decisions survive
+section edits, re-analysis, refresh, and analysis failures. Re-analysis removes an
+unanswered finding only after an explicit AI assessment that it is fixed. Full protocol
+regeneration still replaces the generated findings. Direct requirement assignments on
+attachments remain available independently of those findings.
 
 PDF/DOCX/TXT extraction uses the shared document text helper and existing extraction
 engines. Extraction runs when text is requested and neither cached text nor an error
@@ -110,6 +113,7 @@ data and calls `POST /v1/ai/analyze-section` with this shape:
 
 ```json
 {
+  "projectId": "project-1",
   "sectionTitle": "Study Procedures & Assessments",
   "sectionContent": "The saved protocol section text...",
   "targetMarkets": ["EU", "US"],
@@ -141,7 +145,9 @@ data and calls `POST /v1/ai/analyze-section` with this shape:
       "content": "The text extracted from this particular attachment...",
       "requirement": "ISO 14155"
     }
-  ]
+  ],
+  "previousDecisions": [],
+  "linkedIssues": []
 }
 ```
 
@@ -151,7 +157,8 @@ and evidence stay in the backend. Amendment context includes `number`, `title`,
 `crossSectionContext` includes the title and content of every other populated section.
 
 `acceptedRequirements` is an array of `name`/`description` objects for accepted Scope
-requirements. Internal requirement IDs are kept in the backend. `synopsisExcerpt`
+requirements. Issue IDs are supplied in the analysis history metadata below;
+requirement IDs stay in the backend. `synopsisExcerpt`
 is omitted because the AI requirement-analysis prompts do not use it.
 
 Each attachment's requirement links combine direct assignments with accepted
@@ -159,7 +166,8 @@ requirement IDs from open findings linked to that attachment. For section analys
 a readable attachment is sent once per linked requirement, using that requirement's
 name in `protocolAttachments[].requirement`. Unlinked or unreadable attachments are
 omitted from the AI payload; their metadata and extraction errors remain available
-in the backend. No IDs, extraction errors, or file metadata are sent to the AI.
+in the backend. Extracted evidence contains names, content, and requirement names;
+linked-issue metadata is sent separately even when extraction fails.
 Each attachment's content has a 24,000-character AI service limit. HTTP 413 is
 propagated rather than silently truncating the evidence.
 
@@ -179,7 +187,6 @@ Example AI response:
 {
   "issues": [
     {
-      "id": "issue-1",
       "severity": "blocker",
       "subsection": "Assessment procedure",
       "description": "The required procedure is missing from the available evidence.",
@@ -213,6 +220,9 @@ The AI response includes `requirement`: the exact accepted requirement name, or
 otherwise the finding remains unlinked. `source` is display context and is not used
 to associate requirements.
 Legacy explicit IDs are still validated against accepted requirements.
+New findings omit `id`; the backend assigns a permanent UUID when saving them.
+Updated previous findings include `id` equal to the saved ID provided in the request.
+Legacy response-generated IDs on new findings are accepted but ignored.
 Allowed issue severities are `blocker`, `warning`, `cross_reference`,
 `recommendation`, and `human_decision_required`. Required element statuses are
 `complete`, `partial`, and `missing`.
@@ -223,6 +233,116 @@ schema is strict. Nullable issue fields (`requirement`, `source`, `targetSection
 `textQuote`) must be present; non-null strings must be nonblank. The backend saves
 validated findings on the section and records analysis as `succeeded`, or records
 `failed` and an error when analysis fails.
+
+### Analysis history contract: handoff to the AI team
+
+The backend sends these two additional arrays to `POST /v1/ai/analyze-section`:
+
+```json
+{
+  "previousDecisions": [
+    {
+      "issue_id": "finding-unanswered",
+      "requirement": "ISO 14155",
+      "severity": "warning",
+      "issue": "The assessment schedule is missing.",
+      "decision": "UNANSWERED",
+      "reason": null,
+      "textQuote": "Assessments will be performed."
+    },
+    {
+      "issue_id": "finding-dismissed",
+      "requirement": null,
+      "severity": "recommendation",
+      "issue": "Explain the optional exploratory endpoint.",
+      "decision": "WONT_FIX",
+      "reason": "This endpoint is outside the agreed study scope.",
+      "textQuote": null
+    }
+  ],
+  "linkedIssues": [
+    {
+      "issue_id": "finding-linked",
+      "requirement": "PMCF Plan",
+      "issue": "The PMCF plan is missing.",
+      "supportingDocuments": ["Appendix 4 - PMCF Plan.docx"]
+    }
+  ]
+}
+```
+
+`previousDecisions` contains every saved unlinked finding, including all five severity
+types. `issue_id` is the existing finding's stable ID to echo unchanged. `WONT_FIX` means
+the human decision must be respected; do not raise that concern again or assess it
+as fixed. `UNANSWERED` means reassess that concern against the current evidence.
+The backend supplies authoring "won't fix" reasons and persisted review risk-acceptance
+reasons. Historical authoring decisions without a stored reason use `null`.
+
+`linkedIssues` is separate from `previousDecisions`. For every entry, exclude its
+**entire requirement in this section** from generating new findings or assessing
+old findings. This applies regardless of document verification outcome or extraction
+availability. The separate document-verification flow owns that requirement's evidence
+assessment. Linking alone establishes this exclusion; direct attachment requirement
+assignments do not. Removing the issue's document link restores normal analysis of
+the requirement. References are metadata, not evidence of document sufficiency.
+`supportingDocuments` is a string array of linked document labels. The current storage
+supports one attachment link per finding, so the array currently contains that
+attachment's label. Attachment IDs stay in the backend and are not sent in this
+metadata. The top-level `protocolAttachments` continues to contain readable document
+objects with `name`, `content`, and `requirement`.
+`requirement` is the accepted
+requirement name; the backend excludes linked requirements using their stored IDs.
+Findings without document
+links are sent in `previousDecisions` instead.
+
+The AI team must extend request models, all relevant analysis prompts/stages, and the
+structured response schema. Return one assessment for each eligible `UNANSWERED`
+finding in the additional response array:
+
+```json
+{
+  "issues": [],
+  "requiredElements": [],
+  "satisfiedRequirements": [],
+  "previousIssueAssessments": [
+    {
+      "issue_id": "finding-unanswered",
+      "outcome": "fixed",
+      "reason": "The current section now specifies the assessment schedule.",
+      "textQuote": null
+    }
+  ]
+}
+```
+
+Every assessment field is required. `outcome` is `fixed`, `not_fixed`, or
+`not_evaluated`; `reason` must explain the assessment and be nonblank.
+For `not_fixed`, either omit the corresponding entry from `issues` to retain the
+saved finding, or return its updated details in `issues` with `id` equal to the
+previous finding's `issue_id`. Preserve that ID throughout the AI service; do not
+replace an existing finding's ID with a response-local number. Each update must be
+unique and have the same requirement as the previous finding. `textQuote` may supply
+a current exact quote for the highlight; otherwise use `null`. `fixed` and
+`not_evaluated` assessments must not have corresponding entries in `issues`.
+New, unrelated findings use `issues` without an `id`; the backend assigns their IDs.
+Only updates to previous findings echo a saved `id`. The AI team must stop generating
+response-local IDs for new findings. Do not repeat a concern marked
+fixed, invent previous references, or return duplicate assessments.
+
+The backend reconciles assessments against the current saved findings under the
+project lock. Explicitly fixed unanswered findings leave the active list; their full
+snapshot and resolution reason are retained in the analysis audit event. Unresolved
+matches retain their saved finding ID and original attribution, preserving highlights.
+Existing links and human decisions made during the AI call take precedence over its
+response. The browser receives the reconciled saved findings, rather than the raw AI
+issue list, and keeps existing findings visible during analysis and on failures.
+
+During rollout, `previousIssueAssessments` is optional so existing AI responses still
+work. Missing assessments, `not_evaluated`, and failures preserve previous findings;
+an absent issue in `issues` alone never deletes it. The backend already filters new
+findings for linked requirements, but semantic reassessment and suppression of
+reworded "won't fix" concerns require the AI team's changes. No Python files are
+changed in this implementation.
 
 ### New attachment-to-requirement endpoint
 
@@ -454,7 +574,8 @@ Override paths with `GENERATE_PROTOCOL_LOG_FILE` and `ANALYZE_SECTION_LOG_FILE`.
 In an analysis log entry:
 
 - `request` is the backend-to-AI request, including
-  `request.protocolAttachments[].content`.
+  `request.projectId`, `request.protocolAttachments[].content`,
+  `request.previousDecisions`, and `request.linkedIssues`.
 - The outer `protocolAttachments` is a metadata summary of the same attachments:
   IDs, labels, filenames, requirements, and extraction errors, without extracted text.
   It is for inspection of the log and is not an additional field sent to the AI.
@@ -463,6 +584,8 @@ In an analysis log entry:
 
 Generation logs contain the actual generation request, including the accepted
 requirement objects and their JSON-encoded representation.
+Both files contain outgoing requests, not AI responses. Analysis history is sent
+and logged for section analysis; full generation uses its own request contract.
 
 ### Protocol AI integration boundaries
 
@@ -471,10 +594,11 @@ Python to return internal requirement IDs. The attachment verification endpoint
 only evaluates evidence; the backend retains responsibility for link state,
 validation, document locks, and audit records.
 
-`previousDecisions` is optional in SCRUM-82 and is not currently sent. Full protocol
-generation uses its separate existing contract; its `scope.findingRequirements`
-field is not explicitly consumed by the current Python generation prompt. No
-Python changes are required for the analysis and verification payloads above.
+Section analysis now sends `previousDecisions` and `linkedIssues`; the AI team's
+required request, prompt, and response changes are described in the analysis history
+handoff above. Full protocol generation uses its separate existing contract; its
+`scope.findingRequirements` field is not explicitly consumed by the current Python
+generation prompt.
 
 ## Signing (RSA-SHA256)
 

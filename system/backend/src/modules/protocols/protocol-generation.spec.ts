@@ -189,7 +189,7 @@ describe('protocol generation', () => {
 
     await expect(controller.analyzeSection('project', {
       sectionId: '1', sectionTitle: 'Overview', sectionContent: editorHtml,
-    }, { user: actor })).resolves.toEqual({ issues: [] });
+    }, { user: actor })).resolves.toMatchObject({ issues: [] });
 
     expect(analyze.mock.calls[0][2]).toBe(savedHtml);
   });
@@ -221,21 +221,21 @@ describe('protocol generation', () => {
     expect(stored.sections[0].issues).toEqual([]);
   });
 
-  it('clears old findings during review, then persists the new result including an empty success', async () => {
+  it('keeps old findings during review and removes only explicitly fixed findings', async () => {
     stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [{ id: 'old', textQuote: 'Text' }], analysisStatus: 'succeeded' }] };
     jest.spyOn(controller as any, 'runSectionAnalysis').mockImplementation(async () => {
-      expect(stored.sections[0]).toMatchObject({ analysisStatus: 'running', issues: [] });
-      return { issues: [] };
+      expect(stored.sections[0]).toMatchObject({ analysisStatus: 'running', issues: [{ id: 'old' }] });
+      return { issues: [], previousIssueAssessments: [{ issue_id: 'old', outcome: 'fixed', reason: 'Current text addresses the concern', textQuote: null }] };
     });
     await controller.analyzeSection('project', { sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>' }, { user: actor });
     expect(stored.sections[0]).toMatchObject({ analysisStatus: 'succeeded', issues: [], analysisError: null });
   });
 
-  it('persists a failed review without restoring stale findings', async () => {
+  it('preserves existing findings when a review fails', async () => {
     stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [{ id: 'old' }] }] };
     jest.spyOn(controller as any, 'runSectionAnalysis').mockRejectedValue(new Error('Provider timed out'));
     await expect(controller.analyzeSection('project', { sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>' }, { user: actor })).rejects.toThrow('Provider timed out');
-    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'failed', analysisError: 'Provider timed out', issues: [] });
+    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'failed', analysisError: 'Provider timed out', issues: [{ id: 'old' }] });
   });
 
   it('uses the same saved review lifecycle for bulk section analysis', async () => {
@@ -244,7 +244,7 @@ describe('protocol generation', () => {
     ai.mapInBatches = async (items: any[], _size: number, fn: any) => Promise.all(items.map(fn));
     jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({ issues: [] });
     await controller.analyzeSections('project', {}, { user: actor });
-    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'succeeded', issues: [] });
+    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'succeeded', issues: [{ id: 'old' }] });
   });
 
 });

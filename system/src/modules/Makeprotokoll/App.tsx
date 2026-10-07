@@ -310,7 +310,7 @@ export default function App() {
       setSectionAnalyzing(prev => ({ ...prev, [sectionId]: (prev[sectionId] || 0) + 1 }));
       setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'running' }));
       setProtocol((prev: any) => !prev ? prev : ({ ...prev, sections: prev.sections.map((s: any) =>
-        s.id === sectionId ? { ...s, issues: [], analysisStatus: 'running', analysisError: null } : s) }));
+        s.id === sectionId ? { ...s, analysisStatus: 'running', analysisError: null } : s) }));
       setSectionAnalysisError(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
       try {
         const res = await fetch(apiBase + '/api/projects/' + projectId + '/analyze-section', {
@@ -344,7 +344,7 @@ export default function App() {
         setSectionAnalysisStatus(prev => ({ ...prev, [sectionId]: 'failed' }));
         setSectionAnalysisError(prev => ({ ...prev, [sectionId]: message }));
         setProtocol((prev: any) => !prev ? prev : ({ ...prev, sections: prev.sections.map((s: any) =>
-          s.id === sectionId ? { ...s, issues: [], analysisStatus: 'failed', analysisError: message } : s) }));
+          s.id === sectionId ? { ...s, analysisStatus: 'failed', analysisError: message } : s) }));
         return 0;
       } finally {
         if (epoch === protocolEpoch.current) {
@@ -412,7 +412,7 @@ export default function App() {
       ...prev,
       sections: prev.sections.map((s: any) => s.id === sectionId
         ? { ...s, content: saved.content, updatedAt: saved.updatedAt, revision: saved.revision,
-            issues: [], analysisStatus: 'not-run', analysisError: null }
+            analysisStatus: 'not-run', analysisError: null }
         : s),
     }));
 

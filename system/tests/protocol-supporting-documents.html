@@ -3,7 +3,7 @@
 <script type="module">
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import App from '/src/modules/Makeprotokoll/App.tsx';
 
@@ -44,7 +44,6 @@ window.fetch = async (input, init = {}) => {
   } else if (url.endsWith('/protocol/sections/1') && init.method === 'PATCH') { section.content = body.content; payload = { content: body.content, updatedAt: '2026-10-02' }; }
   else if (url.endsWith('/analyze-section')) {
     analysisCalls++;
-    section.issues = [{ ...finding, id: 'recreated', description: 'PMCF follow-up details missing from CIP' }];
     payload = { issues: section.issues, requiredElements: [] };
   } else if (url.endsWith('/projects/fixture')) payload = project;
   else if (url.endsWith('/attachments')) payload = [attachment];
@@ -58,8 +57,9 @@ const el = React.createElement;
 let root;
 const mount = () => {
   root = createRoot(document.getElementById('root'));
-  root.render(el(CurrentUserProvider, { user, status: 'ready' }, el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
-    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(App) })))));
+  root.render(el(CurrentUserProvider, { user, status: 'ready' }, el(RouterProvider, {
+    router: createMemoryRouter([{ path: '/projects/:projectId', element: el(App) }], { initialEntries: ['/projects/fixture'] }),
+  })));
 };
 const assert = (value, message) => { if (!value) throw new Error(message); };
 let stage = 'load';
@@ -104,17 +104,20 @@ try {
   await waitFor(() => document.querySelector('[contenteditable="true"]'));
   const editor = document.querySelector('[contenteditable="true"]');
   editor.innerHTML = '<p>Edited section referencing Appendix 4.</p>'; editor.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => !button('Save').disabled);
+  stage = 'save reason';
   button('Save').click();
   await waitFor(() => document.querySelector('textarea'));
   const textarea = document.querySelector('textarea');
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, 'Clarification');
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  stage = 'confirm save';
   await waitFor(() => !button('Confirm').disabled);
   button('Confirm').click();
-  await waitFor(() => analysisCalls === 1 && control()?.textContent.includes('Satisfied by document'));
-  assert(blockers() === '1', 'Reanalysis should replace the finding and discard its old link');
-  await link();
-  await waitFor(() => control()?.textContent.includes('Satisfied by Appendix 4'));
+  stage = 'linked finding after reanalysis';
+  await waitFor(() => analysisCalls === 1 && control()?.textContent.includes('Satisfied by Appendix 4'));
+  assert(blockers() === '0', 'Reanalysis should preserve the existing finding and document link');
+  assert(section.issues[0].id === 'i-1' && section.issues[0].documentLink.attachmentId === 'file', 'Finding identity and link must survive editing');
   stage = 'unlink';
   button('Remove link', control()).click();
   await waitFor(() => control()?.textContent.includes('Satisfied by document'));

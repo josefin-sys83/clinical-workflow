@@ -51,7 +51,7 @@ describe('protocol section analysis API contract', () => {
   it('sends only contract fields and logs the same request, with one attachment link per requirement', async () => {
     await analyze(controller);
     const args = ai.analyzeSection.mock.calls[0];
-    expect(args).toHaveLength(11);
+    expect(args).toHaveLength(13);
     expect(args[10]).toBe('project');
     expect(args[5]).toEqual([{ id: 'element', name: 'Schedule', reference: 'Define visits.' }]);
     expect(args[6]).toEqual({ number: 1, title: 'Visits', reason: 'Clarification', description: 'Visit windows' });
@@ -61,9 +61,11 @@ describe('protocol section analysis API contract', () => {
       name: document.label, content: document.extractedText, requirement,
     })));
     expect(logAnalyzeSectionRequest).toHaveBeenCalledWith(expect.objectContaining({ request: {
+      projectId: 'project',
       sectionTitle: args[0], sectionContent: args[1], targetMarkets: args[2], deviceCategory: args[3], intendedUse: args[4],
       requiredElements: args[5], amendmentContext: args[6], crossSectionContext: args[7],
       acceptedRequirements: args[8], protocolAttachments: args[9],
+      previousDecisions: [], linkedIssues: [],
     } }));
   });
 
@@ -74,7 +76,45 @@ describe('protocol section analysis API contract', () => {
     ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', requirement, source: null }], requiredElements: [], satisfiedRequirements: [] });
     const result = await analyze(controller);
     expect(result.issues[0].requirementId).toBe(requirementId);
-    expect(protocols.finishSectionAnalysis).toHaveBeenCalledWith('project', '1', 'request', result, null, undefined);
+    expect(protocols.finishSectionAnalysis).toHaveBeenCalledWith('project', '1', 'request', result, null, undefined, []);
+  });
+
+  it('uses saved history, sends links even without readable evidence, and suppresses new issues for their entire requirement', async () => {
+    const saved = { ...section, title: 'Saved title', issues: [
+      { id: 'linked', requirementId: 'req-1', severity: 'blocker', description: 'Missing plan',
+        documentLink: { attachmentId: 'unreadable', label: 'Appendix 5 - Plan', status: 'failed' } },
+      { id: 'dismissed', requirementId: 'req-2', severity: 'warning', description: 'Human decision', status: 'resolved', wontFixReason: 'Outside scope' },
+      ...['blocker', 'warning', 'cross_reference', 'recommendation', 'human_decision_required'].map(severity => ({
+        id: severity, severity, requirementId: 'req-2', description: `Previous ${severity}`, status: 'open', textQuote: 'Current section',
+      })),
+    ] };
+    protocols.beginSectionAnalysis.mockResolvedValue({ section: saved, requestId: 'request' });
+    protocols.finishSectionAnalysis.mockResolvedValue(saved);
+    attachments.supportingDocuments.mockResolvedValue([{ ...document, extractedText: '', extractionError: 'Unreadable' }]);
+    ai.analyzeSection.mockResolvedValue({ issues: [
+      { id: 'i-1', requirement: 'Follow-up', description: 'A different concern about the linked requirement' },
+      { id: 'i-2', requirement: 'Safety', description: 'Unrelated concern' },
+    ], requiredElements: [], satisfiedRequirements: [] });
+    const result = await analyze(controller);
+    const args = ai.analyzeSection.mock.calls[0];
+    expect(args[0]).toBe('Saved title');
+    expect(args[9]).toEqual([]);
+    expect(args[11]).toHaveLength(6);
+    expect(args[11][0]).toMatchObject({ issue_id: 'dismissed', decision: 'WONT_FIX', reason: 'Outside scope' });
+    expect(args[11].slice(1).map(decision => decision.decision)).toEqual(Array(5).fill('UNANSWERED'));
+    expect(args[12]).toEqual([{
+      issue_id: 'linked', requirement: 'Follow-up', issue: 'Missing plan',
+      supportingDocuments: ['Appendix 5 - Plan'],
+    }]);
+    expect(logAnalyzeSectionRequest).toHaveBeenLastCalledWith(expect.objectContaining({
+      request: expect.objectContaining({ projectId: 'project', previousDecisions: args[11], linkedIssues: args[12] }),
+    }));
+    expect(protocols.finishSectionAnalysis.mock.calls[0][3].issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'i-2', requirementId: 'req-2' }),
+    ]));
+    expect(protocols.finishSectionAnalysis.mock.calls[0][3].issues.some(issue => issue.requirementId === 'req-1')).toBe(false);
+    expect(protocols.finishSectionAnalysis.mock.calls[0][6]).toEqual(saved.issues);
+    expect(result.issues).toEqual(saved.issues);
   });
 
   it('keeps ambiguous requirement names unlinked', async () => {

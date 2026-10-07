@@ -13,6 +13,19 @@ const sectionAnalysis = (severity: unknown) => ({
 });
 
 describe('protocol analysis severity contract', () => {
+  it('accepts a new finding without a response-generated ID', () => {
+    const response: any = sectionAnalysis('warning');
+    delete response.issues[0].id;
+    expect(validateAiResponse('/v1/ai/analyze-section', response)).toEqual(response);
+  });
+
+  it('accepts an updated finding with its saved ID and assessment', () => {
+    const response = { ...sectionAnalysis('warning'), previousIssueAssessments: [{
+      issue_id: 'finding', outcome: 'not_fixed', reason: 'Evidence is still missing.', textQuote: null,
+    }] };
+    expect(validateAiResponse('/v1/ai/analyze-section', response)).toEqual(response);
+  });
+
   it('accepts the documented response without an internal requirement ID', () => {
     const response: any = sectionAnalysis('warning');
     delete response.issues[0].requirementId;

@@ -50,19 +50,48 @@ describe('protocol supporting document AI requests', () => {
       sectionTitle: 'Design', sectionContent: 'CIP', targetMarkets: [], deviceCategory: '', intendedUse: '',
       requiredElements: [], amendmentContext: null, crossSectionContext: [],
       acceptedRequirements: [{ name: 'PMCF', description: 'Follow-up' }], protocolAttachments: [evidence],
+      previousDecisions: [], linkedIssues: [],
     });
   });
 
-  it('accepts the Python response with an explicit requirement name and no source', async () => {
+  it('accepts a new finding without an ID, with an explicit requirement name and no source', async () => {
     const service = new AiService();
     const response = { issues: [{
-      id: 'finding', severity: 'warning', subsection: 'Design', description: 'Missing follow-up visits.',
+      severity: 'warning', subsection: 'Design', description: 'Missing follow-up visits.',
       requirement: 'PMCF', source: null, targetSection: null, remediation: null,
       raisedBy: 'AI Regulatory Review', raisedDate: '2026-10-05', status: 'open', dueDate: '7 days', textQuote: null,
     }], requiredElements: [], satisfiedRequirements: [] };
     jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify(response)));
     await expect(service.analyzeSection('Design', 'CIP', [], '', '', [], null, [],
       [{ name: 'PMCF', description: 'Follow-up' }])).resolves.toEqual(response);
+  });
+
+  it('sends analysis history and accepts explicit previous-finding assessments', async () => {
+    const service = new AiService();
+    const previousDecisions = [{ issue_id: 'saved', requirement: 'PMCF', severity: 'warning',
+      issue: 'Missing schedule', decision: 'UNANSWERED' as const, reason: null, textQuote: 'Visits planned' }];
+    const linkedIssues = [{ issue_id: 'linked', requirement: 'PMCF', issue: 'Missing plan',
+      supportingDocuments: [document.label, 'Appendix 5 - Follow-up Schedule.docx'] }];
+    const response = { issues: [], requiredElements: [], satisfiedRequirements: [], previousIssueAssessments: [
+      { issue_id: 'saved', outcome: 'fixed', reason: 'Schedule now supplied', textQuote: null },
+    ] };
+    const fetch = jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify(response)));
+    await expect(service.analyzeSection('Design', 'CIP', [], '', '', [], null, [], [], [], 'project',
+      previousDecisions, linkedIssues)).resolves.toEqual(response);
+    expect(JSON.parse((fetch.mock.calls[0][1] as any).body)).toMatchObject({ projectId: 'project', previousDecisions, linkedIssues });
+  });
+
+  it.each([
+    { issue_id: 'saved', outcome: 'unknown', reason: 'Reviewed', textQuote: null },
+    { issue_id: 'saved', outcome: 'fixed', reason: ' ', textQuote: null },
+    { issue_id: 'saved', outcome: 'fixed', reason: 'Reviewed' },
+    { issue_id: 'saved', outcome: 'fixed', reason: 'Reviewed', textQuote: null, unsupported: true },
+  ])('rejects malformed previous-finding assessments %p', async assessment => {
+    const service = new AiService();
+    jest.spyOn(service as any, 'fetchAiService').mockResolvedValue(new Response(JSON.stringify({
+      issues: [], requiredElements: [], satisfiedRequirements: [], previousIssueAssessments: [assessment],
+    })));
+    await expect(service.analyzeSection('Design', 'CIP', [], '', '')).rejects.toThrow('invalid response for analyze-section');
   });
 
   it('sends the project id so the AI service can read the project context', async () => {

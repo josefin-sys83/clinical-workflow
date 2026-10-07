@@ -47,7 +47,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     await pool.query(migration('022_protocol_attachments.sql').match(/create table if not exists protocol_attachment \([\s\S]*?\n\);/)![0]
       .replace(/project_id/g, 'protocol_id').replace('references projects(id)', 'references protocol(id)')
       .replace('uploaded_by_user_id text', 'uploaded_by_user_id uuid references users(id)'));
-    for (const name of ['029_section_analysis_state.sql', '030_protocol_ai_issue_metadata.sql', '031_protocol_issue_severity_constraint.sql', '032_finding_requirement_id.sql', '033_protocol_supporting_documents.sql']) {
+    for (const name of ['029_section_analysis_state.sql', '030_protocol_ai_issue_metadata.sql', '031_protocol_issue_severity_constraint.sql', '032_finding_requirement_id.sql', '033_protocol_supporting_documents.sql', '034_protocol_section_revision.sql', '036_protocol_risk_acceptance.sql', '037_protocol_wont_fix_reason.sql']) {
       await pool.query(migration(name));
     }
     await pool.query('insert into users(id,name) values($1,$2)', [actor.userId, actor.name]);
@@ -72,7 +72,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     if (admin) { await admin.query(`drop schema if exists ${schema} cascade`); await admin.end(); }
   });
 
-  it('persists current links, restores unlink severity, and discards links during edit/reanalysis and regeneration', async () => {
+  it('preserves finding identity and links through edits/reanalysis and retains human decisions', async () => {
     await attachments.updateRequirements(projectId, attachmentId, ['req-1'], actor);
     const linked = await documents.decide(projectId, '1', 'i-1', 'document', actor, attachmentId);
     expect(linked.sections[0].issues[0].documentLink).toMatchObject({ attachmentId, status: 'checking', decidedByUserId: actor.userId });
@@ -98,14 +98,14 @@ databaseTests('supporting documents in PostgreSQL', () => {
     await protocols.finishSectionAnalysis(projectId, '1', analysis.requestId, {
       issues: [{ id: 'i-1', severity: 'blocker', status: 'open', requirementId: 'req-1', description: 'Missing PMCF Plan' }],
     }, null, actor);
-    const recreated = (await protocols.getByProject(projectId)).sections[0].issues[0];
-    expect(recreated).not.toHaveProperty('documentLink');
-    expect((await attachments.supportingDocuments(projectId, data.scope.requirements))[0].requirementIds).toEqual([]);
-    // A late check for the removed row cannot attach to the recreated issue,
-    // even when the AI reuses the same public ID, requirement, and description.
+    const preserved = (await protocols.getByProject(projectId)).sections[0].issues[0];
+    expect(preserved.documentLink).toMatchObject({ attachmentId, status: 'checking' });
+    expect((await attachments.supportingDocuments(projectId, data.scope.requirements))[0].requirementIds).toEqual(['req-1']);
+    expect((await pool.query('select id from protocol_section_issue')).rows[0].id).toBe(pending.id);
+    // A pending assessment still belongs to the same surviving link after editing.
     verifier.mockRestore();
     await (documents as any).verify(projectId, pending.id, pending.verification_request_id, actor);
-    expect((await protocols.getByProject(projectId)).sections[0].issues[0]).not.toHaveProperty('documentLink');
+    expect((await protocols.getByProject(projectId)).sections[0].issues[0].documentLink.status).toBe('satisfied');
     verifier = jest.spyOn(documents as any, 'verify').mockResolvedValue(undefined);
     await documents.decide(projectId, '1', 'i-1', 'document', actor, attachmentId);
     await protocols.updateAtomic(projectId, current => ({ ...current, sections: current.sections.map((section: any) => ({ ...section, content: '<p>Regenerated CIP</p>', issues: [] })) }), actor);
@@ -119,8 +119,35 @@ databaseTests('supporting documents in PostgreSQL', () => {
     await protocols.finishSectionAnalysis(projectId, '1', review.requestId, {
       issues: [{ id: 'i-2', severity: 'blocker', status: 'open', requirementId: 'req-1', description: 'Missing PMCF Plan' }],
     }, null, actor);
-    expect((await protocols.getByProject(projectId)).sections[0].issues[0].status).toBe('open');
+    expect((await protocols.getByProject(projectId)).sections[0].issues[0]).toMatchObject({
+      status: 'resolved', wontFixReason: 'Addressed during follow-up',
+    });
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ type: 'protocol.finding.document.unlinked', actor }), expect.anything());
+  });
+
+  it('preserves unanswered findings on failure and deletes explicit fixes with an audit snapshot', async () => {
+    const previous = { id: 'unanswered', severity: 'warning', status: 'open', requirementId: 'req-1',
+      description: 'Visit schedule is missing', textQuote: 'Regenerated CIP', raisedBy: 'AI Regulatory Review', raisedDate: '2026-10-01' };
+    await protocols.updateAtomic(projectId, current => ({ ...current, sections: current.sections.map((section: any) => ({
+      ...section, issues: [...section.issues, previous],
+    })) }), actor);
+    const row = (await pool.query("select id from protocol_section_issue where issue_key='unanswered'")).rows[0];
+    const failed = await protocols.beginSectionAnalysis(projectId, '1', '<p>Regenerated CIP</p>', actor);
+    await protocols.finishSectionAnalysis(projectId, '1', failed.requestId, null, 'Provider unavailable', actor);
+    expect((await protocols.getByProject(projectId)).sections[0].issues).toContainEqual(expect.objectContaining(previous));
+    expect((await pool.query("select id from protocol_section_issue where issue_key='unanswered'")).rows[0].id).toBe(row.id);
+    const success = await protocols.beginSectionAnalysis(projectId, '1', '<p>Regenerated CIP</p>', actor);
+    await protocols.finishSectionAnalysis(projectId, '1', success.requestId, {
+      issues: [], previousIssueAssessments: [{ issue_id: 'unanswered', outcome: 'fixed',
+        reason: 'Current evidence includes the schedule', textQuote: null }],
+    }, null, actor, success.section.issues);
+    expect((await pool.query("select id from protocol_section_issue where issue_key='unanswered'")).rows).toEqual([]);
+    expect((await protocols.getByProject(projectId)).sections[0].issues[0]).toMatchObject({ status: 'resolved', wontFixReason: 'Addressed during follow-up' });
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'protocol.section.analyzed', actor, metadata: expect.objectContaining({
+        resolvedIssues: [expect.objectContaining({ ...previous, resolutionReason: 'Current evidence includes the schedule' })],
+      }),
+    }), expect.anything());
   });
 
   it('enforces the attachment foreign key and rejects requirement/link changes during signature', async () => {

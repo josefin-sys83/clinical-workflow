@@ -123,7 +123,7 @@ const checkCounts = (expectedCounts) => {
   for (const [severity, label] of Object.entries(severityLabels)) {
     const expected = expectedCounts[severity] || 0;
     const cards = list().querySelectorAll(`[data-finding-severity="${severity}"]`);
-    assert(cards.length === expected, `${severity} cards mismatch`);
+    assert(cards.length === expected, `${severity} cards mismatch: expected ${expected}, got ${cards.length}; ${list().textContent}`);
     const badge = [...(summary()?.querySelectorAll('button') || [])].find(b => b.textContent.includes(label));
     assert(expected ? badge?.textContent.trim() === `${expected} ${label}` : !badge, `${severity} counter mismatch`);
     for (const card of cards) assert(card.querySelector('span').textContent.trim() === label, `${severity} label mismatch`);
@@ -192,7 +192,7 @@ const save = async () => {
   button('Edit').click();
   await waitFor(() => document.querySelector('[contenteditable="true"]'));
   const editor = document.querySelector('[contenteditable="true"]');
-  editor.innerHTML = '<p>Updated eligibility criteria.</p>';
+  editor.innerHTML = `<p>Eligibility criteria.</p><p>Added clarification ${patchCalls + 1}.</p>`;
   editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
   await waitFor(() => !button('Save').disabled);
   button('Save').click();
@@ -335,14 +335,18 @@ try {
   assert(document.body.textContent.includes('these statuses are not blocker or warning severities'), 'Checklist scope unclear');
   assert(list().textContent.includes('counted in the section header'), 'Finding scope unclear');
 
-  // A save clears stale findings while analysis is pending; the returned result
-  // resolves the blocker and immediately updates both the list and summary.
+  // Findings remain visible while reanalysis runs. The backend's reconciled result
+  // then resolves the blocker and updates both the list and summary.
+  stage = 'retaining findings during reanalysis';
   await save();
-  await waitFor(() => !summary());
-  checkCounts({});
-  checkPanel(0, 0);
+  await waitFor(() => !document.querySelector('[contenteditable="true"]'));
+  checkCounts(Object.fromEntries(allSeverities.map(severity => [severity, 1])));
+  checkPanel(5, 5);
+  const retainedMark = [...document.querySelectorAll('mark[data-review-finding-ids]')]
+    .find(mark => JSON.parse(mark.dataset.reviewFindingIds).includes(blocker.id));
+  assert(retainedMark, 'A matching finding highlight disappeared while reanalysis was running');
   releaseAnalysis({ issues: [warning], requiredElements: section.requiredElements });
-  await waitFor(() => list().querySelector('[data-finding-id="warning"]'));
+  await waitFor(() => list().querySelector('[data-finding-id="warning"]') && !list().querySelector('[data-finding-id="blocker"]'));
   checkCounts({ warning: 1 });
   checkPanel(1, 1);
   assert(patchCalls === 1, 'Save did not persist the section exactly once');
@@ -366,6 +370,6 @@ try {
   assert(errors.length === 0, errors.join('; '));
   document.getElementById('result').textContent = `PASS: severity highlight colors and overlaps, finding metadata, reference and nulls, popup above every severity, accepted-risk highlight, keyboard and editor caret, Protocol Review, severity counts, Save, Won't fix, reanalysis (synopsis=${synopsisCount})`;
 } catch (error) {
-  document.getElementById('result').textContent = `FAIL: ${error.message}`;
+  document.getElementById('result').textContent = `FAIL: ${stage}: ${error.message}`;
 }
 </script></body></html>

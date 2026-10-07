@@ -7,6 +7,7 @@ import { AuditService, type AuditActor, type RecordAuditEvent } from '../audit/a
 import { protocolIssueSeverity } from './protocol-issue-severity';
 import { validateFindingRequirements } from '../projects/finding-requirements';
 import { withFindingDocumentLink } from './protocol-finding-state';
+import { reconcileSectionIssues } from './protocol-analysis-history';
 
 type Db = { query: PoolClient['query'] };
 type ProtocolAuditEvent = Omit<RecordAuditEvent, 'projectId' | 'actor'>;
@@ -179,26 +180,36 @@ export class ProtocolsService {
       if (!section || section.content !== sanitizeSectionHtml(content)) {
         throw new ConflictException('The section changed before analysis started. Reload it and retry analysis on the saved text.');
       }
-      analyzedSection = { ...section, issues: [], analysisStatus: 'running', analysisError: null, analysisRequestId: requestId };
+      analyzedSection = { ...section, analysisStatus: 'running', analysisError: null, analysisRequestId: requestId };
       return { ...current, sections: current.sections.map((s: any) => s.id === sectionId ? analyzedSection : s) };
     }, actor);
     return { section: analyzedSection, requestId };
   }
 
-  async finishSectionAnalysis(projectId: string, sectionId: string, requestId: string, result: any, error: string | null, actor?: AuditActor) {
-    await this.updateAtomic(projectId, current => {
+  async finishSectionAnalysis(projectId: string, sectionId: string, requestId: string, result: any, error: string | null, actor?: AuditActor, analyzedIssues?: any[]) {
+    let resolvedIssues: any[] = [];
+    const saved = await this.updateAtomic(projectId, current => {
       const section = current.sections?.find((s: any) => s.id === sectionId);
       if (!section || section.analysisRequestId !== requestId) {
         if (error) return current; // An old failure must not alter a newer edit/review.
         throw new ConflictException('The section changed during analysis. Retry analysis on the current text.');
       }
+      const reconciled = error ? { issues: section.issues || [], resolvedIssues: [] }
+        : reconcileSectionIssues(section, result, analyzedIssues);
+      resolvedIssues = reconciled.resolvedIssues;
       return { ...current, sections: current.sections.map((s: any) => s.id !== sectionId ? s : {
         ...s,
-        issues: error ? [] : result.issues,
+        issues: reconciled.issues,
         requiredElements: !error && result.requiredElements?.length ? result.requiredElements : s.requiredElements,
         analysisStatus: error ? 'failed' : 'succeeded', analysisError: error,
       }) };
-    }, actor);
+    }, actor, () => ({
+      type: error ? 'protocol.section.analysis_failed' : 'protocol.section.analyzed',
+      message: error ? 'Section analysis failed; existing findings preserved' : 'Section findings reconciled after analysis',
+      entityType: 'protocol_section', entityId: sectionId,
+      metadata: { requestId, error, resolvedIssues },
+    }));
+    return saved?.sections?.find((s: any) => s.id === sectionId);
   }
 
   async updateSection(
@@ -542,10 +553,15 @@ export class ProtocolsService {
         targetSection: row.target_section,
         remediation: row.remediation,
         raisedBy: row.raised_by,
-        raisedDate: row.raised_date ? String(row.raised_date).slice(0, 10) : null,
+        raisedDate: row.raised_date ? (row.raised_date instanceof Date
+          // pg parses SQL DATE at local midnight; UTC conversion can change the calendar date.
+          ? [row.raised_date.getFullYear(), String(row.raised_date.getMonth() + 1).padStart(2, '0'),
+              String(row.raised_date.getDate()).padStart(2, '0')].join('-')
+          : String(row.raised_date).slice(0, 10)) : null,
         status: row.status,
         dueDate: row.due_date,
         textQuote: row.text_quote,
+        wontFixReason: row.wont_fix_reason ?? null,
       }, row));
       issuesBySection.set(row.section_id, values);
     }
@@ -1311,8 +1327,6 @@ export class ProtocolsService {
     if (!rows[0]) throw new NotFoundException('Protocol section not found');
     await client.query(`update protocol_section set analysis_status='not-run', analysis_error=null, analysis_request_id=null
       where protocol_id=$1 and section_key=$2`, [protocolId, sectionKey]);
-    await client.query(`delete from protocol_section_issue where section_id in
-      (select id from protocol_section where protocol_id=$1 and section_key=$2)`, [protocolId, sectionKey]);
     await client.query(`update protocol set updated_at = $2 where id = $1`, [protocolId, now]);
     return {
       title: rows[0].title,

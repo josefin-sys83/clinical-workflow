@@ -9,7 +9,8 @@ const reviewedElement = element.extend({ status: z.enum(['complete', 'partial', 
 const issue = z.object({ description: text, severity: z.enum(['blocker', 'warning']) }).passthrough();
 
 const protocolIssue = z.object({
-  id: text,
+  // Updated previous findings echo their saved ID; new findings need no ID.
+  id: text.optional(),
   severity: protocolIssueSeverity,
   subsection: text,
   description: text,
@@ -70,6 +71,12 @@ const contracts: Record<string, z.ZodTypeAny> = {
       sourceName: text.nullable(),
       evidence: text,
     }).strict()),
+    previousIssueAssessments: z.array(z.object({
+      issue_id: text,
+      outcome: z.enum(['fixed', 'not_fixed', 'not_evaluated']),
+      reason: text,
+      textQuote: text.nullable(),
+    }).strict()).optional(),
   }).strict(),
   '/v1/ai/check-protocol-attachments': z.object({
     outcome: z.enum(['resolves', 'partially_resolves', 'does_not_resolve']),
