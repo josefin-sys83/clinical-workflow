@@ -238,6 +238,49 @@ describe('protocol generation', () => {
     expect(stored.sections[0]).toMatchObject({ analysisStatus: 'failed', analysisError: 'Provider timed out', issues: [{ id: 'old' }] });
   });
 
+  it('saves positive coverage from the section and attachment and returns it to the browser', async () => {
+    const coverage = [
+      { name: 'Follow-up schedule', status: 'satisfied', source: 'section', sourceName: null,
+        evidence: 'Visits occur at 30 days and 3 months.' },
+      { name: 'PMCF Plan', status: 'satisfied', source: 'attachment', sourceName: 'Appendix 4 - PMCF Plan.docx',
+        evidence: 'The plan includes follow-up procedures.' },
+    ];
+    stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [] }] };
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({
+      issues: [], requiredElements: [], satisfiedRequirements: coverage,
+    });
+    const result = await controller.analyzeSection('project', {
+      sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>',
+    }, { user: actor });
+    expect(stored.sections[0].satisfiedRequirements).toEqual(coverage);
+    expect(result.satisfiedRequirements).toEqual(coverage);
+  });
+
+  it('clears previous positive coverage when reanalysis returns an empty list', async () => {
+    stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [],
+      satisfiedRequirements: [{ name: 'Old coverage' }] }] };
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockResolvedValue({
+      issues: [], requiredElements: [], satisfiedRequirements: [],
+    });
+    const result = await controller.analyzeSection('project', {
+      sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>',
+    }, { user: actor });
+    expect(stored.sections[0].satisfiedRequirements).toEqual([]);
+    expect(result.satisfiedRequirements).toEqual([]);
+  });
+
+  it('keeps the last successful positive coverage when reanalysis fails', async () => {
+    const coverage = [{ name: 'PMCF Plan', status: 'satisfied', source: 'attachment',
+      sourceName: 'Appendix 4', evidence: 'The plan includes the schedule.' }];
+    stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [],
+      satisfiedRequirements: coverage }] };
+    jest.spyOn(controller as any, 'runSectionAnalysis').mockRejectedValue(new Error('Provider timed out'));
+    await expect(controller.analyzeSection('project', {
+      sectionId: '1', sectionTitle: 'Overview', sectionContent: '<p>Text</p>',
+    }, { user: actor })).rejects.toThrow('Provider timed out');
+    expect(stored.sections[0]).toMatchObject({ analysisStatus: 'failed', satisfiedRequirements: coverage });
+  });
+
   it('uses the same saved review lifecycle for bulk section analysis', async () => {
     stored = { sections: [{ id: '1', title: 'Overview', content: '<p>Text</p>', issues: [{ id: 'old' }] }] };
     projects.get.mockImplementation(async () => ({ data: { protocol: stored } }));

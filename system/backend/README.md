@@ -66,6 +66,8 @@ Apply [033_protocol_supporting_documents.sql](db/migrations/033_protocol_support
 after the existing migrations. Apply
 [037_protocol_wont_fix_reason.sql](db/migrations/037_protocol_wont_fix_reason.sql)
 before running the updated backend to persist authoring "won't fix" reasons.
+Apply [038_protocol_satisfied_requirements.sql](db/migrations/038_protocol_satisfied_requirements.sql)
+to persist satisfied requirements with their section.
 
 | Table | Added fields and purpose |
 |---|---|
@@ -228,8 +230,14 @@ Allowed issue severities are `blocker`, `warning`, `cross_reference`,
 `complete`, `partial`, and `missing`.
 
 Each satisfied requirement contains `name`, `status: "satisfied"`, `source`
-(`section` or `attachment`), nullable `sourceName`, and `evidence`. The response
-schema is strict. Nullable issue fields (`requirement`, `source`, `targetSection`, `remediation`,
+(`section` or `attachment`), nullable `sourceName`, and `evidence`. These items
+are saved in `protocol_section.satisfied_requirements` and returned when the protocol
+is reloaded. Every successful section analysis replaces the saved list, including
+an empty list; a failed analysis preserves the last successful results. Make Protocol
+shows the requirement, source (this section or named document), and evidence separately
+from findings and the required-element checklist. Retained coverage is labelled as
+coming from the last successful analysis while the section awaits a fresh result.
+The AI response schema is strict. Nullable issue fields (`requirement`, `source`, `targetSection`, `remediation`,
 `textQuote`) must be present; non-null strings must be nonblank. The backend saves
 validated findings on the section and records analysis as `succeeded`, or records
 `failed` and an error when analysis fails.

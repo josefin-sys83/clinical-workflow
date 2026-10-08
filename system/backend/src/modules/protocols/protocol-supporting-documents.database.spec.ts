@@ -47,7 +47,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     await pool.query(migration('022_protocol_attachments.sql').match(/create table if not exists protocol_attachment \([\s\S]*?\n\);/)![0]
       .replace(/project_id/g, 'protocol_id').replace('references projects(id)', 'references protocol(id)')
       .replace('uploaded_by_user_id text', 'uploaded_by_user_id uuid references users(id)'));
-    for (const name of ['029_section_analysis_state.sql', '030_protocol_ai_issue_metadata.sql', '031_protocol_issue_severity_constraint.sql', '032_finding_requirement_id.sql', '033_protocol_supporting_documents.sql', '034_protocol_section_revision.sql', '036_protocol_risk_acceptance.sql', '037_protocol_wont_fix_reason.sql']) {
+    for (const name of ['029_section_analysis_state.sql', '030_protocol_ai_issue_metadata.sql', '031_protocol_issue_severity_constraint.sql', '032_finding_requirement_id.sql', '033_protocol_supporting_documents.sql', '034_protocol_section_revision.sql', '036_protocol_risk_acceptance.sql', '037_protocol_wont_fix_reason.sql', '038_protocol_satisfied_requirements.sql']) {
       await pool.query(migration(name));
     }
     await pool.query('insert into users(id,name) values($1,$2)', [actor.userId, actor.name]);
@@ -148,6 +148,57 @@ databaseTests('supporting documents in PostgreSQL', () => {
         resolvedIssues: [expect.objectContaining({ ...previous, resolutionReason: 'Current evidence includes the schedule' })],
       }),
     }), expect.anything());
+  });
+
+  it('persists satisfied evidence across reloads and focused edits, replaces it on success, and retains it on failure', async () => {
+    const coverage = [
+      { name: 'PMCF Plan', status: 'satisfied', source: 'attachment', sourceName: 'Appendix 4 - PMCF Plan v2.1.txt',
+        evidence: 'The plan describes follow-up procedures.' },
+      { name: 'Follow-up schedule', status: 'satisfied', source: 'section', sourceName: null,
+        evidence: 'Visits occur at 30 days and 3 months.' },
+    ];
+    const content = (await protocols.getByProject(projectId)).sections[0].content;
+    const first = await protocols.beginSectionAnalysis(projectId, '1', content, actor);
+    expect(first.section.satisfiedRequirements).toEqual([]);
+    await protocols.finishSectionAnalysis(projectId, '1', first.requestId, {
+      issues: [], requiredElements: [], satisfiedRequirements: coverage,
+    }, null, actor, first.section.issues);
+    expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual(coverage);
+    expect((await pool.query('select satisfied_requirements from protocol_section')).rows[0].satisfied_requirements).toEqual(coverage);
+
+    const edited = await protocols.updateSection(projectId, '1', {
+      content: `${content}<p>Updated follow-up details.</p>`, reason: 'Clarification',
+    }, actor);
+    expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual(coverage);
+    // Older/focused payloads may omit coverage; they must not erase it.
+    await protocols.updateAtomic(projectId, current => ({ ...current,
+      sections: current.sections.map(({ satisfiedRequirements, ...section }: any) => section),
+    }), actor);
+    expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual(coverage);
+
+    const failed = await protocols.beginSectionAnalysis(projectId, '1', edited.content, actor);
+    await protocols.finishSectionAnalysis(projectId, '1', failed.requestId, null, 'Provider unavailable', actor);
+    expect((await protocols.getByProject(projectId)).sections[0]).toMatchObject({
+      analysisStatus: 'failed', satisfiedRequirements: coverage,
+    });
+
+    const next = await protocols.beginSectionAnalysis(projectId, '1', edited.content, actor);
+    await protocols.finishSectionAnalysis(projectId, '1', next.requestId, {
+      issues: [], satisfiedRequirements: [coverage[1]],
+    }, null, actor, next.section.issues);
+    expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual([coverage[1]]);
+
+    const stale = await protocols.beginSectionAnalysis(projectId, '1', edited.content, actor);
+    const latest = await protocols.beginSectionAnalysis(projectId, '1', edited.content, actor);
+    await expect(protocols.finishSectionAnalysis(projectId, '1', stale.requestId, {
+      issues: [], satisfiedRequirements: coverage,
+    }, null, actor)).rejects.toThrow('changed during analysis');
+    expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual([coverage[1]]);
+    await protocols.finishSectionAnalysis(projectId, '1', latest.requestId, {
+      issues: [], satisfiedRequirements: [],
+    }, null, actor, latest.section.issues);
+    expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual([]);
+    expect((await pool.query('select satisfied_requirements from protocol_section')).rows[0].satisfied_requirements).toEqual([]);
   });
 
   it('enforces the attachment foreign key and rejects requirement/link changes during signature', async () => {

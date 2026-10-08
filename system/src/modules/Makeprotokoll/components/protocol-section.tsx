@@ -15,6 +15,7 @@ import { AuditTrailModal } from '@/shared/components/AuditTrailModal';
 import { countIssueSeverities, getIssuePresentation, isOpenIssue, type IssueMetadata, type IssueSeverity } from '@/shared/protocol/issues';
 import { CommentsModal } from './comments-modal';
 import { SectionCompletenessIndicator } from './section-completeness-indicator';
+import { SatisfiedRequirements, type SatisfiedRequirement } from './satisfied-requirements';
 import { AmendmentWarning } from './amendment-warning';
 import { ProtocolTextSeparator, MetadataSeparator } from './protocol-text-separator';
 import { AIRoleClarityBanner } from './ai-role-clarity-banner';
@@ -83,6 +84,7 @@ interface ProtocolSectionProps {
     ownerRole?: string;
     issues?: ProtocolIssue[];
     requiredElements?: RequiredElement[];
+    satisfiedRequirements?: SatisfiedRequirement[];
     content?: string;
     approvalStatus?: string;
     approvedBy?: string;
@@ -753,6 +755,12 @@ function ProtocolSectionComponent(
                 />
               )
             )}
+
+            <SatisfiedRequirements
+              requirements={section.satisfiedRequirements || []}
+              isCurrent={analysisStatus === 'succeeded'}
+              sectionId={section.id}
+            />
 
             {/* 4. AI ROLE CLARITY - INSPECTION CRITICAL */}
             {/* Only show in REVIEW mode */}

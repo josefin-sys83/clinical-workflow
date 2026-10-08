@@ -8,6 +8,7 @@ import { protocolIssueSeverity } from './protocol-issue-severity';
 import { validateFindingRequirements } from '../projects/finding-requirements';
 import { withFindingDocumentLink } from './protocol-finding-state';
 import { reconcileSectionIssues } from './protocol-analysis-history';
+import { satisfiedRequirementsSchema } from './protocol-satisfied-requirements';
 
 type Db = { query: PoolClient['query'] };
 type ProtocolAuditEvent = Omit<RecordAuditEvent, 'projectId' | 'actor'>;
@@ -201,6 +202,8 @@ export class ProtocolsService {
         ...s,
         issues: reconciled.issues,
         requiredElements: !error && result.requiredElements?.length ? result.requiredElements : s.requiredElements,
+        // Replace positive coverage on success, including an empty result; preserve it on failure.
+        satisfiedRequirements: error ? s.satisfiedRequirements || [] : result.satisfiedRequirements || [],
         analysisStatus: error ? 'failed' : 'succeeded', analysisError: error,
       }) };
     }, actor, () => ({
@@ -694,6 +697,7 @@ export class ProtocolsService {
       riskAcceptances: acceptancesBySection.get(row.id) ?? [],
       issues: issuesBySection.get(row.id) ?? [],
       requiredElements: elementsBySection.get(row.id) ?? [],
+      satisfiedRequirements: row.satisfied_requirements ?? [],
     }));
 
     return {
@@ -955,8 +959,10 @@ export class ProtocolsService {
            protocol_id, section_key, section_number, position, title, content, status,
            review_status, locked, review_cycle, ai_generated, approval_status,
            approved_by_user_id, approved_by_name, approved_at, amended, amendment_id,
-           amendment_number, created_at, updated_at, analysis_status, analysis_error, analysis_request_id
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+           amendment_number, created_at, updated_at, analysis_status, analysis_error, analysis_request_id,
+           satisfied_requirements
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+           coalesce($24::jsonb, '[]'::jsonb))
          on conflict (protocol_id, section_key) do update set
            revision = case when protocol_section.content is distinct from excluded.content
              then protocol_section.revision + 1 else protocol_section.revision end,
@@ -972,6 +978,7 @@ export class ProtocolsService {
            analysis_status = excluded.analysis_status,
            analysis_error = excluded.analysis_error,
            analysis_request_id = excluded.analysis_request_id,
+           satisfied_requirements = coalesce($24::jsonb, protocol_section.satisfied_requirements),
            approval_status = excluded.approval_status,
            approved_by_user_id = coalesce(excluded.approved_by_user_id, protocol_section.approved_by_user_id),
            approved_by_name = excluded.approved_by_name,
@@ -1005,6 +1012,8 @@ export class ProtocolsService {
           section.analysisStatus || 'not-run',
           section.analysisError || null,
           section.analysisRequestId || null,
+          // Omitted coverage in a focused write must not erase the saved list.
+          section.satisfiedRequirements === undefined ? null : JSON.stringify(section.satisfiedRequirements),
         ],
       );
       const sectionId = String(rows[0].id);
@@ -1371,10 +1380,14 @@ export class ProtocolsService {
     );
     for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
       const section = sections[sectionIndex] || {};
-      for (const key of ['issues', 'requiredElements', 'comments']) {
+      for (const key of ['issues', 'requiredElements', 'satisfiedRequirements', 'comments']) {
         if (section[key] !== undefined && !Array.isArray(section[key])) {
           throw new BadRequestException(`Protocol section ${key} must be an array`);
         }
+      }
+      if (section.satisfiedRequirements !== undefined &&
+          !satisfiedRequirementsSchema.safeParse(section.satisfiedRequirements).success) {
+        throw new BadRequestException('Protocol section satisfiedRequirements must contain valid satisfied requirement evidence');
       }
       for (const issue of section.issues || []) {
         if (!protocolIssueSeverity.safeParse(issue?.severity).success) {

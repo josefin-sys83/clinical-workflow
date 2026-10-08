@@ -36,6 +36,17 @@ describe('protocol write transactions', () => {
     expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes('insert into protocol_section_issue'))).toBe(false);
   });
 
+  it.each([
+    { satisfiedRequirements: null },
+    { satisfiedRequirements: [{ name: 'PMCF', status: 'missing', source: 'section', sourceName: null, evidence: 'No evidence' }] },
+    { satisfiedRequirements: [{ name: 'PMCF', status: 'satisfied', source: 'unknown', sourceName: null, evidence: 'Evidence' }] },
+    { satisfiedRequirements: [{ name: 'PMCF', status: 'satisfied', source: 'section', sourceName: null, evidence: ' ' }] },
+  ])('rejects malformed satisfied coverage before writing the protocol: %p', async ({ satisfiedRequirements }) => {
+    await expect(service.save('project', { sections: [{ id: '1', satisfiedRequirements }] }, actor, client))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
   it('returns the saved requirement ID when a protocol is reloaded', async () => {
     client.query.mockImplementation(async (sql: string) => {
       if (sql.includes('from protocol where project_id')) return { rows: [{ id: 'protocol' }] };

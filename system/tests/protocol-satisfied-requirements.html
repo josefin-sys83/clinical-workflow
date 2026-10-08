@@ -1,0 +1,171 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import App from '/src/modules/Makeprotokoll/App.tsx';
+import '/src/styles/index.css';
+
+// Exercise the real Make Protocol load/save/reanalysis flow with persisted API fixtures.
+const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['author'] };
+const coverage = [
+  { name: 'Follow-up schedule', status: 'satisfied', source: 'section', sourceName: null,
+    evidence: 'Follow-up visits occur at 30 days and 3 months.' },
+  { name: 'PMCF Plan', status: 'satisfied', source: 'attachment', sourceName: 'Appendix 4 - PMCF Plan.docx',
+    evidence: 'The supporting plan describes monitoring and follow-up procedures.' },
+];
+const section = { id: '1', title: 'Protocol Overview', content: '<p>Follow-up is specified in Appendix 4.</p>',
+  status: 'draft', aiGenerated: true, analysisStatus: 'succeeded', issues: [], requiredElements: [],
+  satisfiedRequirements: coverage };
+const protocol = { status: 'draft', sections: [section] };
+const project = { id: 'fixture', targetMarkets: [], roles: [{ title: 'Protocol Lead', assignedTo: [user] }],
+  data: { projectData: {}, protocol, scope: { requirements: [
+    { id: 'req-1', title: 'Follow-up schedule', status: 'accepted' },
+    { id: 'req-2', title: 'PMCF Plan', status: 'accepted' },
+  ] } } };
+const errors = [];
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+let analysisCalls = 0;
+let releaseAnalysis;
+window.fetch = async (input, init = {}) => {
+  const url = String(input);
+  const body = init.body ? JSON.parse(init.body) : {};
+  let payload = {};
+  if (url.endsWith('/protocol/sections/1') && init.method === 'PATCH') {
+    section.content = body.content;
+    section.analysisStatus = 'not-run';
+    payload = { content: body.content, updatedAt: '2026-10-08', revision: analysisCalls + 2 };
+  } else if (url.endsWith('/analyze-section')) {
+    analysisCalls++;
+    section.analysisStatus = 'running';
+    return new Promise(resolve => {
+      releaseAnalysis = (satisfiedRequirements, failed = false) => {
+        section.analysisStatus = failed ? 'failed' : 'succeeded';
+        section.analysisError = failed ? 'Provider unavailable' : null;
+        if (!failed) section.satisfiedRequirements = satisfiedRequirements;
+        resolve(new Response(JSON.stringify(failed ? { message: 'Provider unavailable' } : {
+          issues: [], requiredElements: [], satisfiedRequirements,
+        }), { status: failed ? 502 : 200, headers: { 'Content-Type': 'application/json' } }));
+        releaseAnalysis = null;
+      };
+    });
+  } else if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: [] };
+  else if (url.endsWith('/workflow')) payload = { steps: { 'protocol-pdf': { state: 'draft' } } };
+  else if (url.endsWith('/milestones')) payload = { milestones: [] };
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+
+const el = React.createElement;
+let root;
+const mount = () => {
+  root = createRoot(document.getElementById('root'));
+  root.render(el(CurrentUserProvider, { user, status: 'ready' }, el(RouterProvider, {
+    router: createMemoryRouter([{ path: '/projects/:projectId', element: el(App) }], { initialEntries: ['/projects/fixture'] }),
+  })));
+};
+let stage = 'initial load';
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const panel = () => document.querySelector('[data-satisfied-requirements="1"]');
+const coverageToggle = () => panel()?.querySelector('[data-satisfied-requirements-toggle]');
+const button = text => [...document.querySelectorAll('button')].find(item => item.textContent.trim() === text);
+const waitFor = async predicate => {
+  for (let attempt = 0; attempt < 160; attempt++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out during ${stage}: ${errors.join('; ')}`);
+};
+const checkCoverage = expected => {
+  assert(panel()?.querySelectorAll('li').length === expected.length, 'Wrong satisfied requirement count');
+  for (const requirement of expected) {
+    const item = [...panel().querySelectorAll('li')].find(item => item.textContent.includes(requirement.name));
+    assert(item, `Missing requirement ${requirement.name}`);
+    assert(item.textContent.includes(requirement.source === 'section' ? 'This section' : requirement.sourceName), 'Wrong evidence source');
+    assert(item.querySelector('blockquote')?.textContent === requirement.evidence, 'Missing or changed evidence');
+  }
+};
+const save = async () => {
+  button('Edit').click();
+  await waitFor(() => document.querySelector('[contenteditable="true"]'));
+  const editor = document.querySelector('[contenteditable="true"]');
+  editor.innerHTML = `<p>Updated follow-up details ${analysisCalls + 1}.</p>`;
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => !button('Save').disabled);
+  button('Save').click();
+  await waitFor(() => document.querySelector('textarea'));
+  const textarea = document.querySelector('textarea');
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, 'Clarification');
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => !button('Confirm').disabled);
+  button('Confirm').click();
+  await waitFor(() => releaseAnalysis && !document.querySelector('[contenteditable="true"]'));
+};
+
+try {
+  mount();
+  await waitFor(() => panel());
+  checkCoverage(coverage);
+  assert(document.querySelector('[data-section-findings="1"]').textContent.includes('No open findings.'), 'Positive coverage should display without open findings');
+
+  stage = 'collapse and expand';
+  assert(coverageToggle().getAttribute('aria-expanded') === 'true', 'Coverage should start expanded');
+  assert(coverageToggle().getAttribute('aria-controls') === panel().querySelector('ul').id, 'Toggle must identify its list');
+  coverageToggle().click();
+  await waitFor(() => coverageToggle().getAttribute('aria-expanded') === 'false');
+  assert(panel().querySelector('ul').getClientRects().length === 0, 'Collapsed evidence must not remain visible');
+  assert(coverageToggle().textContent.includes('(2)'), 'Collapsed heading must retain its requirement count');
+  assert(section.satisfiedRequirements.length === 2, 'Collapsing must not change saved coverage');
+  coverageToggle().click();
+  await waitFor(() => panel().querySelector('ul').getClientRects().length > 0);
+  checkCoverage(coverage);
+
+  stage = 'reload';
+  root.unmount(); mount();
+  await waitFor(() => panel());
+  checkCoverage(coverage);
+
+  stage = 'successful replacement';
+  await save();
+  checkCoverage(coverage);
+  assert(panel().textContent.includes('last successful analysis'), 'Pending coverage needs its previous-analysis label');
+  coverageToggle().click();
+  await waitFor(() => coverageToggle().getAttribute('aria-expanded') === 'false');
+  const updated = [{ ...coverage[0], evidence: 'The revised section specifies visits at 30 and 90 days.' }];
+  releaseAnalysis(updated);
+  await waitFor(() => panel()?.querySelectorAll('li').length === 1 && !panel().textContent.includes('last successful analysis'));
+  assert(coverageToggle().getAttribute('aria-expanded') === 'false', 'Reanalysis should preserve the collapsed state');
+  assert(coverageToggle().textContent.includes('(1)'), 'Collapsed count must refresh after reanalysis');
+  coverageToggle().click();
+  await waitFor(() => coverageToggle().getAttribute('aria-expanded') === 'true');
+  checkCoverage(updated);
+  assert(!panel().textContent.includes('PMCF Plan'), 'Old document coverage was not replaced');
+
+  stage = 'failure preservation';
+  await save();
+  releaseAnalysis(null, true);
+  await waitFor(() => button('Retry'));
+  checkCoverage(updated);
+  assert(panel().textContent.includes('last successful analysis'), 'Failed analysis must not present old coverage as current');
+
+  stage = 'empty successful retry';
+  button('Retry').click();
+  await waitFor(() => releaseAnalysis);
+  releaseAnalysis([]);
+  await waitFor(() => !panel() && !button('Retry'));
+  assert(section.satisfiedRequirements.length === 0, 'Empty analysis must clear persisted coverage');
+
+  stage = 'reload after clearing';
+  root.unmount(); mount();
+  await waitFor(() => document.querySelector('[data-section-findings="1"]'));
+  assert(!panel(), 'Cleared coverage returned after reload');
+  assert(!errors.length, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: satisfied requirement sources/evidence, collapse/expand and counts, reload, replacement while collapsed, pending state, failure preservation, empty retry and reload';
+} catch (error) {
+  document.getElementById('result').textContent = `FAIL: ${error.message}`;
+}
+</script></body></html>

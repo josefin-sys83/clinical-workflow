@@ -326,6 +326,7 @@ export default function App() {
 
         let issuesArr: any[] = result.issues || (Array.isArray(result) ? result : []);
         const elements = result.requiredElements || [];
+        const satisfiedRequirements = result.satisfiedRequirements || [];
         const newOpenCount = issuesArr.filter((iss: any) => iss.status === 'open' || !iss.status).length;
         const resolvedCount = Math.max(0, prevOpenCount - newOpenCount);
         // The backend persisted this result against the exact section it analyzed.
@@ -333,7 +334,8 @@ export default function App() {
           ...prev,
           sections: prev.sections.map((s: any) =>
             s.id === sectionId && s.content === sectionContent
-              ? { ...s, issues: issuesArr, requiredElements: elements.length ? elements : s.requiredElements, analysisStatus: 'succeeded', analysisError: undefined }
+              ? { ...s, issues: issuesArr, requiredElements: elements.length ? elements : s.requiredElements,
+                  satisfiedRequirements, analysisStatus: 'succeeded', analysisError: undefined }
               : s),
         }));
         return resolvedCount;
@@ -791,6 +793,7 @@ export default function App() {
     ownerRole: 'Principal Investigator',
     issues: s.issues || [],
     requiredElements: s.requiredElements || [],
+    satisfiedRequirements: s.satisfiedRequirements || [],
     content: s.content || '',
     approvalStatus: s.approvalStatus || 'draft',
     approvedBy: s.approvedBy || '',

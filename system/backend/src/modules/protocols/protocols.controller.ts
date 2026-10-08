@@ -258,7 +258,12 @@ export class ProtocolsController {
       const result = await this.runSectionAnalysis(project, section.title, section.content, section.id, section.requiredElements, section);
       if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
       const saved = await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, result, null, req?.user, section.issues || []);
-      return { ...result, issues: saved?.issues || result.issues, requiredElements: saved?.requiredElements || result.requiredElements };
+      return {
+        ...result,
+        issues: saved?.issues || result.issues,
+        requiredElements: saved?.requiredElements || result.requiredElements,
+        satisfiedRequirements: saved?.satisfiedRequirements || result.satisfiedRequirements || [],
+      };
     } catch (error) {
       await this.protocols.finishSectionAnalysis(projectId, section.id, requestId, null,
         error instanceof Error ? error.message : 'Section analysis failed', req?.user);
@@ -381,6 +386,7 @@ export class ProtocolsController {
       return {
         issues: filterLinkedRequirements(validateFindingRequirements(mergeIssues(ruleIssues, attachmentIssues), requirements)),
         requiredElements: requiredElements || [],
+        satisfiedRequirements: [],
         analysisSource: 'deterministic',
       };
     }

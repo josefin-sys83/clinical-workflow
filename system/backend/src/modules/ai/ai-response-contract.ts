@@ -1,6 +1,7 @@
 import { BadGatewayException } from '@nestjs/common';
 import { z } from 'zod';
 import { protocolIssueSeverity } from '../protocols/protocol-issue-severity';
+import { satisfiedRequirementsSchema } from '../protocols/protocol-satisfied-requirements';
 
 const text = z.string().refine(value => value.trim().length > 0);
 const suggestionText = (max: number) => z.string().max(max).refine(value => value.trim().length > 0 && !value.includes('\0')).nullable();
@@ -64,13 +65,7 @@ const contracts: Record<string, z.ZodTypeAny> = {
   '/v1/ai/analyze-section': z.object({
     issues: z.array(protocolIssue),
     requiredElements: z.array(reviewedElement.extend({ evidence: text }).strict()),
-    satisfiedRequirements: z.array(z.object({
-      name: text,
-      status: z.literal('satisfied'),
-      source: z.enum(['section', 'attachment']),
-      sourceName: text.nullable(),
-      evidence: text,
-    }).strict()),
+    satisfiedRequirements: satisfiedRequirementsSchema,
     previousIssueAssessments: z.array(z.object({
       issue_id: text,
       outcome: z.enum(['fixed', 'not_fixed', 'not_evaluated']),
