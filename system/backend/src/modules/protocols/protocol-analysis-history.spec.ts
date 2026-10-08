@@ -62,6 +62,44 @@ describe('section analysis reconciliation', () => {
     expect(result.issues).toEqual([{ ...candidate, id: 'saved', raisedDate: original.raisedDate }]);
   });
 
+  it('updates only the quote when an unresolved assessment has no full returned finding', () => {
+    const result = reconcileSectionIssues({ issues: [original] }, {
+      issues: [], previousIssueAssessments: [assessment('not_fixed', { textQuote: 'Current passage' })],
+    });
+    expect(result.issues).toEqual([{ ...original, textQuote: 'Current passage' }]);
+    expect(result.resolvedIssues).toEqual([]);
+  });
+
+  it('keeps the assessment quote ahead of the full update quote', () => {
+    const update = { ...original, description: 'Updated concern', textQuote: 'Update passage' };
+    const result = reconcileSectionIssues({ issues: [original] }, {
+      issues: [update], previousIssueAssessments: [assessment('not_fixed', { textQuote: 'Assessment passage' })],
+    });
+    expect(result.issues).toEqual([{ ...update, textQuote: 'Assessment passage' }]);
+  });
+
+  it.each([
+    { description: 'Description edited during analysis' },
+    { requirementId: 'different-requirement' },
+  ])('preserves a finding changed during analysis instead of applying a stale fix: %p', changes => {
+    const current = { ...original, ...changes };
+    const result = reconcileSectionIssues({ issues: [current] }, {
+      issues: [], previousIssueAssessments: [assessment('fixed')],
+    }, [original]);
+    expect(result.issues).toEqual([current]);
+    expect(result.resolvedIssues).toEqual([]);
+  });
+
+  it('does not add a reworded AI update as a new finding after a concurrent human dismissal', () => {
+    const current = { ...original, status: 'resolved', wontFixReason: 'Outside scope' };
+    const update = { ...original, description: 'Reworded concern', textQuote: 'Updated passage' };
+    const result = reconcileSectionIssues({ issues: [current] }, {
+      issues: [update], previousIssueAssessments: [assessment()],
+    }, [original]);
+    expect(result.issues).toEqual([current]);
+    expect(result.resolvedIssues).toEqual([]);
+  });
+
   it.each(['checking', 'satisfied', 'warning', 'blocker', 'failed'])(
     'preserves links with verification status %s and suppresses every new issue for their requirement', status => {
       const linked = { ...original, documentLink: { ...link, status } };

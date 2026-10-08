@@ -30,7 +30,7 @@ const normalized = (value: unknown) => String(value || '').replace(/\s+/g, ' ').
 const identity = (issue: any) => JSON.stringify([issue.requirementId || null, normalized(issue.description)]);
 const acceptedRisk = (section: any, issue: any) => (section.riskAcceptances || []).find(
   (decision: any) => normalized(decision.description) === normalized(issue.description));
-const dismissed = (section: any, issue: any) => issue.status === 'resolved' || !!acceptedRisk(section, issue);
+const dismissed = (section: any, issue: any) => issue.status === 'resolved' || !!acceptedRisk(section, issue);//resolved is wont fix
 
 export function sectionAnalysisHistory(section: any, requirements: unknown) {
   const accepted = acceptedFindingRequirements(requirements);
@@ -55,64 +55,146 @@ export function sectionAnalysisHistory(section: any, requirements: unknown) {
   return { previousDecisions, linkedIssues };
 }
 
-/** Reconcile against the current locked records, preserving decisions made during the AI call. */
-export function reconcileSectionIssues(section: any, result: any, analyzedIssues: any[] = section.issues || []) {
-  const existing: any[] = section.issues || [];//old
-  const candidates: any[] = result.issues || [];//new**“New” means newly returned, not necessarily newly discovered.** The array can contain updated versions of existing findings as well as genuinely new findings.
-//contains open old issues and new issues.
-  const assessments: PreviousIssueAssessment[] = result.previousIssueAssessments || [];//{ "issue_id": "finding-open-1", "outcome": "not_fixed", "reason": "The assessment procedures remain insufficiently described.","textQuote": "Assessments will be performed at scheduled visits."}
- //`result.previousIssueAssessments` reports whether old issues are fixed.
-  const snapshot = new Map(analyzedIssues.map(issue => [issue.id, issue]));//`analyzedIssues` already contains the findings from when analysis started. This line organizes them for quick lookup; it doesn’t create another database record or clone the issue objects.
-  const excludedRequirements = new Set(existing.filter(issue => issue.documentLink).map(issue => issue.requirementId).filter(Boolean));
-  const byRef = new Map<string, PreviousIssueAssessment>();
-  const matchedCandidates = new Set<string>();
+interface ValidatedPreviousIssueAssessments {
+  analyzedIssuesById: Map<string, any>;
+  returnedIssuesById: Map<string, any[]>;
+  assessmentsByIssueId: Map<string, PreviousIssueAssessment>;
+  updatedPreviousIssueIds: Set<string>;
+}
+
+/** Check AI verdicts against the findings sent in the request, before applying any changes. */
+function validatePreviousIssueAssessments(
+  assessments: PreviousIssueAssessment[],
+  analyzedIssues: any[],
+  returnedIssues: any[],
+): ValidatedPreviousIssueAssessments {
+  // This is the request's starting snapshot, not the current DB version.
+  const analyzedIssuesById = new Map(analyzedIssues.map(issue => [issue.id, issue]));
+  // Keep all entries per ID so duplicate updates can be rejected, not overwritten.
+  const returnedIssuesById = new Map<string, any[]>();
+  for (const issue of returnedIssues) {
+    if (!issue.id) continue; // New findings don't need an ID from AI.
+    const entries = returnedIssuesById.get(issue.id) || [];
+    entries.push(issue);
+    returnedIssuesById.set(issue.id, entries);
+  }
+
+  const assessmentsByIssueId = new Map<string, PreviousIssueAssessment>();
+  const updatedPreviousIssueIds = new Set<string>();
   for (const assessment of assessments) {
-    if (!snapshot.has(assessment.issue_id) || byRef.has(assessment.issue_id) ||
+    const issueId = assessment.issue_id;
+    // Each verdict must identify a request finding, occur once, and have a valid outcome/reason.
+    if (!analyzedIssuesById.has(issueId) || assessmentsByIssueId.has(issueId) ||
         !['fixed', 'not_fixed', 'not_evaluated'].includes(assessment.outcome) || !assessment.reason?.trim()) {
       throw new BadGatewayException('AI returned an invalid assessment of a previous finding.');
     }
-    const updates = candidates.filter(issue => issue.id === assessment.issue_id);// `updates` contains returned findings whose ID matches assessment.issue_id.
-    if (updates.length) {//if one of the candidates returned by AI has the same ID as a previous finding and its status is anything but not_fixed, then throw an exception
-      const candidate = updates[0];
-      const original = snapshot.get(assessment.issue_id);
+
+    const updates = returnedIssuesById.get(issueId) || [];
+    if (updates.length) {
+      const analyzedIssue = analyzedIssuesById.get(issueId);
+      // Only unresolved findings may have returned updates; the saved requirement must stay the same.
       if (assessment.outcome !== 'not_fixed' || updates.length !== 1 ||
-          (candidate.requirementId || null) !== (original.requirementId || null)) {
+          (updates[0].requirementId || null) !== (analyzedIssue.requirementId || null)) {
         throw new BadGatewayException('AI returned an invalid match for a previous finding.');
       }
-      matchedCandidates.add(candidate.id);//2. **`matchedCandidates` — returned findings already associated with saved issues**
+      updatedPreviousIssueIds.add(issueId);
     }
-    byRef.set(assessment.issue_id, assessment);// the old issues id and its assesment
+    assessmentsByIssueId.set(issueId, assessment);
   }
+  // These IDs also prevent ignored updates to protected findings from being added as new findings.
+  return { analyzedIssuesById, returnedIssuesById, assessmentsByIssueId, updatedPreviousIssueIds };
+}
+
+/** Apply validated verdicts to current saved findings; keep removed findings separately for auditing. */
+function reconcileSavedIssues(
+  section: any,
+  returnedIssues: any[],
+  excludedRequirementIds: Set<string>,
+  validatedAssessments: ValidatedPreviousIssueAssessments,
+) {
+  const { analyzedIssuesById, returnedIssuesById, assessmentsByIssueId } = validatedAssessments;
   const issues: any[] = [];
   const resolvedIssues: any[] = [];
-  for (const issue of existing) {
-    const original = snapshot.get(issue.id);
-    const assessment = byRef.get(issue.id);
-    // Never reinterpret a link or human decision, or apply a stale finding assessment.
-    const protectedIssue = issue.documentLink || excludedRequirements.has(issue.requirementId) ||
-      dismissed(section, issue) || !original || identity(original) !== identity(issue) || original.documentLink;
-    if (!protectedIssue && assessment?.outcome === 'fixed') {
-      if (candidates.some(candidate => identity(candidate) === identity(issue))) {
+  for (const issue of section.issues || []) {
+    const analyzedIssue = analyzedIssuesById.get(issue.id);
+    const assessment = assessmentsByIssueId.get(issue.id);
+    const protectedIssue = issue.documentLink ||             // Currently handled by an attachment.
+      excludedRequirementIds.has(issue.requirementId) ||     // Another linked finding handles this requirement.
+      dismissed(section, issue) ||                          // Human won't-fix/risk-acceptance decision.
+      !analyzedIssue ||                                     // Added after this analysis started.
+      identity(analyzedIssue) !== identity(issue) ||         // Description or requirement changed during analysis.
+      analyzedIssue.documentLink;                           // Sent as linked, even if unlinked during analysis.
+
+    // Keep current DB fields if the verdict is absent, uncertain, or no longer safe to apply.
+    if (protectedIssue || !assessment || assessment.outcome === 'not_evaluated') {
+      issues.push({ ...issue });
+      continue;
+    }
+
+    if (assessment.outcome === 'fixed') {
+      // A fixed finding must not also appear among the returned unresolved findings.
+      if (returnedIssues.some(returned => identity(returned) === identity(issue))) {
         throw new BadGatewayException('AI marked a previous finding fixed but also raised the same finding.');
       }
+      // This is AI's removal explanation for the audit, separate from the human won't-fix reason.
       resolvedIssues.push({ ...issue, resolutionReason: assessment.reason });
       continue;
     }
-    const candidate = !protectedIssue && assessment?.outcome === 'not_fixed'// old issues that are not fixed and not protected. 
-      ? candidates.find(item => item.id === issue.id) : null;
-    issues.push(candidate ? {
-      ...issue, ...candidate, id: issue.id, raisedBy: issue.raisedBy, raisedDate: issue.raisedDate,
-      textQuote: assessment?.textQuote || candidate.textQuote || issue.textQuote,
-    } : { ...issue, ...(!protectedIssue && assessment?.outcome === 'not_fixed' && assessment.textQuote
-      ? { textQuote: assessment.textQuote } : {}) });
-  }
-  const known = new Set([...existing, ...issues].map(identity));
-  for (const candidate of candidates) {
-    if (excludedRequirements.has(candidate.requirementId) || matchedCandidates.has(candidate.id) || known.has(identity(candidate))) 
+
+    // The remaining outcome is not_fixed. A full update is optional in this contract.
+    const update = returnedIssuesById.get(issue.id)?.[0];
+    if (!update) {
+      // Preserve the current contract's quote-only fallback when AI returns no full update.
+      const retainedIssue = { ...issue };
+      if (assessment.textQuote) retainedIssue.textQuote = assessment.textQuote;
+      issues.push(retainedIssue);
       continue;
+    }
+
+    // Apply the update while preserving the finding's permanent ID and original attribution.
+    issues.push({
+      ...issue,
+      ...update,
+      id: issue.id,
+      raisedBy: issue.raisedBy,
+      raisedDate: issue.raisedDate,
+      textQuote: assessment.textQuote || update.textQuote || issue.textQuote,
+    });
+  }
+  return { issues, resolvedIssues };
+}
+
+/** Reconcile against the current locked records, preserving decisions made during the AI call. */
+export function reconcileSectionIssues(section: any, result: any, analyzedIssues: any[] = section.issues || []) {
+  // Includes linked and won't-fix findings, but not previously deleted fixed findings.
+  const savedIssues: any[] = section.issues || [];
+  // Includes updates to unresolved findings and newly discovered findings.
+  const returnedIssues: any[] = result.issues || [];
+  const assessments: PreviousIssueAssessment[] = result.previousIssueAssessments || [];
+  const excludedRequirementIds = new Set<string>(savedIssues
+    .filter(issue => issue.documentLink)
+    .map(issue => issue.requirementId)
+    .filter(Boolean));
+
+  // 1. Validate the AI response against the findings present when the request started.
+  const validatedAssessments = validatePreviousIssueAssessments(assessments, analyzedIssues, returnedIssues);
+
+  // 2. Apply it to current DB findings, giving document links and human decisions precedence.
+  const { issues, resolvedIssues } = reconcileSavedIssues(
+    section, returnedIssues, excludedRequirementIds, validatedAssessments,
+  );
+
+  // 3. Add new concerns, skipping excluded requirements, previous updates, and duplicate concerns.
+  const knownIssueIdentities = new Set([...savedIssues, ...issues].map(identity));
+  for (const returnedIssue of returnedIssues) {
+    const returnedIdentity = identity(returnedIssue);
+    if (excludedRequirementIds.has(returnedIssue.requirementId) ||
+        validatedAssessments.updatedPreviousIssueIds.has(returnedIssue.id) || knownIssueIdentities.has(returnedIdentity)) {
+      continue;
+    }
     // New findings receive permanent IDs here; ignore any response-generated ID.
-    issues.push({ ...candidate, id: `finding-${randomUUID()}` });
-    known.add(identity(candidate));
+    issues.push({ ...returnedIssue, id: `finding-${randomUUID()}` });
+    knownIssueIdentities.add(returnedIdentity);
   }
   return { issues, resolvedIssues };
 }
