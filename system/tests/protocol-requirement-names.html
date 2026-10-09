@@ -3,7 +3,7 @@
 <script type="module">
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import App from '/src/modules/Makeprotokoll/App.tsx';
 import ReviewPage from '/src/modules/Protocolreview/app/pages/ReviewPageCopy.tsx';
@@ -20,12 +20,12 @@ const issues = cases.map(item => ({ ...item, description: `Finding ${item.id}`, 
   severity: 'blocker', status: 'open', raisedBy: 'Writer', source: 'EU MDR Article 61 and IMDRF N41' }));
 const section = { id: '1', title: 'Study Rationale & Objectives', content: '<p>Study rationale.</p>',
   status: 'draft', aiGenerated: true, analysisStatus: 'succeeded', issues, requiredElements: [] };
-const project = { id: 'fixture', targetMarkets: [], roles: [], data: { projectData: {},
-  protocol: { status: 'draft', sections: [section] }, scope: { requirements: [
+const project = { id: 'fixture', targetMarkets: [], roles: [], requirements: [
     { id: 'req-8', title: 'Real-World Performance Monitoring Plan', status: 'accepted' },
     { id: 'blank-title', title: '   ', status: 'accepted' },
     { id: 'suggested', title: 'Unaccepted requirement', status: 'suggested' },
-  ] },
+  ], data: { projectData: {},
+  protocol: { status: 'draft', sections: [section] }, scope: {  },
 } };
 const errors = [];
 window.addEventListener('error', event => errors.push(event.message));
@@ -42,8 +42,8 @@ window.fetch = async input => {
 };
 const el = React.createElement;
 const mount = (root, Component) => root.render(el(CurrentUserProvider, { user, status: 'ready' },
-  el(MemoryRouter, { initialEntries: ['/projects/fixture'] },
-    el(Routes, null, el(Route, { path: '/projects/:projectId', element: el(Component) })))));
+  el(RouterProvider, { router: createMemoryRouter([{ path: '/projects/:projectId', element: el(Component) }],
+    { initialEntries: ['/projects/fixture'] }) })));
 const assert = (value, message) => { if (!value) throw new Error(message); };
 const waitFor = async predicate => {
   for (let attempt = 0; attempt < 160; attempt++) {

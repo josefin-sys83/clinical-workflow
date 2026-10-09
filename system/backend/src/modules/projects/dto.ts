@@ -10,6 +10,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { NoNullBytes } from '../../common/no-null-bytes.decorator';
+import type { ProjectRequirement } from './project-requirements';
 
 // class-validator's @IsNotEmpty() only rejects '', null, and undefined — a string of
 // nothing but whitespace passes it, which let "Create Project" (see NewProjectDialog,
@@ -21,6 +22,11 @@ const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
 export class CreateProjectDto {
+  @ApiProperty({ required: false, type: Array })
+  @IsOptional()
+  @IsArray()
+  @NoNullBytes()
+  requirements?: ProjectRequirement[];
   @ApiProperty({ example: 'Acme Study 2026-01' })
   @Transform(trim)
   @IsString()
@@ -87,6 +93,11 @@ export class CreateProjectDto {
 // blob for synopsis, scope, and other not-yet-normalized details. Reports use dedicated endpoints. The
 // protocol compatibility key is intercepted and persisted relationally.
 export class UpdateProjectDto {
+  @ApiProperty({ required: false, type: Array })
+  @IsOptional()
+  @IsArray()
+  @NoNullBytes()
+  requirements?: ProjectRequirement[];
   @ApiProperty({ required: false })
   @Transform(trim)
   @IsOptional()

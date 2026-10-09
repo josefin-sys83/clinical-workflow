@@ -52,9 +52,10 @@ describe('protocol generation', () => {
   it('uses the intended use saved in scope', async () => {
     projects.get.mockResolvedValue({
       name: 'Study', risk: 'IIa', deviceCategory: 'active', targetMarkets: ['EU'], roles: [],
+      requirements: [],
       data: {
         projectData: { sponsor: 'Sponsor', deviceName: 'Device' },
-        scope: { intendedUse: 'diagnostic', requirements: [] },
+        scope: { intendedUse: 'diagnostic' },
       },
     });
 

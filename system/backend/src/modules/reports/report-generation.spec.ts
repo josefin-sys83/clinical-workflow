@@ -55,9 +55,10 @@ describe('report generation', () => {
   it('uses relational metadata and the intended use saved in scope', async () => {
     projects.get.mockResolvedValue({
       name: 'Canonical study', risk: 'IIa', deviceCategory: 'active', targetMarkets: ['EU'], roles: [],
+      requirements: [],
       data: {
         projectData: { sponsor: 'Sponsor', deviceName: 'Device' },
-        scope: { intendedUse: 'diagnostic', requirements: [] },
+        scope: { intendedUse: 'diagnostic' },
         protocol: { sections: [] },
       },
       report: { sections: {} },

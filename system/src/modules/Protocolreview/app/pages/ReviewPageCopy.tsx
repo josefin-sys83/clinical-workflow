@@ -60,7 +60,7 @@ export default function ReviewPageCopy() {
             targetMarkets: p.targetMarkets || [],
           });
           setRoles(p.roles || []);
-          setAcceptedRequirements((p.data.scope?.requirements || []).filter((requirement: any) => requirement.status === 'accepted'));
+          setAcceptedRequirements(p.requirements.filter((requirement: any) => requirement.status === 'accepted'));
           if (p.data.protocol) setProtocol(p.data.protocol);
         }
       })

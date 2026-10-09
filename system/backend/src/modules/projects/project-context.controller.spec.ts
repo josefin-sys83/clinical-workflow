@@ -9,15 +9,15 @@ const project = {
   risk: 'III',
   deviceCategory: 'aimd',
   targetMarkets: ['EU', 'FDA'],
+  requirements: [
+    { id: 'r1', title: 'PMCF plan', description: 'MDR Annex XIV', status: 'accepted' },
+    { id: 'r2', title: 'Not chosen', description: '', status: 'not-applicable' },
+  ],
   data: {
     projectData: { sponsor: 'Nordkap Medical AB', deviceName: 'CardioSense LP' },
     scope: {
       intendedUse: 'other-custom',
       customIntendedUse: 'Leadless single-chamber pacing.',
-      requirements: [
-        { id: 'r1', title: 'PMCF plan', description: 'MDR Annex XIV', status: 'accepted' },
-        { id: 'r2', title: 'Not chosen', description: '', status: 'not-applicable' },
-      ],
     },
     synopsis: { extractedText: 'Synopsis text' },
   },

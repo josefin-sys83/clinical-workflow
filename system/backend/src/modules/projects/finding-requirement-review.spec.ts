@@ -12,11 +12,12 @@ describe.each(['protocol', 'report'])('%s section finding requirements', kind =>
   let run: () => Promise<any>;
   beforeEach(() => {
     const projects: any = { get: jest.fn().mockResolvedValue({
-      id: 'project', targetMarkets: [], data: {
-        scope: { requirements: [
-          { id: 'req-1', title: 'Safety', description: 'Monitoring', status: 'accepted' },
-          { id: 'req-2', title: 'Suggested', status: 'suggested' },
-        ] },
+      id: 'project', targetMarkets: [], requirements: [
+        { id: 'req-1', title: 'Safety', description: 'Monitoring', status: 'accepted' },
+        { id: 'req-2', title: 'Suggested', status: 'suggested' },
+      ],
+      data: {
+        scope: {},
         protocol: { sections: [section] },
       },
     }) };
@@ -50,7 +51,8 @@ describe.each(['protocol', 'report'])('%s section finding requirements', kind =>
     }
     expect(result.issues[0].requirementId).toBe('req-1');
     expect(storage.finishSectionAnalysis).toHaveBeenCalledWith('project', '1', 'request',
-      expect.objectContaining({ issues: expect.arrayContaining([expect.objectContaining({ requirementId: 'req-1' })]) }), null, actor);
+      expect.objectContaining({ issues: expect.arrayContaining([expect.objectContaining({ requirementId: 'req-1' })]) }), null, actor,
+      ...(kind === 'protocol' ? [[]] : []));
   });
 
   it.each(['invented', 'req-2', ...(kind === 'report' ? [undefined] : [])])('marks analysis failed instead of saving an invalid AI link: %p', requirementId => {

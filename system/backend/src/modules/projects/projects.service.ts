@@ -11,7 +11,7 @@ import { AuditService } from "../audit/audit.service";
 import type { AuditActor, RecordAuditEvent } from "../audit/audit.service";
 import { ProtocolsService } from "../protocols/protocols.service";
 import { ReportsService } from "../reports/reports.service";
-import { withAcceptedBaselineRequirements } from './baseline-requirements';
+import { assertNoEmbeddedRequirements, listProjectRequirements, replaceProjectRequirements, type ProjectRequirement } from './project-requirements';
 
 export type ProjectAuditEvent = Omit<RecordAuditEvent, "projectId" | "actor">;
 
@@ -33,6 +33,7 @@ export type Project = {
   deviceCategory: string | null;
   status: "active" | "completed";
   data?: any;
+  requirements: ProjectRequirement[];
   report?: any;
   signatures?: any[];
   targetMarkets: string[];
@@ -168,10 +169,11 @@ export class ProjectsService {
     const report = await this.reports.getByProject(id);
     const reportSignatures = await this.reports.getSignaturesByProject(id);
     const { signatures: _signatures, ...responseData } = projectData;
-    responseData.scope = withAcceptedBaselineRequirements(responseData.scope, await this.getProjectStandards(id));
+    const requirements = await listProjectRequirements(id);
 
     return {
       ...p,
+      requirements,
       report,
       signatures: [...reportSignatures, ...protocolSignatures],
       // Compatibility response only. Protocol rows are authoritative; this does not
@@ -246,7 +248,7 @@ export class ProjectsService {
     return marketCodes;
   }
 
-  private async replaceProjectStandards(
+  private async syncProjectStandards(
     client: PoolClient,
     projectId: string,
     marketCodes: string[],
@@ -269,17 +271,20 @@ export class ProjectsService {
     );
     const standardIds = rows.map((standard: any) => standard.id);
 
-    await client.query(`DELETE FROM project_standards WHERE project_id = $1`, [
+    // Applicability changes independently of a project's saved acceptance decisions.
+    await client.query(`UPDATE project_standards SET is_applicable=false WHERE project_id=$1 AND source='mandatory'`, [
       projectId,
     ]);
     if (standardIds.length > 0) {
-      const valuesClause = standardIds
-        .map((_, index) => `($1, $${index + 2})`)
-        .join(",");
       await client.query(
-        `INSERT INTO project_standards (project_id, standard_id)
-         VALUES ${valuesClause}`,
-        [projectId, ...standardIds],
+        `INSERT INTO project_standards(project_id,id,standard_id,status,source,is_mandatory,is_applicable)
+         SELECT $1,'standard-'||s.id,s.id,CASE WHEN b.required THEN 'accepted' ELSE 'suggested' END,'mandatory',b.required,true
+         FROM standards s CROSS JOIN LATERAL(SELECT EXISTS(SELECT 1 FROM standard_rules sr WHERE sr.standard_id=s.id AND sr.always_applies) AS required) b
+         WHERE s.id=ANY($2::integer[])
+         ON CONFLICT(project_id,standard_id) DO UPDATE SET is_applicable=true,is_mandatory=excluded.is_mandatory,
+           status=CASE WHEN excluded.is_mandatory THEN 'accepted' ELSE project_standards.status END,
+           justification=CASE WHEN excluded.is_mandatory THEN null ELSE project_standards.justification END`,
+        [projectId, standardIds],
       );
     }
   }
@@ -289,6 +294,7 @@ export class ProjectsService {
     companyId?: string,
     actor?: AuditActor,
   ): Promise<Project> {
+    assertNoEmbeddedRequirements(dto.data);
     const now = new Date().toISOString();
     const client = await getPool().connect();
 
@@ -365,13 +371,14 @@ export class ProjectsService {
       await this.protocols.ensureForProject(id, client);
       await this.reports.ensureForProject(id, client, actor);
 
-      await this.replaceProjectStandards(
+      await this.syncProjectStandards(
         client,
         id,
         dto.targetMarkets ?? [],
         dto.risk ?? null,
         dto.deviceCategory ?? null,
       );
+      if (dto.requirements !== undefined) await replaceProjectRequirements(id, dto.requirements, client);
 
       if (dto.targetMarkets !== undefined) {
         await this.replaceProjectMarkets(client, id, dto.targetMarkets);
@@ -597,11 +604,13 @@ export class ProjectsService {
         assignedTo?: Array<{ name?: string; email?: string }>;
       }>;
       data?: any;
+      requirements?: ProjectRequirement[];
     },
     actor?: AuditActor,
     auditEvents?: ProjectAuditEvent[],
   ): Promise<Project> {
     const now = new Date().toISOString();
+    assertNoEmbeddedRequirements(patch.data);
     const hasProtocolPatch = Boolean(
       patch.data && Object.prototype.hasOwnProperty.call(patch.data, "protocol"),
     );
@@ -623,7 +632,7 @@ export class ProjectsService {
       patch.targetMarkets !== undefined ||
       patch.roles !== undefined;
 
-    if (!projectDataPatch && !hasRelationalSetupPatch && !hasProtocolPatch) {
+    if (!projectDataPatch && !hasRelationalSetupPatch && !hasProtocolPatch && patch.requirements === undefined) {
       const client = await getPool().connect();
       try {
         await client.query("BEGIN");
@@ -670,6 +679,7 @@ export class ProjectsService {
       if (!rows[0]) throw new NotFoundException("Project not found");
 
       const existingData = rows[0].data || {};
+      const beforeRequirements = await listProjectRequirements(id, client);
       const mergedData: any = { ...existingData };
       // Protocol content is stored by ProtocolsService in relational tables.
       delete mergedData.protocol;
@@ -691,16 +701,6 @@ export class ProjectsService {
         }
       }
 
-
-      if (hasProtocolPatch) {
-        await this.protocols.save(id, incomingProtocol, actor, client);
-      }
-
-      mergedData.scope = withAcceptedBaselineRequirements(mergedData.scope, await this.getProjectStandards(id, client));
-      const requirementAuditEvents = this.deriveRequirementAuditEvents(
-        existingData,
-        mergedData,
-      );
 
       const risk = patch.risk !== undefined ? patch.risk : rows[0].risk;
       const deviceCategory =
@@ -747,13 +747,19 @@ export class ProjectsService {
       }
 
       // Standards are derived from the authoritative relational setup values.
-      await this.replaceProjectStandards(
+      await this.syncProjectStandards(
         client,
         id,
         marketCodes,
         risk,
         deviceCategory,
       );
+      const afterRequirements = patch.requirements !== undefined
+        ? await replaceProjectRequirements(id, patch.requirements, client)
+        : await listProjectRequirements(id, client);
+      const requirementAuditEvents = this.deriveRequirementAuditEvents(beforeRequirements, afterRequirements);
+      // Requirements and finding validation share this project lock and transaction.
+      if (hasProtocolPatch) await this.protocols.save(id, incomingProtocol, actor, client);
 
       if (patch.roles !== undefined) {
         await this.syncProjectMembers(id, patch.roles, client);
@@ -778,13 +784,7 @@ export class ProjectsService {
     }
   }
 
-  private deriveRequirementAuditEvents(beforeData: any, afterData: any): ProjectAuditEvent[] {
-    const before = Array.isArray(beforeData?.scope?.requirements)
-      ? beforeData.scope.requirements
-      : [];
-    const after = Array.isArray(afterData?.scope?.requirements)
-      ? afterData.scope.requirements
-      : [];
+  private deriveRequirementAuditEvents(before: ProjectRequirement[], after: ProjectRequirement[]): ProjectAuditEvent[] {
     const beforeById = new Map<string, any>(
       before.map((requirement: any) => [String(requirement.id), requirement]),
     );
@@ -796,7 +796,7 @@ export class ProjectsService {
     for (const requirement of before) {
       const requirementId = String(requirement.id);
       if (afterById.has(requirementId)) continue;
-      if (requirement.source === "mandatory") {
+      if (requirement.alwaysApplies) {
         throw new BadRequestException(
           `Mandatory requirement cannot be removed: ${requirement.title ?? requirementId}`,
         );
@@ -966,7 +966,7 @@ export class ProjectsService {
               ) AS "alwaysApplies"
        FROM project_standards ps
        JOIN standards s ON s.id = ps.standard_id
-       WHERE ps.project_id = $1
+       WHERE ps.project_id = $1 AND ps.is_applicable=true AND ps.source='mandatory'
        ORDER BY s.code`,
       [projectId],
     );

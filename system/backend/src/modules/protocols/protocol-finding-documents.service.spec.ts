@@ -20,7 +20,8 @@ describe('protocol finding document decisions', () => {
   beforeEach(() => {
     existing = null; locked = false;
     query = jest.fn(async (sql: string, args: any[] = []) => {
-      if (sql.startsWith('select data from projects')) return { rows: [{ data: { scope: { requirements: [requirement] } } }] };
+      if (sql.startsWith('select data from projects')) return { rows: [{ data: {} }] };
+      if (sql.includes('from project_standards pr')) return { rows: [requirement] };
       if (sql.includes('select 1 from workflow_step_state')) return { rows: locked ? [{ locked: true }] : [] };
       if (sql.startsWith('select i.id')) return { rows: [{ id: 'finding-row' }] };
       if (sql.startsWith('select pa.id')) return { rows: args[1] === 'file' ? [{ id: 'file', filename: 'PMCF Plan', appendix_number: 4 }] : [] };

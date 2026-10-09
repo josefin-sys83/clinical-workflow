@@ -18,9 +18,8 @@ describe('protocol write transactions', () => {
   });
 
   it('persists a valid requirement ID in the relational issue', async () => {
-    client.query.mockResolvedValue({ rows: [{ id: 'project', data: { scope: { requirements: [
-      { id: 'req-1', status: 'accepted' },
-    ] } } }] });
+    client.query.mockImplementation(async (sql: string) => ({ rows: sql.includes('from project_standards pr')
+      ? [{ id: 'req-1', status: 'accepted' }] : [{ id: 'project', data: {} }] }));
     await service.save('project', {
       sections: [{ id: '1', issues: [{ id: 'finding', severity: 'warning', requirementId: 'req-1' }] }],
     }, actor, client);

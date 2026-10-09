@@ -1,0 +1,137 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import { Gate1 } from '/src/modules/Scope/components/Gate1.tsx';
+import '/src/styles/index.css';
+
+const user = { id: 'author', name: 'Author', email: 'author@example.test', roles: ['author'] };
+const baseline = { id: 'standard-1', definitionId: 1, title: 'ISO-14971 — Risk management', description: 'Always required',
+  source: 'mandatory', alwaysApplies: true, status: 'accepted' };
+const project = { id: 'fixture', deviceCategory: 'active', targetMarkets: ['EU'], roles: [],
+  requirements: [baseline, { id: 'req-saved', title: 'Visit schedule', description: 'Define visits', source: 'ai-suggested', status: 'suggested' }],
+  data: { scope: { intendedUse: 'other-custom', customIntendedUse: 'Monitor cardiac recovery', scopeConfirmed: true, requirementsAnalysisStatus: 'succeeded' },
+    synopsis: { extractedText: 'Synopsis suggests a software device and another intended use.' }, projectData: {} } };
+const library = [{ id: 'library-9', definitionId: 9, title: 'Consent requirements from database', description: 'Document consent', category: 'clinical' }];
+const patches = [];
+const errors = [];
+let deriveCalls = 0;
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+window.fetch = async (input, init = {}) => {
+  const url = String(input);
+  let payload = {};
+  if (url.endsWith('/projects/fixture') && init.method === 'PATCH') {
+    const body = JSON.parse(init.body);
+    if (Object.hasOwn(body.data?.scope || {}, 'requirements')) throw new Error('Requirements were written into JSON scope');
+    if (Object.hasOwn(body, 'deviceCategory') || Object.hasOwn(body, 'risk') || Object.hasOwn(body, 'targetMarkets') ||
+        Object.hasOwn(body.data?.scope || {}, 'intendedUse') || Object.hasOwn(body.data?.scope || {}, 'customIntendedUse')) {
+      throw new Error('Scope attempted to write fields owned by Setup');
+    }
+    patches.push(body);
+    project.requirements = body.requirements;
+    project.data.scope = { ...project.data.scope, ...body.data.scope };
+    payload = project;
+  } else if (url.endsWith('/derive-scope')) { deriveCalls++; payload = { deviceCategory: 'samd', intendedUse: 'samd' }; }
+  else if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/requirement-library')) payload = library;
+  else if (url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/workflow')) payload = { steps: { scope: { state: 'draft' }, 'protocol-pdf': { state: 'draft' } } };
+  else if (url.endsWith('/milestones')) payload = { milestones: [] };
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+const el = React.createElement;
+let root;
+const mount = () => {
+  root = createRoot(document.getElementById('root'));
+  root.render(el(CurrentUserProvider, { user, status: 'ready' }, el(RouterProvider, {
+    router: createMemoryRouter([{ path: '/projects/:projectId', element: el(Gate1) }], { initialEntries: ['/projects/fixture'] }),
+  })));
+};
+let stage = 'load';
+const assert = (value, message) => { if (!value) throw new Error(message); };
+const waitFor = async predicate => {
+  for (let attempt = 0; attempt < 180; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
+  throw new Error(`Timed out: ${stage}; ${errors.join('; ')}`);
+};
+const button = (text, parent = document) => [...parent.querySelectorAll('button')].find(item => item.textContent.trim() === text);
+const heading = title => [...document.querySelectorAll('h4')].find(item => item.textContent === title);
+const setValue = (element, value) => {
+  const prototype = element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+};
+try {
+  mount();
+  await waitFor(() => heading('Visit schedule'));
+  assert(heading(baseline.title), 'Table-backed baseline did not load');
+  assert(!heading(baseline.title).closest('.border-b').querySelector('button'), 'Baseline exposes an acceptance/removal action');
+  assert(document.getElementById('device-category').disabled, 'Scope allows changing the Setup category');
+  assert(document.getElementById('device-category').textContent.includes('Active medical device'), 'Saved category was not displayed');
+  assert(document.getElementById('intended-use').disabled, 'Scope allows changing the Setup intended use');
+  assert(document.getElementById('custom-intended-use').readOnly &&
+    document.getElementById('custom-intended-use').value === 'Monitor cardiac recovery', 'Custom intended use is not a read-only Setup value');
+  const setupNote = [...document.querySelectorAll('p')].find(item => item.textContent.includes('To change any of these fields'));
+  assert(setupNote?.classList.contains('text-xs') && setupNote.querySelector('a')?.getAttribute('href') === '/projects/fixture/workflow/project-setup',
+    'Small note does not direct users back to Setup');
+  stage = 'accept';
+  button('Accept', heading('Visit schedule').closest('.border-b')).click();
+  await waitFor(() => project.requirements.find(requirement => requirement.id === 'req-saved')?.status === 'accepted');
+  assert(patches[0].requirements.some(requirement => requirement.id === 'standard-1'), 'Autosave discarded the baseline');
+  stage = 'refuse';
+  button('Not Applicable', heading('Visit schedule').closest('.border-b')).click();
+  await waitFor(() => document.querySelector('[role="dialog"] textarea'));
+  setValue(document.querySelector('[role="dialog"] textarea'), 'This study has no scheduled follow-up visits.');
+  await waitFor(() => !button('Submit', document.querySelector('[role="dialog"]')).disabled);
+  button('Submit', document.querySelector('[role="dialog"]')).click();
+  await waitFor(() => project.requirements.find(requirement => requirement.id === 'req-saved')?.status === 'not-applicable');
+  assert(project.requirements.find(requirement => requirement.id === 'req-saved').justification === 'This study has no scheduled follow-up visits.',
+    'Refusal did not retain its justification');
+  stage = 'library';
+  const trigger = [...document.querySelectorAll('[role="combobox"]')].find(item => item.textContent.includes('Select a standard requirement'));
+  stage = 'library menu';
+  trigger.focus();
+  trigger.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown' }));
+  await waitFor(() => [...document.querySelectorAll('[role="option"]')].some(item => item.textContent === library[0].title));
+  const option = [...document.querySelectorAll('[role="option"]')].find(item => item.textContent === library[0].title);
+  stage = 'library selection';
+  option.focus();
+  option.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  await waitFor(() => heading(library[0].title));
+  await waitFor(() => project.requirements.some(requirement => requirement.definitionId === 9));
+  stage = 'custom';
+  button('Add Custom').click();
+  await waitFor(() => document.getElementById('custom-req-title'));
+  setValue(document.getElementById('custom-req-title'), 'Project-specific safety plan');
+  setValue(document.getElementById('custom-req-description'), 'Describe site-specific safeguards.');
+  await waitFor(() => !button('Add Requirement').disabled);
+  button('Add Requirement').click();
+  await waitFor(() => project.requirements.some(requirement => requirement.title === 'Project-specific safety plan'));
+  const custom = project.requirements.find(requirement => requirement.title === 'Project-specific safety plan');
+  assert(custom.source === 'user-defined' && custom.status === 'accepted', 'Custom requirement decision changed');
+  assert(custom.id.startsWith('req-custom-'), 'Custom assignment has no stable identity');
+  stage = 'reload';
+  root.unmount(); mount();
+  await waitFor(() => heading('Project-specific safety plan') && heading(library[0].title));
+  assert(project.requirements.find(requirement => requirement.id === 'req-saved').status === 'not-applicable', 'Refusal did not survive reload');
+  assert(!Object.hasOwn(project.data.scope, 'requirements'), 'Persistence recreated the legacy JSON field');
+  assert(project.deviceCategory === 'active' && project.data.scope.customIntendedUse === 'Monitor cardiac recovery', 'Scope changed saved Setup values');
+  stage = 'missing setup';
+  root.unmount();
+  project.deviceCategory = '';
+  project.data.scope.intendedUse = '';
+  project.data.scope.customIntendedUse = '';
+  project.data.scope.scopeConfirmed = false;
+  mount();
+  await waitFor(() => document.getElementById('device-category') && button('Confirm Scope & Device Type'));
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  assert(button('Confirm Scope & Device Type').disabled, 'Incomplete Setup can be confirmed in Scope');
+  assert(deriveCalls === 0, 'Scope inferred Setup values from the synopsis');
+  assert(document.getElementById('device-category').textContent.includes('Not provided in Setup'), 'Missing category was replaced in Scope');
+  assert(!errors.length, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: read-only Setup values, Setup link, no Setup writes or synopsis inference, protected baseline, accept/refuse decisions, library/custom requirements and reload';
+} catch (error) { document.getElementById('result').textContent = `FAIL: ${error.message}`; }
+</script></body></html>

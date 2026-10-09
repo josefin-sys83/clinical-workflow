@@ -1,11 +1,11 @@
-import { useNavigate, useParams } from 'react-router-dom';
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useWorkflowSnapshot } from '@/shared/hooks/useWorkflowSnapshot';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { aiAnalysisErrorMessage, apiErrorMessage, apiFetch } from '@/shared/api/http';
-import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeDerivedIntendedUse, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
+import { INTENDED_USE_OPTIONS, intendedUseLabel, normalizeStoredIntendedUse } from '@/shared/workflow/intendedUse';
 import { Info, Check, X, AlertCircle, Plus, Pencil, ChevronDown, Upload, FileText, Lock, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -23,6 +23,7 @@ import { theme } from '@/app/theme';
 
 interface Requirement {
   id: string;
+  definitionId?: number | null;
   title: string;
   description: string;
   status: "suggested" | "accepted" | "not-applicable";
@@ -33,249 +34,13 @@ interface Requirement {
 
 interface LibraryRequirement {
   id: string;
+  definitionId: number;
   title: string;
   description: string;
   category: "clinical" | "regulatory" | "software-ai" | "risk-safety" | "operational";
 }
 
-interface ProjectStandard {
-  id: number;
-  code: string;
-  title: string;
-  alwaysApplies: boolean;
-}
-
 type RequirementsAnalysisStatus = 'not-run' | 'running' | 'succeeded' | 'failed';
-
-const reconcileMandatoryStandards = (
-  currentRequirements: Requirement[],
-  projectStandards: ProjectStandard[],
-): Requirement[] => {
-  const existingMandatoryById = new Map(
-    currentRequirements
-      .filter(requirement => requirement.source === "mandatory")
-      .map(requirement => [requirement.id, requirement]),
-  );
-
-  const mandatoryRequirements: Requirement[] = projectStandards.map(standard => {
-    const id = `standard-${standard.id}`;
-    const existing = existingMandatoryById.get(id);
-
-    return {
-      id,
-      title: `${standard.code} — ${standard.title}`,
-      description: standard.alwaysApplies
-        ? 'Always required as a mandatory baseline for every project.'
-        : 'This standard applies to the project based on its risk class, device category, and target markets.',
-      status: standard.alwaysApplies ? "accepted" : existing?.status ?? "suggested",
-      justification: standard.alwaysApplies ? undefined : existing?.justification,
-      source: "mandatory",
-      alwaysApplies: standard.alwaysApplies,
-    };
-  });
-
-  const normalizeCode = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const mandatoryCodes = projectStandards.map(standard => normalizeCode(standard.code));
-  const nonMandatoryRequirements = currentRequirements.filter(requirement => {
-    if (requirement.source === "mandatory") return false;
-
-    // If the AI happened to suggest the same standard, keep only the authoritative
-    // mandatory version returned through project_standards.
-    const normalizedTitle = normalizeCode(requirement.title);
-    return !mandatoryCodes.some(code => normalizedTitle.includes(code));
-  });
-
-  return [...mandatoryRequirements, ...nonMandatoryRequirements];
-};
-
-// Standard Requirements Library
-const REQUIREMENTS_LIBRARY: LibraryRequirement[] = [
-  // Clinical
-  {
-    id: "lib-clinical-1",
-    title: "Good Clinical Practice (GCP) Compliance",
-    description: "ICH E6(R2) guidelines for clinical trial conduct, ethics, and data integrity",
-    category: "clinical"
-  },
-  {
-    id: "lib-clinical-2",
-    title: "Informed Consent Process",
-    description: "Documentation and procedures for obtaining informed consent from study participants",
-    category: "clinical"
-  },
-  {
-    id: "lib-clinical-3",
-    title: "Adverse Event Reporting",
-    description: "Procedures for identifying, documenting, and reporting adverse events and serious adverse events",
-    category: "clinical"
-  },
-  {
-    id: "lib-clinical-4",
-    title: "Patient Inclusion/Exclusion Criteria",
-    description: "Clearly defined criteria for patient selection and enrollment",
-    category: "clinical"
-  },
-  {
-    id: "lib-clinical-5",
-    title: "Clinical Endpoints Definition",
-    description: "Primary and secondary endpoints with clear success criteria and measurement protocols",
-    category: "clinical"
-  },
-  {
-    id: "lib-clinical-6",
-    title: "Data Monitoring Committee (DMC)",
-    description: "Independent safety monitoring committee for high-risk studies",
-    category: "clinical"
-  },
-  // Regulatory
-  {
-    id: "lib-regulatory-1",
-    title: "21 CFR Part 11 Electronic Records",
-    description: "FDA requirements for electronic records and electronic signatures",
-    category: "regulatory"
-  },
-  {
-    id: "lib-regulatory-2",
-    title: "EU MDR Clinical Evaluation",
-    description: "Clinical evaluation requirements under EU MDR 2017/745",
-    category: "regulatory"
-  },
-  {
-    id: "lib-regulatory-3",
-    title: "ISO 13485 QMS Compliance",
-    description: "Quality management system requirements for medical devices",
-    category: "regulatory"
-  },
-  {
-    id: "lib-regulatory-4",
-    title: "IRB/Ethics Committee Approval",
-    description: "Institutional Review Board or Ethics Committee review and approval requirements",
-    category: "regulatory"
-  },
-  {
-    id: "lib-regulatory-5",
-    title: "Competent Authority Notifications",
-    description: "Regulatory authority notifications and reporting requirements",
-    category: "regulatory"
-  },
-  {
-    id: "lib-regulatory-6",
-    title: "Post-Market Surveillance",
-    description: "Post-market clinical follow-up and surveillance requirements",
-    category: "regulatory"
-  },
-  // Software & AI
-  {
-    id: "lib-software-1",
-    title: "IEC 62304 Software Development",
-    description: "Medical device software lifecycle processes and documentation",
-    category: "software-ai"
-  },
-  {
-    id: "lib-software-2",
-    title: "Cybersecurity Requirements",
-    description: "Device cybersecurity, data protection, and vulnerability management",
-    category: "software-ai"
-  },
-  {
-    id: "lib-software-3",
-    title: "AI/ML Algorithm Validation",
-    description: "Validation and performance testing of AI/ML algorithms with clinical data",
-    category: "software-ai"
-  },
-  {
-    id: "lib-software-4",
-    title: "Data Privacy & GDPR Compliance",
-    description: "Patient data privacy, GDPR compliance, and data handling procedures",
-    category: "software-ai"
-  },
-  {
-    id: "lib-software-5",
-    title: "Software Version Control",
-    description: "Version management and configuration control for software updates",
-    category: "software-ai"
-  },
-  {
-    id: "lib-software-6",
-    title: "Interoperability Standards",
-    description: "HL7, FHIR, DICOM, or other interoperability standards compliance",
-    category: "software-ai"
-  },
-  // Risk & Safety
-  {
-    id: "lib-risk-1",
-    title: "Usability Engineering (IEC 62366)",
-    description: "Usability validation and human factors engineering documentation",
-    category: "risk-safety"
-  },
-  {
-    id: "lib-risk-2",
-    title: "Electromagnetic Compatibility (EMC)",
-    description: "IEC 60601-1-2 electromagnetic compatibility testing for medical electrical equipment",
-    category: "risk-safety"
-  },
-  {
-    id: "lib-risk-3",
-    title: "Electrical Safety Testing",
-    description: "IEC 60601-1 electrical safety standards for medical electrical equipment",
-    category: "risk-safety"
-  },
-  {
-    id: "lib-risk-4",
-    title: "Packaging & Sterilization Validation",
-    description: "ISO 11607 packaging validation and sterilization procedures",
-    category: "risk-safety"
-  },
-  {
-    id: "lib-risk-5",
-    title: "Environmental & Durability Testing",
-    description: "Device performance under environmental conditions and durability validation",
-    category: "risk-safety"
-  },
-  {
-    id: "lib-risk-6",
-    title: "Clinical Risk Benefit Analysis",
-    description: "Comprehensive risk-benefit evaluation for study approval",
-    category: "risk-safety"
-  },
-  // Operational
-  {
-    id: "lib-operational-1",
-    title: "Site Training & Qualification",
-    description: "Clinical site staff training and qualification procedures",
-    category: "operational"
-  },
-  {
-    id: "lib-operational-2",
-    title: "Supply Chain & Device Management",
-    description: "Device inventory, distribution, and accountability procedures",
-    category: "operational"
-  },
-  {
-    id: "lib-operational-3",
-    title: "Clinical Trial Insurance",
-    description: "Insurance coverage for clinical trial participants and investigators",
-    category: "operational"
-  },
-  {
-    id: "lib-operational-4",
-    title: "Data Management Plan",
-    description: "Data collection, storage, backup, and quality assurance procedures",
-    category: "operational"
-  },
-  {
-    id: "lib-operational-5",
-    title: "Study Monitoring Plan",
-    description: "Clinical site monitoring schedule and procedures",
-    category: "operational"
-  },
-  {
-    id: "lib-operational-6",
-    title: "Document Retention Policy",
-    description: "Essential document retention and archival requirements",
-    category: "operational"
-  }
-];
 
 interface Role {
   id: string;
@@ -294,10 +59,6 @@ export function Gate1() {
   const isScopeLocked = (workflowSnapshot?.steps?.['protocol-pdf']?.state as string) === 'final';
   const { latestAmendment } = useProtocolStatus(projectId);
 
-  // Track original scope values loaded from DB
-  const [originalDeviceCategory, setOriginalDeviceCategory] = useState<string | null>(null);
-  const [originalRequirements, setOriginalRequirements] = useState<any[]>([]);
-
   // Section 1: Scope & Device Type
   const [deviceCategory, setDeviceCategory] = useState<string>("");
   const [intendedUse, setIntendedUse] = useState<string>("");
@@ -306,6 +67,7 @@ export function Gate1() {
 
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
+  const [requirementsLibrary, setRequirementsLibrary] = useState<LibraryRequirement[]>([]);
   const [scopeSubmitError, setScopeSubmitError] = useState<string | null>(null);
   const [requirementsAnalysisStatus, setRequirementsAnalysisStatus] = useState<RequirementsAnalysisStatus>('not-run');
   const [requirementsAnalysisError, setRequirementsAnalysisError] = useState<string | null>(null);
@@ -324,86 +86,7 @@ export function Gate1() {
     return () => { isMountedRef.current = false; };
   }, []);
 
-  // Derive consequences when scope changes
-  const consequences = useMemo(() => {
-    if (!originalDeviceCategory) return [];
-    const items: { severity: 'high' | 'medium'; message: string }[] = [];
-
-    if (deviceCategory !== originalDeviceCategory) {
-      const fromAIMD = originalDeviceCategory === 'AIMD';
-      const toAIMD = deviceCategory === 'AIMD';
-      const fromIVD = originalDeviceCategory === 'IVD';
-      const toIVD = deviceCategory === 'IVD';
-      const fromSaMD = originalDeviceCategory === 'Software' || originalDeviceCategory === 'SaMD';
-      const toSaMD = deviceCategory === 'Software' || deviceCategory === 'SaMD';
-
-      items.push({
-        severity: 'high',
-        message: `Device category changed from "${originalDeviceCategory}" to "${deviceCategory}". All protocol sections and report sections need to be regenerated with new regulatory standards.`
-      });
-
-      if (fromAIMD && !toAIMD) {
-        items.push({ severity: 'high', message: 'ISO 14708 and EN 45502-1 requirements will no longer apply. The Long-term Safety and Performance Assessment section in the report will be removed.' });
-      }
-      if (!fromAIMD && toAIMD) {
-        items.push({ severity: 'high', message: 'ISO 14708 and EN 45502-1 requirements now apply. A Long-term Safety and Performance Assessment section will be added to the report.' });
-      }
-      if (fromIVD && !toIVD) {
-        items.push({ severity: 'high', message: 'IVDR 2017/746 requirements will no longer apply. Report structure will change significantly.' });
-      }
-      if (!fromIVD && toIVD) {
-        items.push({ severity: 'high', message: 'IVDR 2017/746 now applies instead of MDR. Report structure will change significantly.' });
-      }
-      if (!fromSaMD && toSaMD) {
-        items.push({ severity: 'high', message: 'IMDRF SaMD N41 now applies. An Algorithm Performance and Validation section will be added to the report.' });
-      }
-      if (fromSaMD && !toSaMD) {
-        items.push({ severity: 'high', message: 'IMDRF SaMD N41 will no longer apply. Algorithm Performance section will be removed from the report.' });
-      }
-
-      items.push({ severity: 'medium', message: 'AI analysis of all existing protocol and report sections needs to be re-run to reflect new regulatory requirements.' });
-    }
-
-    const originalMarkets = new Set(
-      originalRequirements
-        .filter((r: any) => r.status === 'accepted')
-        .map((r: any) => r.title.includes('FDA') || r.title.includes('US') ? 'FDA' :
-                         r.title.includes('EU') || r.title.includes('MDR') ? 'EU' : null)
-        .filter(Boolean)
-    );
-    const currentMarkets = new Set(
-      requirements
-        .filter((r: any) => r.status === 'accepted')
-        .map((r: any) => r.title.includes('FDA') || r.title.includes('US') ? 'FDA' :
-                         r.title.includes('EU') || r.title.includes('MDR') ? 'EU' : null)
-        .filter(Boolean)
-    );
-
-    if (!originalMarkets.has('EU') && currentMarkets.has('EU')) {
-      items.push({ severity: 'high', message: 'EU market added. A Regulatory Compliance Statement (EU MDR 2017/745) section will be added to the report. Protocol must reference EU MDR 2017/745.' });
-    }
-    if (originalMarkets.has('EU') && !currentMarkets.has('EU')) {
-      items.push({ severity: 'high', message: 'EU market removed. The Regulatory Compliance Statement (EU MDR 2017/745) section will be removed from the report.' });
-    }
-    if (!originalMarkets.has('FDA') && currentMarkets.has('FDA')) {
-      items.push({ severity: 'high', message: 'FDA market added. An Investigational Device Exemption (IDE) Compliance Summary section will be added to the report. Protocol must reference 21 CFR Part 812.' });
-    }
-    if (originalMarkets.has('FDA') && !currentMarkets.has('FDA')) {
-      items.push({ severity: 'high', message: 'FDA market removed. The IDE Compliance Summary section will be removed from the report.' });
-    }
-
-    return items;
-  }, [deviceCategory, requirements, originalDeviceCategory, originalRequirements]);
-
   const [generatingRequirements, setGeneratingRequirements] = useState(false);
-
-  const fetchProjectStandards = async (): Promise<ProjectStandard[]> => {
-    const response = await fetch(`${apiBase}/api/projects/${projectId}/standards`);
-    if (!response.ok) {
-      throw new Error(`Failed to load project standards (${response.status})`);
-    }
-    return response.json();
-  };
 
   const generateRequirements = async () => {
     setGeneratingRequirements(true);
@@ -474,40 +157,43 @@ Return ONLY a JSON array, no markdown:
       if (!res.ok) throw new Error(aiAnalysisErrorMessage(res.status));
       const data = await res.json();
       if (!Array.isArray(data)) throw new Error(aiAnalysisErrorMessage(502));
-      const aiRequirements: Requirement[] = data;
-
-      // project_standards is the source of truth for mandatory standards. It was
-      // calculated from the project's risk, device category, and target markets.
-      const projectStandards = await fetchProjectStandards();
-      const manuallyManaged = requirements.filter(requirement =>
-        requirement.source === 'library' || requirement.source === 'user-defined'
-      );
-      const merged = reconcileMandatoryStandards([...manuallyManaged, ...aiRequirements], projectStandards);
-      setRequirements(merged);
+      // Preserve assignment identity for unchanged suggestions; provider IDs are local to a run.
+      const aiRequirements: Requirement[] = data.map((item: Requirement) => ({
+        ...item,
+        id: requirements.find(saved => saved.source === 'ai-suggested' && saved.title === item.title && saved.description === item.description)?.id
+          || 'req-' + crypto.randomUUID(),
+        source: 'ai-suggested',
+      }));
+      const standardRequirements: Requirement[] = project.requirements.filter((requirement: Requirement) => requirement.source === 'mandatory');
+      const manuallyManaged = requirements.filter(requirement => requirement.source === 'library' || requirement.source === 'user-defined');
+      const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const standardCodes = standardRequirements.map(requirement => normalize(requirement.title.split(' — ')[0]));
+      setRequirements([...standardRequirements, ...manuallyManaged,
+        ...aiRequirements.filter(requirement => !standardCodes.some(code => normalize(requirement.title).includes(code)))]);
       setRequirementsAnalysisStatus('succeeded');
     } catch (e) {
       console.error('Failed to generate requirements', e);
       setRequirementsAnalysisError(e instanceof Error ? e.message : aiAnalysisErrorMessage(0));
       setRequirementsAnalysisStatus('failed');
-      // Mandatory standards remain useful and visible, but cannot make the gate pass
-      // while the separate AI-analysis state is failed.
-      try {
-        const projectStandards = await fetchProjectStandards();
-        setRequirements(current => reconcileMandatoryStandards(current, projectStandards));
-      } catch (standardsError) {
-        console.error('Failed to load mandatory standards after AI failure', standardsError);
-      }
     } finally {
       setGeneratingRequirements(false);
     }
   };
 
   const handleConfirmScope = async () => {
+    if (isScopeLocked || !scopeLoaded || !canComplete || generatingRequirements) return;
     setScopeConfirmed(true);
     setRequirements([]);
     setRequirementsAnalysisStatus('not-run');
     await generateRequirements();
   };
+
+  // The library and project assignments are both served from requirement tables.
+  useEffect(() => {
+    void apiFetch<LibraryRequirement[]>('/projects/requirement-library').then(setRequirementsLibrary).catch(error => {
+      console.error('Failed to load requirement library', error);
+    });
+  }, []);
 
   // Ladda scope-data från backend
   useEffect(() => {
@@ -518,7 +204,7 @@ Return ONLY a JSON array, no markdown:
         if (!r.ok) throw new Error(`Failed to load project (${r.status})`);
         return r.json();
       })
-      .then(async project => {
+      .then(project => {
         const s = project.data?.scope ?? {};
 
         const normalizeDeviceCategory = (value: unknown): string => {
@@ -531,17 +217,15 @@ Return ONLY a JSON array, no markdown:
         };
 
         const setupCategory = normalizeDeviceCategory(project.deviceCategory);
-        if (setupCategory) setDeviceCategory(setupCategory);
+        setDeviceCategory(setupCategory);
         const savedIntendedUse = normalizeStoredIntendedUse(
           s.intendedUse,
           s.customIntendedUse,
         );
-        if (savedIntendedUse.intendedUse) {
-          setIntendedUse(savedIntendedUse.intendedUse);
-          setCustomIntendedUse(savedIntendedUse.customIntendedUse);
-        }
-        if (s.scopeConfirmed !== undefined) setScopeConfirmed(s.scopeConfirmed);
-        const savedRequirements: Requirement[] = Array.isArray(s.requirements) ? s.requirements : [];
+        setIntendedUse(savedIntendedUse.intendedUse);
+        setCustomIntendedUse(savedIntendedUse.customIntendedUse);
+        setScopeConfirmed(Boolean(s.scopeConfirmed));
+        const savedRequirements: Requirement[] = project.requirements;
         const savedAnalysisStatus = s.requirementsAnalysisStatus as RequirementsAnalysisStatus | undefined;
         if (savedAnalysisStatus === 'succeeded' || savedAnalysisStatus === 'failed') {
           setRequirementsAnalysisStatus(savedAnalysisStatus);
@@ -550,40 +234,7 @@ Return ONLY a JSON array, no markdown:
           setRequirementsAnalysisStatus('succeeded');
         }
         if (typeof s.requirementsAnalysisError === 'string') setRequirementsAnalysisError(s.requirementsAnalysisError);
-        if (savedRequirements.length > 0 || s.scopeConfirmed) {
-          try {
-            const projectStandards = await fetchProjectStandards();
-            setRequirements(reconcileMandatoryStandards(savedRequirements, projectStandards));
-          } catch (error) {
-            // Do not destroy a saved requirement list if the standards request fails.
-            console.error('Failed to reconcile mandatory project standards', error);
-            setRequirements(savedRequirements);
-          }
-        }
-        // Seed originals once so consequence diff is against the DB state
-        setOriginalDeviceCategory(setupCategory || null);
-        setOriginalRequirements(s.requirements ?? []);
-
-        // Auto-derive device category + intended use from synopsis when either is still missing.
-        const hasCategory = Boolean(setupCategory);
-        const hasIntendedUse = Boolean(savedIntendedUse.intendedUse);
-        const hasSynopsis = !!project.data?.synopsis?.extractedText;
-        if ((!hasCategory || !hasIntendedUse) && hasSynopsis && !s.scopeConfirmed) {
-          setGeneratingRequirements(true);
-          try {
-            const res = await fetch(`${apiBase}/api/projects/${projectId}/derive-scope`, { method: 'POST' });
-            const derived = await res.json();
-            console.log('[derive-scope] response:', derived);
-            if (!hasCategory && derived.deviceCategory) setDeviceCategory(derived.deviceCategory);
-            if (!hasIntendedUse && derived.intendedUse) {
-              const normalizedDerivedUse = normalizeDerivedIntendedUse(derived.intendedUse);
-              setIntendedUse(normalizedDerivedUse.intendedUse);
-              setCustomIntendedUse(normalizedDerivedUse.customIntendedUse);
-            }
-          } catch { /* non-fatal */ } finally {
-            setGeneratingRequirements(false);
-          }
-        }
+        setRequirements(savedRequirements);
         setScopeLoaded(true);
       })
       .catch(error => {
@@ -595,13 +246,10 @@ Return ONLY a JSON array, no markdown:
     if (!projectId) return Promise.reject(new Error('Project ID is required to save Scope.'));
 
     const payload = {
-      deviceCategory,
+      requirements,
       data: {
         scope: {
-          intendedUse,
-          customIntendedUse,
           scopeConfirmed,
-          requirements,
           requirementsAnalysisStatus,
           requirementsAnalysisError,
         },
@@ -619,7 +267,7 @@ Return ONLY a JSON array, no markdown:
 
     scopeSaveQueueRef.current = save.catch(() => undefined);
     return save;
-  }, [projectId, deviceCategory, intendedUse, customIntendedUse, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError]);
+  }, [projectId, scopeConfirmed, requirements, requirementsAnalysisStatus, requirementsAnalysisError]);
 
   // Save Scope after a short idle period while the user is editing.
   useEffect(() => {
@@ -637,46 +285,6 @@ Return ONLY a JSON array, no markdown:
       }
     };
   }, [isScopeLocked, scopeLoaded, persistScope]);
-
-  // Section 2: Requirements (default values loaded from backend or set below)
-  // requirements useState moved above
-  const [requirementsDefaults] = useState<Requirement[]>([
-    {
-      id: "req-1",
-      title: "ISO 14155 Clinical Investigation Compliance",
-      description: "Standards for good clinical practice for medical device investigations involving human subjects",
-      status: "suggested",
-      source: "ai-suggested"
-    },
-    {
-      id: "req-2",
-      title: "MDR 2017/745 Regulatory Alignment",
-      description: "EU Medical Device Regulation compliance for implantable devices",
-      status: "suggested",
-      source: "ai-suggested"
-    },
-    {
-      id: "req-3",
-      title: "21 CFR Part 812 IDE Requirements",
-      description: "US FDA Investigational Device Exemption requirements for significant risk devices",
-      status: "suggested",
-      source: "ai-suggested"
-    },
-    {
-      id: "req-4",
-      title: "Risk Management (ISO 14971)",
-      description: "Application of risk management to medical devices throughout lifecycle",
-      status: "suggested",
-      source: "ai-suggested"
-    },
-    {
-      id: "req-5",
-      title: "Biocompatibility Assessment (ISO 10993)",
-      description: "Biological evaluation of medical devices for implantable applications",
-      status: "suggested",
-      source: "ai-suggested"
-    }
-  ]);
 
   const [justificationDialog, setJustificationDialog] = useState<{
     open: boolean;
@@ -753,21 +361,23 @@ Return ONLY a JSON array, no markdown:
   ]);
 
   // Check if gate can be completed
-  const canComplete = intendedUse !== "other-custom" || customIntendedUse.trim() !== "";
+  const canComplete = Boolean(deviceCategory && intendedUse &&
+    (intendedUse !== "other-custom" || customIntendedUse.trim()));
 
   // Readiness checks
-  const scopeAndDeviceConfirmed = scopeConfirmed;
+  const scopeAndDeviceConfirmed = scopeLoaded && canComplete && scopeConfirmed;
   const requirementsApplicabilityConfirmed = requirementsAnalysisStatus === 'succeeded' && requirements.length > 0 && requirements.every(req => req.status === "accepted" || req.status === "not-applicable");
   const allReadinessChecksPassed = scopeAndDeviceConfirmed && requirementsApplicabilityConfirmed;
 
   // Helper to check if a library requirement is already added
   const isLibraryRequirementAdded = (libraryReqId: string) => {
-    return requirements.some(req => req.id === libraryReqId);
+    const definitionId = requirementsLibrary.find(item => item.id === libraryReqId)?.definitionId;
+    return requirements.some(req => req.definitionId === definitionId);
   };
 
   // Helper to get available library requirements by category
   const getAvailableLibraryRequirements = (category: LibraryRequirement["category"]) => {
-    return REQUIREMENTS_LIBRARY.filter(
+    return requirementsLibrary.filter(
       libReq => libReq.category === category && !isLibraryRequirementAdded(libReq.id)
     );
   };
@@ -779,6 +389,7 @@ Return ONLY a JSON array, no markdown:
   const handleAddLibraryRequirement = (libraryReq: LibraryRequirement) => {
     const newRequirement: Requirement = {
       id: libraryReq.id,
+      definitionId: libraryReq.definitionId,
       title: libraryReq.title,
       description: libraryReq.description,
       status: "suggested",
@@ -825,7 +436,7 @@ Return ONLY a JSON array, no markdown:
     if ((hasTitle || hasDocument) && hasDescription) {
       const title = customRequirementDialog.title || customRequirementDialog.document?.name || "Uploaded Document";
       const newRequirement: Requirement = {
-        id: `req-custom-${Date.now()}`,
+        id: `req-custom-${crypto.randomUUID()}`,
         title,
         description: customRequirementDialog.description,
         status: "accepted",
@@ -919,53 +530,22 @@ Return ONLY a JSON array, no markdown:
       <div className="max-w-5xl mx-auto p-8">
         <div className="space-y-6">
 
-          {!isScopeLocked && consequences.length > 0 && (
-            <div className={`${theme.status.notice} border ${theme.border.notice} rounded-lg p-4 space-y-2`}>
-              <div className="flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0" />
-                <p className={`font-medium ${theme.text.notice}`}>Unsaved changes have downstream consequences</p>
-              </div>
-              <p className="text-sm text-orange-700">The following parts of the project will be affected when you save:</p>
-              <ul className="space-y-1">
-                {consequences.map((c, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
-                    <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${c.severity === 'high' ? 'bg-rose-500' : 'bg-orange-400'}`} />
-                    <span className={theme.text.notice}>{c.message}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs text-orange-600 mt-2">These changes will be saved automatically. Generated content in protocol and report sections will not be automatically regenerated — you will need to regenerate affected sections manually.</p>
-            </div>
-          )}
-
           {/* Section 1: Study Scope & Device Type */}
           <Card>
             <CardHeader>
               <CardTitle>Study Scope & Device Type</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="p-3 bg-purple-50 border-l-4 border-purple-400 rounded">
-                <div className="flex items-start gap-3">
-                  <div className="w-5 h-5 bg-purple-600 text-white rounded flex items-center justify-center text-xs font-bold flex-shrink-0">
-                    AI
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-purple-900 mb-1">
-                      AI-derived recommendations
-                    </div>
-                    <p className="text-xs text-purple-700">
-                      Based on your approved synopsis document.
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                Review and confirm the scope and device type saved in Setup.
+              </p>
 
               <div className="space-y-4">
                 <div>
                   <Label htmlFor="device-category">Device Category</Label>
-                  <Select value={deviceCategory} onValueChange={setDeviceCategory} disabled={isScopeLocked}>
+                  <Select value={deviceCategory} disabled>
                     <SelectTrigger id="device-category" className="mt-1.5">
-                      <SelectValue />
+                      <SelectValue placeholder="Not provided in Setup" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="non-implantable" description="(e.g. diagnostic equipment, surgical instruments, monitoring devices)">
@@ -1004,14 +584,9 @@ Return ONLY a JSON array, no markdown:
 
                 <div>
                   <Label htmlFor="intended-use">Intended Use & Study Scope</Label>
-                  <Select value={intendedUse} onValueChange={(value) => {
-                    setIntendedUse(value);
-                    if (value !== "other-custom") {
-                      setCustomIntendedUse("");
-                    }
-                  }} disabled={isScopeLocked}>
+                  <Select value={intendedUse} disabled>
                     <SelectTrigger id="intended-use" className="mt-1.5">
-                      <SelectValue />
+                      <SelectValue placeholder="Not provided in Setup" />
                     </SelectTrigger>
                     <SelectContent>
                       {INTENDED_USE_OPTIONS.map(option => (
@@ -1021,33 +596,33 @@ Return ONLY a JSON array, no markdown:
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground mt-1.5">
-                    Select the closest standard category. Choose Other/Custom only if none apply.
-                  </p>
                 </div>
 
                 {intendedUse === "other-custom" && (
                   <div>
-                    <Label htmlFor="custom-intended-use">Describe intended use *</Label>
+                    <Label htmlFor="custom-intended-use">Custom intended use</Label>
                     <Input
                       id="custom-intended-use"
-                      placeholder="Describe the intended use and clinical context"
+                      placeholder="Not provided in Setup"
                       value={customIntendedUse}
-                      onChange={(e) => setCustomIntendedUse(e.target.value)}
                       className="mt-1.5"
-                      disabled={isScopeLocked}
-                      required
+                      readOnly
                     />
                   </div>
                 )}
               </div>
+
+              <p className="text-xs italic text-muted-foreground">
+                To change any of these fields, go back to{' '}
+                <Link to={`/projects/${projectId}/workflow/project-setup`} className="underline underline-offset-2">Setup</Link>.
+              </p>
 
               <div className="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-border">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={handleConfirmScope}
-                  disabled={isScopeLocked}
+                  disabled={isScopeLocked || !scopeLoaded || !canComplete || generatingRequirements}
                   className={
                     scopeConfirmed
                       ? `${theme.status.active} ${theme.border.active} hover:bg-blue-100`
@@ -1207,7 +782,7 @@ Return ONLY a JSON array, no markdown:
                       value=""
                       disabled={isScopeLocked}
                       onValueChange={(value) => {
-                        const libraryReq = REQUIREMENTS_LIBRARY.find(req => req.id === value);
+                        const libraryReq = requirementsLibrary.find(req => req.id === value);
                         if (libraryReq) {
                           handleAddLibraryRequirement(libraryReq);
                         }

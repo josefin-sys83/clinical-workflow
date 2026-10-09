@@ -12,11 +12,11 @@ const finding = { id: 'i-1', requirementId: 'req-1', severity: 'blocker', status
 const section = { id: '1', title: 'Protocol Overview', content: '<p>Follow-up is specified in Appendix 4.</p>',
   status: 'draft', aiGenerated: true, analysisStatus: 'succeeded', issues: [finding], requiredElements: [] };
 const protocol = { status: 'draft', sections: [section] };
-const project = { id: 'fixture', targetMarkets: [], roles: [{ title: 'Protocol Lead', assignedTo: [user] }], data: {
-  projectData: {}, protocol, scope: { requirements: [
+const project = { id: 'fixture', targetMarkets: [], roles: [{ title: 'Protocol Lead', assignedTo: [user] }], requirements: [
     { id: 'req-1', title: 'PMCF Plan', status: 'accepted' }, { id: 'req-2', title: 'ISO 14155', status: 'accepted' },
     { id: 'declined', title: 'Declined standard', status: 'not-applicable' },
-  ] },
+  ], data: {
+  projectData: {}, protocol, scope: {  },
 } };
 const attachment = { id: 'file', appendixNumber: 4, filename: 'PMCF Plan v2.1', sizeBytes: 12, uploadedAt: '2026-10-02', uploaderName: 'Writer', requirementIds: [] };
 let nextCheck = 'satisfied';

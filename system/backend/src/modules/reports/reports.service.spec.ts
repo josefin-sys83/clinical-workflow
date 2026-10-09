@@ -40,9 +40,8 @@ describe('relational reports', () => {
   it('stores a valid requirement link and rejects unknown links before replacing findings', async () => {
     const original = query.getMockImplementation()!;
     query.mockImplementation(async (sql: string) => {
-      if (sql.includes('select p.data from projects p')) return { rows: [{ data: { scope: { requirements: [
-        { id: 'req-1', status: 'accepted' },
-      ] } } }] };
+      if (sql.includes('select p.id from projects p')) return { rows: [{ id: 'project' }] };
+      if (sql.includes('from project_standards pr')) return { rows: [{ id: 'req-1', status: 'accepted' }] };
       return original(sql);
     });
     await (service as any).replaceSectionIssues('section', [

@@ -7,6 +7,7 @@ import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectsService, type ProjectAuditEvent } from './projects.service';
 import { AiService } from '../ai/ai.service';
 import { normalizeAiMarkets } from './project-generation-context';
+import { listRequirementLibrary } from './project-requirements';
 import { WorkflowService } from '../workflow/workflow.service';
 import { MilestoneService } from '../milestones/milestone.service';
 import { DocumentWorkflowService } from './document-workflow.service';
@@ -51,6 +52,8 @@ export class ProjectsController {
     const marketCodes = markets ? markets.split(',') : [];
     return this.projects.getRequirements(risk, deviceCategory, marketCodes);
   }
+  @Get('/requirement-library')
+  getRequirementLibrary() { return listRequirementLibrary(); }
   @Get('markets')
 async getMarkets() {
   return this.projects.getMarkets();
@@ -159,8 +162,9 @@ async update(@Param('projectId') projectId: string, @Body() body: UpdateProjectD
   }
 
   // 2. Scope lock check (only block if scope actually changed)
-  const scopeChanged = body.data?.scope !== undefined &&
-    JSON.stringify(body.data.scope) !== JSON.stringify(existing?.data?.scope);
+  const scopeChanged = (body.data?.scope !== undefined &&
+    JSON.stringify(body.data.scope) !== JSON.stringify(existing?.data?.scope)) ||
+    (body.requirements !== undefined && JSON.stringify(body.requirements) !== JSON.stringify(existing.requirements));
   if (scopeChanged) {
     const workflowSteps = await this.workflow.getSnapshot(projectId);
     const protocolFinal = workflowSteps?.steps?.['protocol-pdf']?.state === 'final';

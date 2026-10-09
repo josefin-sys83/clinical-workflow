@@ -62,7 +62,7 @@ const section = { id: '1', title: 'Subject Eligibility Criteria', content: '<p>E
     id: String(i), name, reference: 'ISO 14155', status: i < 2 ? 'complete' : 'partial',
   })) };
 const otherSection = { ...section, id: '2', title: 'Study Design', issues: allSeverities.map(severity => issue(`other-${severity}`, severity)) };
-const project = { id: 'fixture', targetMarkets: ['EU'], data: { projectData: {}, protocol: { sections: [section, otherSection] } }, roles: [] };
+const project = { id: 'fixture', targetMarkets: ['EU'], requirements: [], data: { projectData: {}, protocol: { sections: [section, otherSection] } }, roles: [] };
 let releaseAnalysis;
 let patchCalls = 0;
 let releaseDismissal;

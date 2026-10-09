@@ -46,7 +46,12 @@ export function intendedUseText(scope: Record<string, any>): string {
 export function buildProjectGenerationContext(project: Project | any) {
   const storedProjectData = project?.data?.projectData || {};
   const storedScope = project?.data?.scope || {};
-  const scope = { ...storedScope };
+  // Requirements have one persisted source: project_standards joined to its
+  // definitions. Rebuild only the transient shape expected by the Python API.
+  const scope = {
+    ...storedScope,
+    requirements: (project.requirements || []).map(({ definitionId, ...requirement }: any) => requirement),
+  };
 
   const aiProjectData = {
     ...storedProjectData,

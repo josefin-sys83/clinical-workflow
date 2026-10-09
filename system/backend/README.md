@@ -68,14 +68,34 @@ after the existing migrations. Apply
 before running the updated backend to persist authoring "won't fix" reasons.
 Apply [038_protocol_satisfied_requirements.sql](db/migrations/038_protocol_satisfied_requirements.sql)
 to persist satisfied requirements with their section.
+Apply [039_project_requirements.sql](db/migrations/039_project_requirements.sql)
+before deploying the requirement table cutover. It migrates the existing JSON list,
+keeps project-scoped assignment IDs and links, and removes the JSON requirement field.
 
 | Table | Added fields and purpose |
 |---|---|
 | `protocol_attachment` | `requirement_ids` stores directly assigned accepted Scope IDs; `extracted_text` and `extraction_error` cache document extraction. |
 | `protocol_section_issue` | `attachment_id` links the finding to an attachment. Verification uses `verification_status`, `verification_request_id`, `verification_reason`, and `verified_at`. Link attribution uses `document_linked_by_user_id` and `document_linked_at`. |
 
-Scope requirements live in project JSON. The backend validates requirement IDs
-against accepted requirements in that project and validates attachment ownership.
+Scope requirements come exclusively from three tables: `standards` stores shared
+definitions, `custom_requirements` stores project-owned definitions, and
+`project_standards` stores assignments, applicability decisions, justifications and
+ordering. Each assignment points to exactly one definition. Custom ownership,
+duplicate assignments and finding ownership are enforced by database constraints.
+
+`GET /api/projects/:projectId` returns the joined list as top-level `requirements`.
+`PATCH /api/projects/:projectId` accepts that same top-level list. Omitting the list
+preserves it; supplying it replaces assignments in the project/audit transaction.
+Baseline standards stay accepted. Linked assignments cannot be deleted until their
+finding and attachment links are removed. `GET /api/projects/requirement-library`
+reads shared library definitions from the database. `data.scope.requirements` writes
+are rejected by the API and a database constraint; there is no legacy read fallback.
+
+Generation/context builders adapt the table-backed list to Python's existing
+`scope.requirements`, accepted-requirement, finding-requirement and analysis-history
+payloads. No Python changes are required for this storage cutover.
+The backend validates requirement IDs against accepted assignments in that project
+and validates attachment ownership.
 There is no separate finding decision table. A finding can have one attachment link;
 an attachment can support several findings.
 

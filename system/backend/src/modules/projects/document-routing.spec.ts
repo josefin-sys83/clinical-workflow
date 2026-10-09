@@ -69,7 +69,7 @@ describe('project document routing', () => {
 
   it('registers each route once and preserves generation throttling, upload roles and metadata caching', () => {
     const all = [ProjectsController, ProtocolsController, ReportsController].flatMap(routes);
-    expect(all).toHaveLength(47);
+    expect(all).toHaveLength(48);
     expect(new Set(all.map(r => r.key)).size).toBe(all.length);
     for (const handler of [
       ProtocolsController.prototype.generateProtocol,

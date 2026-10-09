@@ -6,6 +6,7 @@ import { AuditService, type AuditActor } from '../audit/audit.service';
 import { assertProtocolDocumentsMutable } from './protocol-document-lock';
 import { validateFindingRequirements, acceptedFindingRequirements } from '../projects/finding-requirements';
 import { extractDocumentText } from '../../common/document-text';
+import { listProjectRequirements } from '../projects/project-requirements';
 
 @Injectable()
 export class ProtocolAttachmentsService {
@@ -236,8 +237,8 @@ export class ProtocolAttachmentsService {
     try {
       await client.query('BEGIN');
       await this.assertCanManageProtocolAttachments(client, projectId, actor.userId);
-      const data = await assertProtocolDocumentsMutable(client, projectId);
-      validateFindingRequirements(ids.map(requirementId => ({ requirementId })), data.scope?.requirements);
+      await assertProtocolDocumentsMutable(client, projectId);
+      validateFindingRequirements(ids.map(requirementId => ({ requirementId })), await listProjectRequirements(projectId, client));
       const { rows } = await client.query(
         `update protocol_attachment pa set requirement_ids=$3
          from protocol pr where pa.protocol_id=pr.id and pr.project_id=$1 and pa.id=$2
@@ -259,8 +260,8 @@ export class ProtocolAttachmentsService {
     } finally { client.release(); }
   }
 
-  async supportingDocuments(projectId: string, requirements: unknown, includeText = false) {
-    const accepted = acceptedFindingRequirements(requirements);
+  async supportingDocuments(projectId: string, includeText = false) {
+    const accepted = acceptedFindingRequirements(await listProjectRequirements(projectId));
     const { rows } = await getPool().query(
       `select pa.id, pa.appendix_number, pa.filename, pa.description, pa.requirement_ids,
               array(select distinct i.requirement_id from protocol_section_issue i

@@ -27,8 +27,8 @@ describe('protocol section analysis API contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     project = {
-      id: 'project', targetMarkets: [], deviceCategory: 'SaMD', data: {
-        synopsis: { text: 'Private synopsis' }, scope: { requirements },
+      id: 'project', targetMarkets: [], deviceCategory: 'SaMD', requirements, data: {
+        synopsis: { text: 'Private synopsis' }, scope: {},
         protocol: { sections: [section, { id: '2', title: 'Safety', content: 'Other section', locked: true }],
           amendments: [{ id: 'amendment', number: 1, title: 'Visits', reason: 'Clarification', description: 'Visit windows',
             protocolSnapshot: { '1': 'Entire old protocol' }, affectedProtocolSections: ['1'] }] },
@@ -118,7 +118,7 @@ describe('protocol section analysis API contract', () => {
   });
 
   it('keeps ambiguous requirement names unlinked', async () => {
-    project.data.scope.requirements = [...requirements, { ...requirements[0], id: 'duplicate' }];
+    project.requirements = [...requirements, { ...requirements[0], id: 'duplicate' }];
     ai.analyzeSection.mockResolvedValue({ issues: [{ id: 'finding', requirement: 'Follow-up', source: null }] });
     expect((await analyze(controller)).issues[0].requirementId).toBeNull();
   });

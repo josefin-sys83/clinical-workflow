@@ -7,6 +7,7 @@ describe('project generation context', () => {
       risk: 'IIa',
       deviceCategory: 'active',
       targetMarkets: ['EU', 'FDA'],
+      requirements: [{ id: 'requirement-1' }],
       data: {
         projectData: {
           sponsor: 'Canonical sponsor',
@@ -14,7 +15,6 @@ describe('project generation context', () => {
         },
         scope: {
           intendedUse: 'monitoring',
-          requirements: [{ id: 'requirement-1' }],
         },
       },
     });

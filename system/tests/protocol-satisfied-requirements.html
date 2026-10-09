@@ -21,10 +21,10 @@ const section = { id: '1', title: 'Protocol Overview', content: '<p>Follow-up is
   satisfiedRequirements: coverage };
 const protocol = { status: 'draft', sections: [section] };
 const project = { id: 'fixture', targetMarkets: [], roles: [{ title: 'Protocol Lead', assignedTo: [user] }],
-  data: { projectData: {}, protocol, scope: { requirements: [
+  requirements: [
     { id: 'req-1', title: 'Follow-up schedule', status: 'accepted' },
     { id: 'req-2', title: 'PMCF Plan', status: 'accepted' },
-  ] } } };
+  ], data: { projectData: {}, protocol, scope: {  } } };
 const errors = [];
 window.addEventListener('error', event => errors.push(event.message));
 window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));

@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { validateFindingRequirements } from '../projects/finding-requirements';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
+import { listProjectRequirements } from '../projects/project-requirements';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AuditService, AuditActor, RecordAuditEvent } from '../audit/audit.service';
 import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
@@ -446,12 +447,12 @@ export class ReportsService {
     const items = list(issues, 'issues');
     if (items.some(issue => issue?.requirementId != null && issue.requirementId !== '')) {
       const { rows } = await client.query(
-        `select p.data from projects p
+        `select p.id from projects p
          join report r on r.project_id=p.id
          join report_section s on s.report_id=r.id
          where s.id=$1 for update of p`, [sectionId],
       );
-      validateFindingRequirements(items, rows[0]?.data?.scope?.requirements);
+      validateFindingRequirements(items, await listProjectRequirements(rows[0]?.id, client));
     }
     const dismissals = await client.query(
       'select description from report_section_issue_dismissal where section_id=$1', [sectionId],

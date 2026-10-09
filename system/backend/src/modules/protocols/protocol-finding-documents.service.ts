@@ -7,6 +7,7 @@ import { acceptedFindingRequirements } from '../projects/finding-requirements';
 import { ProtocolsService } from './protocols.service';
 import { ProtocolAttachmentsService } from './protocol-attachments.service';
 import { assertProtocolDocumentsMutable } from './protocol-document-lock';
+import { listProjectRequirements } from '../projects/project-requirements';
 
 @Injectable()
 export class ProtocolFindingDocumentsService {
@@ -24,7 +25,7 @@ export class ProtocolFindingDocumentsService {
     let verification: { id: string; requestId: string } | undefined;
     try {
       await client.query('BEGIN');
-      const data = await assertProtocolDocumentsMutable(client, projectId);
+      await assertProtocolDocumentsMutable(client, projectId);
       const protocol = await this.protocols.getByProject(projectId, client);
       const section = protocol?.sections?.find((item: any) => item.id === sectionKey);
       const issue = section?.issues?.find((item: any) => item.id === issueId);
@@ -36,7 +37,7 @@ export class ProtocolFindingDocumentsService {
       );
       const findingId = findings[0]?.id;
       if (!findingId) throw new NotFoundException('Finding not found; reload the section.');
-      const requirement = acceptedFindingRequirements(data.scope?.requirements).find(r => r.id === issue.requirementId);
+      const requirement = acceptedFindingRequirements(await listProjectRequirements(projectId, client)).find(r => r.id === issue.requirementId);
       const snapshot = { ...issue, severity: issue.originalSeverity || issue.severity, status: 'open' };
       let document: any;
       if (action === 'document') {
@@ -88,7 +89,7 @@ export class ProtocolFindingDocumentsService {
 
   private async verify(projectId: string, id: string, requestId: string, actor: AuditActor) {
     const { rows } = await getPool().query(
-      `select d.*,p.data,ps.section_key,ps.title,ps.content from protocol_section_issue d
+      `select d.*,ps.section_key,ps.title,ps.content from protocol_section_issue d
        join protocol_section ps on ps.id=d.section_id join protocol pr on pr.id=ps.protocol_id
        join projects p on p.id=pr.project_id where p.id=$1 and d.id=$2 and d.verification_request_id=$3`, [projectId, id, requestId],
     );
@@ -97,8 +98,8 @@ export class ProtocolFindingDocumentsService {
     let status = 'failed';
     let reason = 'Document check unavailable. The document remains linked.';
     try {
-      const requirement = acceptedFindingRequirements(decision.data?.scope?.requirements).find(r => r.id === decision.requirement_id);
-      const documents = await this.attachments.supportingDocuments(projectId, decision.data?.scope?.requirements, true);
+      const requirement = acceptedFindingRequirements(await listProjectRequirements(projectId)).find(r => r.id === decision.requirement_id);
+      const documents = await this.attachments.supportingDocuments(projectId, true);
       const document = documents.find(d => d.id === decision.attachment_id);
       if (!requirement || !document?.extractedText) throw new Error(document?.extractionError || 'The document has no readable text or the requirement is no longer accepted.');
       const result = await this.ai.checkFindingDocument({

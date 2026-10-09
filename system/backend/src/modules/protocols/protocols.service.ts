@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
+import { listProjectRequirements } from '../projects/project-requirements';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { AuditService, type AuditActor, type RecordAuditEvent } from '../audit/audit.service';
 import { protocolIssueSeverity } from './protocol-issue-severity';
@@ -793,8 +794,8 @@ export class ProtocolsService {
     this.validateProtocolCollections(value);
     const findings = (value.sections || []).flatMap((section: any) => section.issues || []);
     if (findings.some((issue: any) => issue.requirementId != null && issue.requirementId !== '')) {
-      const { rows } = await client.query('select data from projects where id=$1 for update', [projectId]);
-      validateFindingRequirements(findings, rows[0]?.data?.scope?.requirements);
+      await client.query('select id from projects where id=$1 for update', [projectId]);
+      validateFindingRequirements(findings, await listProjectRequirements(projectId, client));
     }
     const protocolId = await this.ensureForProject(projectId, client);
     await client.query(`select id from protocol where id = $1 for update`, [protocolId]);

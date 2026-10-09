@@ -38,8 +38,12 @@ databaseTests('supporting documents in PostgreSQL', () => {
       create table project_members(project_id uuid,user_id uuid,role_title text);
       create table workflow_step_state(project_id uuid,step_id text,state text);
       create table document_artifact(project_id uuid,doc_type text);
-      create table report_section(id uuid primary key);
-      create table report_section_issue(id uuid primary key);
+      create table report(id uuid primary key,project_id uuid);
+      create table report_section(id uuid primary key,report_id uuid);
+      create table report_section_issue(id uuid primary key,section_id uuid);
+      create table standards(id integer generated always as identity primary key,code text,title text);
+      create table standard_rules(standard_id integer,always_applies boolean);
+      create table project_standards(project_id uuid,standard_id integer not null,created_at timestamptz default now(),primary key(project_id,standard_id));
     `);
     // Use the real existing protocol definitions and the protocol decision migration.
     const tables = migration('023_normalize_protocol.sql').match(/create table if not exists [\s\S]*?\n\);/g)!;
@@ -58,6 +62,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     await pool.query("insert into protocol_section_issue(section_id,issue_key,severity,description,requirement_id) values($1,'i-1','blocker','Missing PMCF Plan','req-1')", [section.rows[0].id]);
     await pool.query(`insert into protocol_attachment(id,protocol_id,appendix_number,filename,mime_type,bytes,uploaded_by_name,uploaded_at)
       values($1,$2,4,'PMCF Plan v2.1.txt','text/plain',$3,'Reviewer',now())`, [attachmentId, protocol.rows[0].id, Buffer.from('PMCF follow-up schedule and monitoring')]);
+    await pool.query(migration('039_project_requirements.sql'));
     audit = { record: jest.fn().mockResolvedValue(undefined) };
     protocols = new ProtocolsService(audit);
     attachments = new ProtocolAttachmentsService(audit);
@@ -79,8 +84,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     const finding = (await pool.query('select * from protocol_section_issue where attachment_id=$1', [attachmentId])).rows[0];
     expect(finding.document_linked_at).toBeInstanceOf(Date);
     await attachments.updateRequirements(projectId, attachmentId, [], actor);
-    const data = (await pool.query('select data from projects where id=$1', [projectId])).rows[0].data;
-    expect((await attachments.supportingDocuments(projectId, data.scope.requirements))[0].requirementIds).toEqual(['req-1']);
+    expect((await attachments.supportingDocuments(projectId))[0].requirementIds).toEqual(['req-1']);
     verifier.mockRestore();
     await (documents as any).verify(projectId, finding.id, finding.verification_request_id, actor);
     expect((await protocols.getByProject(projectId)).sections[0].issues[0].documentLink.status).toBe('satisfied');
@@ -100,7 +104,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     }, null, actor);
     const preserved = (await protocols.getByProject(projectId)).sections[0].issues[0];
     expect(preserved.documentLink).toMatchObject({ attachmentId, status: 'checking' });
-    expect((await attachments.supportingDocuments(projectId, data.scope.requirements))[0].requirementIds).toEqual(['req-1']);
+    expect((await attachments.supportingDocuments(projectId))[0].requirementIds).toEqual(['req-1']);
     expect((await pool.query('select id from protocol_section_issue')).rows[0].id).toBe(pending.id);
     // A pending assessment still belongs to the same surviving link after editing.
     verifier.mockRestore();

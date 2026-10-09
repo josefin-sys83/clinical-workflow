@@ -214,7 +214,7 @@ export default function App() {
           });
         }
         setRoles(p.roles || p.data?.roles || []);
-        setAcceptedRequirements((p.data?.scope?.requirements || []).filter((r: any) => r.status === 'accepted'));
+        setAcceptedRequirements(p.requirements.filter((r: any) => r.status === 'accepted'));
         if (p.data?.protocol?.sections?.length) {
           setProtocol(p.data.protocol);
           setSectionAnalysisStatus(Object.fromEntries(p.data.protocol.sections.map((s: any) => [s.id, s.analysisStatus || 'not-run'])));

@@ -33,7 +33,7 @@ export class ReportsController {
   @Header('Cache-Control', 'no-store')
   async getReportSections(@Param('projectId') projectId: string) {
     const project = await this.projects.get(projectId);
-    const scope = project?.data?.scope || {};
+    const { scope } = buildProjectGenerationContext(project);
 
     const targetMarkets = resolveReportMarkets(project.targetMarkets, scope);
 
@@ -258,7 +258,7 @@ export class ReportsController {
   ) {
     await this.documentWorkflow.assertDocumentNotSigned(projectId, 'report-pdf');
     const project = await this.projects.get(projectId);
-    const { aiProjectData, intendedUse } = buildProjectGenerationContext(project);
+    const { aiProjectData, intendedUse, scope } = buildProjectGenerationContext(project);
     const targetMarkets = aiProjectData.targetMarkets.length > 0 ? aiProjectData.targetMarkets : ['EU'];
     const deviceCategory = aiProjectData.deviceCategory;
 
@@ -287,7 +287,7 @@ export class ReportsController {
     const content = sanitizeSectionHtml(body.sectionContent);
     const requestId = await this.reports.beginSectionAnalysis(projectId, body.sectionId, content, req.user);
     try {
-      const requirements = project?.data?.scope?.requirements;
+      const requirements = scope.requirements;
       const result = await this.ai.analyzeReportSection(body.sectionTitle, content, targetMarkets, deviceCategory, intendedUse, body.appendicesList, amendmentContext, findingRequirementsText(requirements), projectId);
       if (!Array.isArray(result?.issues)) throw new InternalServerErrorException('AI returned invalid section analysis');
       result.issues = validateFindingRequirements(result.issues, requirements, 'ai');

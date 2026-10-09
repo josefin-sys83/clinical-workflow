@@ -299,7 +299,7 @@ export class ProtocolsController {
   }
 
   private async runSectionAnalysis(project: any, sectionTitle: string, sectionContent: string, sectionId: string | undefined, requiredElements: any[] | undefined, savedSection?: any) {
-    const { aiProjectData, intendedUse } = buildProtocolGenerationContext(project);
+    const { aiProjectData, intendedUse, scope } = buildProtocolGenerationContext(project);
     const targetMarkets = aiProjectData.targetMarkets;
     const deviceCategory = aiProjectData.deviceCategory;
 
@@ -317,7 +317,7 @@ export class ProtocolsController {
       .filter((s: any) => s.title !== sectionTitle && s.content)
       .map((s: any) => ({ title: s.title, content: s.content }));
 
-    const requirements = project?.data?.scope?.requirements;
+    const requirements = scope.requirements;
     const accepted = acceptedFindingRequirements(requirements);
     const { previousDecisions, linkedIssues } = sectionAnalysisHistory(section, requirements);
     const excludedRequirements = new Set((section?.issues || [])
@@ -326,7 +326,7 @@ export class ProtocolsController {
     const filterLinkedRequirements = (issues: any[]) => issues.filter(issue => !excludedRequirements.has(issue.requirementId));
     const acceptedRequirements = accepted.map(({ title, description }) => ({ name: title, description }));
 
-    const protocolAttachments = await this.attachments.supportingDocuments(project.id, requirements, true);
+    const protocolAttachments = await this.attachments.supportingDocuments(project.id, true);
     // One API attachment links to one requirement; keep internal IDs and extraction metadata local.
     const aiAttachments = protocolAttachments.flatMap(attachment =>
       attachment.extractedText?.trim() ? attachment.requirements.map(requirement => ({
