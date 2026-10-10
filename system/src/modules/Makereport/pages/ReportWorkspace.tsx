@@ -20,7 +20,7 @@ import { MilestoneBanner } from '@/shared/components/MilestoneBanner';
 import { useProtocolStatus } from '@/shared/hooks/useProtocolStatus';
 import { ProtocolFinalizedBanner } from '@/shared/components/ProtocolFinalizedBanner';
 import { useCurrentUser } from '@/shared/auth/CurrentUserContext';
-import { generateReportSectionDraft, hasReportText } from '@/shared/api/reports';
+import { generateReportSectionDraft, hasReportText, saveReportSections } from '@/shared/api/reports';
 import { apiErrorMessage } from '@/shared/api/http';
 
 function userFromRole(rawRoles: any[], roleTitle: string): User {
@@ -48,6 +48,7 @@ export function ReportWorkspace() {
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [sectionSaveError, setSectionSaveError] = useState<string | null>(null);
   const [generatingSectionIds, setGeneratingSectionIds] = useState<string[]>([]);
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
@@ -309,7 +310,7 @@ export function ReportWorkspace() {
       const result = await generateReportSectionDraft(projectId, section);
       if (!run.active) return;
       setSections(prev => prev.map(s => s.id === sectionId && !hasReportText(s.content) && !hasReportText(s.aiDraft)
-        ? { ...s, aiDraft: result.content, aiDraftGenerated: true } : s));
+        ? { ...s, aiDraft: result.content, aiDraftGenerated: true, revision: result.revision, updatedAt: result.updatedAt } : s));
     } catch (error) {
       if (!run.active) return;
       setDraftErrors(prev => ({ ...prev, [sectionId]: apiErrorMessage(error, error instanceof Error ? error.message : 'Draft generation failed. Please retry.') }));
@@ -360,19 +361,18 @@ export function ReportWorkspace() {
   // Merges `partialData` into the existing section object for the given sectionId.
   const saveReportSectionState = async (sectionId: string, partialData: Record<string, any>) => {
     if (!projectId) return;
+    if (Object.hasOwn(partialData, 'content')) {
+      const section = sections.find(s => s.id === sectionId);
+      partialData = { ...partialData, expectedRevision: section?.revision ?? 0 };
+    }
     try {
-      return await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sections: { [sectionId]: partialData } }),
-      }).then(async (response) => {
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          throw new Error(errorBody?.message || `Report section save failed (${response.status})`);
-        }
-        return response.json();
-      });
+      const saved = await saveReportSections(projectId, { [sectionId]: partialData });
+      setSectionSaveError(null);
+      if (saved[sectionId]) setSections(prev => prev.map(section => section.id === sectionId
+        ? { ...section, revision: saved[sectionId].revision, updatedAt: saved[sectionId].updatedAt } : section));
+      return saved;
     } catch (error) {
+      setSectionSaveError(apiErrorMessage(error, 'The section could not be saved. Your text has been kept.'));
       console.error('Report section state save failed', error);
       return null;
     }
@@ -475,14 +475,14 @@ export function ReportWorkspace() {
     if (section?.aiDraft) void handleSectionUpdate(sectionId, section.aiDraft);
   };
 
-  const handleDismissAIDraft = (sectionId: string) => {
-    setSections(sections.map(s =>
-      s.id === sectionId ? { ...s, aiDraft: undefined } : s
-    ));
+  const handleDismissAIDraft = async (sectionId: string) => {
     // The AI draft was already persisted as `content` server-side when generated
     // (generate-report-section writes it immediately) — clear it so a dismissed
     // draft doesn't silently reappear as real content on the next page load.
-    saveReportSectionState(sectionId, { content: '' });
+    const saved = await saveReportSectionState(sectionId, { content: '' });
+    if (saved?.[sectionId]) setSections(prev => prev.map(s =>
+      s.id === sectionId ? { ...s, content: '', aiDraft: undefined } : s
+    ));
   };
 
   const handleAssetToggle = (assetId: string) => {
@@ -681,18 +681,17 @@ export function ReportWorkspace() {
   const canAssembleReport = allSectionsComplete && !hasUnresolvedBlockers && !hasPendingDeviations && !hasUnapprovedSections;
   const hasIssues = !allSectionsComplete || hasUnresolvedBlockers || hasPendingDeviations;
 
-  const handleApproveSection = (sectionId: string, comment?: string) => {
+  const handleApproveSection = async (sectionId: string, comment?: string) => {
     const section = sections.find(s => s.id === sectionId);
     if (!section) return;
 
-    setSections(sections.map(s =>
+    const saved = await saveReportSectionState(sectionId, { state: 'approved', content: section.content || section.aiDraft || '' });
+    if (!saved?.[sectionId]) return;
+    setSections(prev => prev.map(s =>
       s.id === sectionId
         ? { ...s, state: 'approved' as const }
         : s
     ));
-
-    // Persist so approval survives page reload
-    saveReportSectionState(sectionId, { state: 'approved', content: section.content || section.aiDraft || '' });
 
   };
 
@@ -873,6 +872,9 @@ export function ReportWorkspace() {
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          {sectionSaveError && <div role="alert" className="mx-6 mt-4 rounded border p-3 text-sm">
+            {sectionSaveError}
+          </div>}
           {isReportBlocked && (
             <div className="mx-8 mt-6 p-4 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-3">
               <div className="w-5 h-5 text-rose-700 flex-shrink-0 mt-0.5">⚠</div>

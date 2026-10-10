@@ -154,7 +154,7 @@ describe('protocol write transactions', () => {
   it('rolls back a section edit if its audit write fails', async () => {
     jest.spyOn(service, 'updateSectionContent').mockResolvedValue({ title: 'Study Design', content: '<p>Edited</p>', updatedAt: '2026-09-15T00:00:00Z', revision: 2 });
     audit.record.mockRejectedValue(new Error('Audit unavailable'));
-    await expect(service.updateSection('project', 'section-4', { content: '<p>Edited</p>', reason: 'Correction' }, actor))
+    await expect(service.updateSection('project', 'section-4', { content: '<p>Edited</p>', expectedRevision: 1, reason: 'Correction' }, actor))
       .rejects.toThrow('Audit unavailable');
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
       type: 'section.content.updated', actor, metadata: expect.objectContaining({ reason: 'Correction', newContent: '<p>Edited</p>' }),
@@ -166,13 +166,14 @@ describe('protocol write transactions', () => {
 
   it('returns the exact saved content for subsequent analysis', async () => {
     client.query.mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.startsWith('select content, revision')) return { rows: [{ content: '<p>Original</p>', revision: 2 }] };
       if (sql.includes('update protocol_section set')) {
         return { rows: [{ title: 'Overview', content: params?.[2], updated_at: '2026-09-24T00:00:00Z', revision: 3 }] };
       }
       return { rows: [{ id: 'project', data: {} }] };
     });
     const response = await service.updateSection('project', '1', {
-      content: '<p>First<br>Second</p>', reason: 'Clarification',
+      content: '<p>First<br>Second</p>', expectedRevision: 2, reason: 'Clarification',
     }, actor);
 
     expect(response).toMatchObject({ ok: true, content: '<p>First<br />Second</p>', revision: 3 });
@@ -182,7 +183,7 @@ describe('protocol write transactions', () => {
   it('rejects a missing project before saving section content', async () => {
     client.query.mockResolvedValue({ rows: [] });
     const save = jest.spyOn(service, 'updateSectionContent');
-    await expect(service.updateSection('missing', 'section-4', { content: 'Text' }, actor)).rejects.toThrow(NotFoundException);
+    await expect(service.updateSection('missing', 'section-4', { content: 'Text', expectedRevision: 1 }, actor)).rejects.toThrow(NotFoundException);
     expect(save).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
   });

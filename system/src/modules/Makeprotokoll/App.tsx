@@ -377,7 +377,7 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [projectId, waitingForSavedAnalysis]);
 
-  const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string) => {
+  const handleSectionSaved = async (sectionId: string, newContent: string, prevContent: string, reason: string, expectedRevision: number) => {
     if (generationRequested.current) throw new Error('Please wait for protocol generation to finish.');
     // Invalidate any analysis already in flight for this section — its result
     // would describe the previous text.
@@ -396,6 +396,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             content: newContent,
+            expectedRevision,
             previousContent: prevContent,
             reason,
             userId: currentUser,
@@ -419,11 +420,12 @@ export default function App() {
     }));
 
     // Development bypass sections remain editable without the AI provider.
-    if (currentSection?.aiGenerated === false) return;
+    if (currentSection?.aiGenerated === false) return saved;
 
     // 3. Re-analyse in the background. The save is already confirmed; analysis
     //    tracks its own status and errors and never throws.
     void analyzeSectionWithAI(currentSection?.title || '', saved.content, sectionId, prevOpenCount);
+    return saved;
   };
 
   const canForceProtocolDraft = import.meta.env.DEV || sessionUser?.roles.includes('admin') === true;
@@ -1159,7 +1161,9 @@ export default function App() {
                         ref={el => sectionRefs.current[section.id] = el}
                         isHighlighted={highlightedSection === section.id}
                         isReviewMode={isReviewMode}
-                        onSaved={(newContent, prevContent, reason) => handleSectionSaved(section.id, newContent, prevContent, reason)}
+                        projectId={projectId}
+                        draftOwner={sessionUser?.id || currentUser}
+                        onSaved={(newContent, prevContent, reason, expectedRevision) => handleSectionSaved(section.id, newContent, prevContent, reason, expectedRevision)}
                         onDirtyChange={(dirty) => handleDirtyChange(section.id, dirty)}
                         onWontFix={(issueId, comment) => handleWontFix(section.id, issueId, comment)}
                         onAddComment={(content, type) => handleAddComment(section.id, content, type)}

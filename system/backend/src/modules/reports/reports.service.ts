@@ -11,6 +11,7 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
 import { listProjectRequirements } from '../projects/project-requirements';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
+import { assertSectionRevision } from '../../common/section-revision';
 import { AuditService, AuditActor, RecordAuditEvent } from '../audit/audit.service';
 import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
 
@@ -292,13 +293,15 @@ export class ReportsService {
       for (const [key, patch] of Object.entries(patches)) {
         this.validateSectionPatch(key, patch);
         const definition = definitions.find((definition) => definition.id === key);
-        const sectionId = await this.ensureSection(reportId, key, definition, actor, client);
-        // The owning project is locked by write(). Preserve text saved by another
-        // author or generation request while the AI was running.
-        if (onlyMissingContent) {
-          const current = await client.query('select content, ai_draft from report_section where id=$1', [sectionId]);
-          if (String(current.rows[0]?.content || current.rows[0]?.ai_draft || '').trim()) continue;
+        if (own(patch, 'content')) {
+          const { rows } = await client.query(
+            'select content, ai_draft, revision, updated_at from report_section where report_id=$1 and section_key=$2 for update',
+            [reportId, key],
+          );
+          if (onlyMissingContent && String(rows[0]?.content || rows[0]?.ai_draft || '').trim()) continue;
+          assertSectionRevision(key, patch.expectedRevision, rows[0]);
         }
+        const sectionId = await this.ensureSection(reportId, key, definition, actor, client);
         await this.updateSectionFields(sectionId, patch, actor, client);
         await this.updateSectionCollections(projectId, sectionId, key, patch, actor, client);
       }
@@ -348,7 +351,7 @@ export class ReportsService {
     if (!key.trim() || !patch || Array.isArray(patch) || typeof patch !== 'object')
       throw new BadRequestException('Invalid section patch');
     const columns = SECTION_COLUMNS;
-    const collections = ['issues', 'wontFixIssues', 'completenessElements', 'previousContent'];
+    const collections = ['issues', 'wontFixIssues', 'completenessElements', 'previousContent', 'expectedRevision'];
     for (const field of Object.keys(patch))
       if (!columns[field] && !collections.includes(field))
         throw new BadRequestException(`Unsupported report section field: ${field}`);
@@ -395,13 +398,10 @@ export class ReportsService {
     client: PoolClient,
   ) {
     const previous = own(patch, 'content') ? await client.query('select content from report_section where id=$1', [sectionId]) : null;
-    if (previous && own(patch, 'previousContent') &&
-        sanitizeSectionHtml(previous.rows[0]?.content) !== sanitizeSectionHtml(patch.previousContent)) {
-      throw new ConflictException('The section changed while you were editing. Reload before saving.');
-    }
     const resetAnalysis = previous && (own(patch, 'previousContent') || patch.userEdited === true || sanitizeSectionHtml(previous.rows[0]?.content) !== sanitizeSectionHtml(patch.content));
     const values: any[] = [sectionId, actor.userId ?? null];
     const sets = ['updated_at=now()', 'updated_by_user_id=$2'];
+    if (own(patch, 'content')) sets.push('revision=revision+1');
     for (const [field, col] of Object.entries(SECTION_COLUMNS))
       if (own(patch, field)) {
         let value = patch[field];

@@ -28,6 +28,7 @@ const saved = {
     comments: [{ id: 'c1', text: 'Persisted comment', author: { name: 'Writer' }, replies: [] }],
     completenessElements: [{ id: 'e1', title: 'Persisted evidence', isoReference: 'Clause 1', status: 'verified' }] },
 };
+for (const section of Object.values(saved)) section.revision = 1;
 const user = { id: 'writer', email: 'writer@example.test', name: 'Writer' };
 const project = { id: 'fixture', name: 'Storage regression', targetMarkets: ['Canada'],
   data: {}, report: { sections: saved, sectionDefs: definitions, crossConsistencyChecked: true, crossConsistencyIssues: [] },
@@ -61,10 +62,15 @@ window.fetch = async (input, init = {}) => {
     if (mode === 'timeout') return new Response(JSON.stringify({ message: 'AI request timed out' }), { status: 504 });
     if (mode === 'empty') return new Response(JSON.stringify({ sectionId: body.sectionId, content: '' }), { status: 200 });
     const content = `<h3>Generated ${body.sectionId} text</h3><p><strong>Formatted draft</strong></p><img src="invalid:" onerror="window.unsafeDraft = true">`;
-    saved[body.sectionId] = { ...saved[body.sectionId], content };
-    payload = { sectionId: body.sectionId, content };
+    saved[body.sectionId] = { ...saved[body.sectionId], content, revision: (saved[body.sectionId]?.revision || 0) + 1 };
+    payload = { sectionId: body.sectionId, content, revision: saved[body.sectionId].revision };
   } else if (url.endsWith('/report/sections')) {
-    for (const [id, patch] of Object.entries(body.sections)) saved[id] = { ...saved[id], ...patch };
+    for (const [id, patch] of Object.entries(body.sections)) {
+      if (Object.hasOwn(patch, 'content') && patch.expectedRevision !== (saved[id]?.revision || 0)) {
+        return new Response(JSON.stringify({ message: 'Fixture received an outdated section revision' }), { status: 409 });
+      }
+      saved[id] = { ...saved[id], ...patch, revision: (saved[id]?.revision || 0) + (Object.hasOwn(patch, 'content') ? 1 : 0) };
+    }
     payload = saved;
   } else if (url.endsWith('/report-sections')) payload = { sections: definitions, targetMarkets: ['Canada'] };
   else if (url.endsWith('/projects/fixture')) payload = project;
@@ -154,6 +160,8 @@ try {
   [...document.querySelectorAll('button')].find(b => b.textContent === 'Edit').click();
   await waitFor(() => document.querySelector('[contenteditable="true"]'));
   document.querySelector('[contenteditable="true"]').innerHTML = '<p>Edited executive text</p>';
+  document.querySelector('[contenteditable="true"]').dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Save' && !b.disabled));
   [...document.querySelectorAll('button')].find(b => b.textContent === 'Save').click();
   await waitFor(() => document.querySelector('textarea[placeholder^="e.g."]'));
   const reason = document.querySelector('textarea[placeholder^="e.g."]');

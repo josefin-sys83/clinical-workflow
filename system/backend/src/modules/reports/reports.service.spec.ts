@@ -59,7 +59,7 @@ describe('relational reports', () => {
   it('rolls back a report write if its audit cannot be stored', async () => {
     jest.spyOn(service, 'getByProject').mockResolvedValue({ sections: {} });
     audit.record.mockRejectedValue(new Error('audit unavailable'));
-    await expect(service.updateSections('project', { safety: { content: 'Edited' } }, actor)).rejects.toThrow('audit unavailable');
+    await expect(service.updateSections('project', { safety: { content: 'Edited', expectedRevision: 0 } }, actor)).rejects.toThrow('audit unavailable');
     expect(query).toHaveBeenCalledWith('ROLLBACK');
     expect(query).not.toHaveBeenCalledWith('COMMIT');
   });
@@ -71,13 +71,13 @@ describe('relational reports', () => {
       if (sql.startsWith('select id from projects') || sql.startsWith('insert into')) return { rows: [{ id: 'row' }] };
       return { rows: [] };
     });
-    await service.updateSections('project', { safety: { content: '<p>AI result</p>' } }, actor, [], true);
+    await service.updateSections('project', { safety: { content: '<p>AI result</p>', expectedRevision: 0 } }, actor, [], true);
     expect(query.mock.calls.some(([sql]) => sql.startsWith('update report_section set'))).toBe(false);
   });
 
   it('checks the report lock inside the write transaction', async () => {
     query.mockImplementation(async (sql: string) => ({ rows: sql.includes('workflow_step_state') || sql.startsWith('select id from projects') ? [{ id: 'locked' }] : [] }));
-    await expect(service.updateSections('project', { safety: { content: 'Edited' } }, actor)).rejects.toThrow(ForbiddenException);
+    await expect(service.updateSections('project', { safety: { content: 'Edited', expectedRevision: 0 } }, actor)).rejects.toThrow(ForbiddenException);
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining('insert into report_section('), expect.anything());
     expect(audit.record).not.toHaveBeenCalled();
   });
@@ -192,12 +192,12 @@ describe('relational reports', () => {
   it('keeps SQL placeholders aligned and audits the original dismissal decisions', async () => {
     jest.spyOn(service, 'getByProject').mockResolvedValue({ sections: {} });
     await service.updateSections('project', { safety: {
-      title: 'Safety', content: '<p>Saved</p><script>bad()</script>', state: 'draft', userEdited: true,
+      title: 'Safety', expectedRevision: 0, content: '<p>Saved</p><script>bad()</script>', state: 'draft', userEdited: true,
       issues: [{ id: 'issue', severity: 'info', message: 'Legacy description' }],
       wontFixIssues: ['Not applicable', 'Not applicable'],
     } }, actor);
     const [sql, values] = query.mock.calls.find(([sql]) => sql.startsWith('update report_section set'))!;
-    expect(sql).toBe('update report_section set updated_at=now(),updated_by_user_id=$2,title=$3,content=$4,status=$5,user_edited=$6,analysis_status=\'not-run\',analysis_error=null,analysis_request_id=null where id=$1');
+    expect(sql).toBe('update report_section set updated_at=now(),updated_by_user_id=$2,revision=revision+1,title=$3,content=$4,status=$5,user_edited=$6,analysis_status=\'not-run\',analysis_error=null,analysis_request_id=null where id=$1');
     expect(values).toEqual(['section', actor.userId, 'Safety', '<p>Saved</p>', 'draft', true]);
     const issueInsert = query.mock.calls.find(([sql]) => sql.startsWith('insert into report_section_issue('))!;
     expect(issueInsert[1]).toEqual(['section', 'issue', 1, 'info', undefined, undefined, 'Legacy description', undefined, undefined, null, 'open', undefined, undefined, null]);

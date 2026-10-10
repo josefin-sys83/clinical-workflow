@@ -52,6 +52,20 @@ describe('report generation', () => {
     expect(reports.updateSections).not.toHaveBeenCalled();
   });
 
+  it('uses the revision read before AI generation and returns the stored revision and text', async () => {
+    projects.get.mockResolvedValue({ name: 'Study', roles: [], data: {},
+      report: { sections: { 'section-2': { content: 'Original', revision: 7 } } } });
+    reports.updateSections.mockResolvedValue({
+      'section-2': { content: '<p>Sanitized saved text</p>', revision: 8, updatedAt: '2026-10-09T00:00:00Z' },
+    });
+    const result = await controller.generateReportSection('project', {
+      sectionId: 'section-2', sectionTitle: 'Introduction', sectionNumber: 2,
+    }, { user: {} });
+    expect(reports.updateSections.mock.calls[0][1]['section-2'].expectedRevision).toBe(7);
+    expect(result).toEqual({ sectionId: 'section-2', content: '<p>Sanitized saved text</p>',
+      revision: 8, updatedAt: '2026-10-09T00:00:00Z' });
+  });
+
   it('uses relational metadata and the intended use saved in scope', async () => {
     projects.get.mockResolvedValue({
       name: 'Canonical study', risk: 'IIa', deviceCategory: 'active', targetMarkets: ['EU'], roles: [],

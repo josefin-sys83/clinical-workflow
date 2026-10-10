@@ -1,6 +1,6 @@
 import { apiFetch } from './http';
 
-type GeneratedSection = { sectionId: string; content: string };
+type GeneratedSection = { sectionId: string; content: string; revision: number; updatedAt?: string };
 const generationRequests = new Map<string, Promise<GeneratedSection>>();
 
 export function hasReportText(value: unknown): boolean {

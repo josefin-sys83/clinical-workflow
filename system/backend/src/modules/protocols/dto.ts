@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength, IsArray, ArrayMaxSize, IsUUID, IsIn } from 'class-validator';
+import { IsOptional, IsString, MaxLength, IsArray, ArrayMaxSize, IsUUID, IsIn, IsInt, Min } from 'class-validator';
 import { NoNullBytes } from '../../common/no-null-bytes.decorator';
 
 // Generous but bounded — real protocol/report sections can legitimately run to tens of
@@ -12,6 +12,11 @@ export class UpdateSectionContentDto {
   @MaxLength(MAX_SECTION_CONTENT_LENGTH)
   @NoNullBytes()
   content!: string;
+
+  @ApiProperty({ minimum: 1 })
+  @IsInt()
+  @Min(1)
+  expectedRevision!: number;
 
   @ApiProperty({ required: false })
   @IsOptional()

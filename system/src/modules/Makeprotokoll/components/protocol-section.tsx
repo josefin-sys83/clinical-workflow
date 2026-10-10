@@ -7,6 +7,8 @@ import { ReviewRemediation } from '@/shared/editor/ReviewRemediation';
 import { FindingDetails } from '@/shared/protocol/FindingDetails';
 import { FindingDocumentControl } from '@/shared/protocol/FindingDocumentControl';
 import { SaveStatus } from '@/shared/editor/SaveStatus';
+import { SectionConflictPanel } from '@/shared/editor/SectionConflictPanel';
+import { sectionConflict, sectionDraftKey, readSectionDraft, writeSectionDraft, clearSectionDraft, type SectionConflict, type SavedSection } from '@/shared/editor/section-draft';
 import { apiErrorMessage } from '@/shared/api/http';
 import { Info, AlertCircle, CheckCircle2, Clock, MessageSquare, History, ChevronDown, User, Lock, UserCheck, FileCheck, AlertTriangle, XCircle, Ban, Bold, Italic, Underline, Heading1, Heading2, Type, Table2, Image, Loader2, List, ListOrdered } from 'lucide-react';
 import { editTable, tableCellAt, TABLE_ACTIONS, type TableAction } from '@/shared/editor/table-editing';
@@ -103,7 +105,9 @@ interface ProtocolSectionProps {
   onToggle: () => void;
   isHighlighted?: boolean;
   isReviewMode?: boolean;
-  onSaved?: (newContent: string, previousContent: string, reason: string) => Promise<void>;
+  onSaved?: (newContent: string, previousContent: string, reason: string, expectedRevision: number) => Promise<SavedSection | void>;
+  projectId?: string;
+  draftOwner?: string;
   onDirtyChange?: (dirty: boolean) => void;
   onWontFix?: (issueId: string, comment: string) => void;
   onAddComment?: (content: string, type: string) => void;
@@ -228,7 +232,7 @@ function renderMarkdown(content: string): string {
 }
 
 function ProtocolSectionComponent(
-  { section, targetMarkets = [], deviceCategory = '', requirements = [], isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onDirtyChange, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
+  { section, projectId = '', draftOwner = '', targetMarkets = [], deviceCategory = '', requirements = [], isExpanded, onToggle, isHighlighted = false, isReviewMode = false, onSaved, onDirtyChange, onWontFix, onAddComment, onResolveComment, onNavigate, onApprove, onUnlock, deadline, analysisStatus = 'not-run', analysisError, analysisRetrying = false, onRetryAnalysis, attachments = [], documentLinksLocked = false, onFindingDocument }: ProtocolSectionProps,
   ref: React.Ref<HTMLDivElement>
 ) {
   const issuesRef = useRef<HTMLDivElement>(null);
@@ -244,6 +248,11 @@ function ProtocolSectionComponent(
   const [isSaving, setIsSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const draftKey = sectionDraftKey('protocol', projectId, draftOwner, section.id);
+  const [recoveredDraft, setRecoveredDraft] = useState(() => readSectionDraft(draftKey));
+  const [conflict, setConflict] = useState<SectionConflict | null>(null);
+  const [draftContent, setDraftContent] = useState('');
+  const editBase = useRef({ content: '', revision: 0 });
 
   // Lets the page warn before navigation while this section has unsaved edits.
   useEffect(() => {
@@ -283,15 +292,40 @@ function ProtocolSectionComponent(
   // Populate editor HTML when entering edit mode
   useEffect(() => {
     if (isEditing && editorRef.current) {
+      const recovered = readSectionDraft(draftKey);
+      editBase.current = {
+        content: recovered?.baseContent ?? section.content ?? '',
+        revision: recovered?.expectedRevision ?? section.revision ?? 1,
+      };
       // Use the same sanitized, annotated content as reading mode. Initialize only
       // on entry so toolbar updates cannot replace the user's in-progress edits.
-      editorRef.current.innerHTML = renderContent(section.content || '') || '<p><br></p>';
+      editorRef.current.innerHTML = renderContent(recovered?.content ?? section.content ?? '') || '<p><br></p>';
+      if (recovered) {
+        setIsDirty(true);
+        setChangeReason(recovered.reason || '');
+        if (recovered.expectedRevision !== section.revision) setConflict({
+          sectionId: section.id, message: 'The saved section changed.',
+          current: { content: section.content || '', revision: section.revision ?? 1, updatedAt: section.updated },
+        });
+      }
       editorRef.current.focus();
       // Enter starts a new paragraph in every browser, instead of a <div> or <br>.
       document.execCommand('defaultParagraphSeparator', false, 'p');
-      return trackReviewEditor(editorRef.current, openIssues, setEditorFindings);
+      const editor = editorRef.current;
+      const initial = stripReviewHighlights(editor.innerHTML);
+      setDraftContent(initial);
+      const stopTracking = trackReviewEditor(editor, openIssues, setEditorFindings);
+      const observer = new MutationObserver(() => {
+        const content = stripReviewHighlights(editor.innerHTML);
+        setDraftContent(content);
+        if (content !== initial || recovered || readSectionDraft(draftKey)) {
+          writeSectionDraft(draftKey, { content, baseContent: editBase.current.content, expectedRevision: editBase.current.revision });
+        }
+      });
+      observer.observe(editor, { subtree: true, childList: true, characterData: true, attributes: true });
+      return () => { observer.disconnect(); stopTracking(); };
     }
-  }, [isEditing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEditing, isExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── WYSIWYG contentEditable toolbar helpers ────────────────────────────────
 
@@ -347,6 +381,7 @@ function ProtocolSectionComponent(
 
   /** Focus the editor, run an execCommand, then resync toolbar state. */
   const execFmt = (cmd: string, value?: string) => {
+    if (isSaving) return;
     editorRef.current?.focus();
     document.execCommand(cmd, false, value);
     updateActiveFormats();
@@ -362,6 +397,7 @@ function ProtocolSectionComponent(
   const handleNumberedList = () => execFmt('insertOrderedList');
 
   const handleTable = (action: TableAction) => {
+    if (isSaving) return;
     const cell = tableCellAt(editorRef.current);
     if (!cell) return;
     editTable(cell, action);
@@ -371,6 +407,7 @@ function ProtocolSectionComponent(
   };
 
   const handleInsertTable = () => {
+    if (isSaving) return;
     const th = (n: number) =>
       `<th style="border:1px solid #d1d5db;padding:6px 12px;background:#f8fafc;font-weight:600;text-align:left;">Column ${n}</th>`;
     const td = () =>
@@ -388,6 +425,7 @@ function ProtocolSectionComponent(
   };
 
   const handleImageInsert = () => {
+    if (isSaving) return;
     const MAX_BYTES = 200 * 1024; // 200 KB limit
     const MAX_DIM   = 1200;       // max pixel dimension before downscaling
 
@@ -1050,7 +1088,7 @@ function ProtocolSectionComponent(
                       {/* ── Save / Cancel ── */}
                       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', alignItems: 'center' }}>
                         <button
-                          disabled={!isDirty || isSaving}
+                          disabled={!isDirty || isSaving || !!conflict}
                           onClick={() => { setChangeReason(''); setShowReasonModal(true); }}
                           style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', fontSize: '0.875rem', cursor: !isDirty || isSaving ? 'not-allowed' : 'pointer', opacity: !isDirty || isSaving ? 0.5 : 1 }}
                         >Save</button>
@@ -1059,6 +1097,9 @@ function ProtocolSectionComponent(
                           onClick={() => {
                             if (isDirty && !window.confirm('Discard your unsaved changes?')) return;
                             setIsDirty(false);
+                            clearSectionDraft(draftKey);
+                            setRecoveredDraft(null);
+                            setConflict(null);
                             setSaveError(null);
                             setIsEditing(false);
                           }}
@@ -1071,6 +1112,14 @@ function ProtocolSectionComponent(
                           error={saveError}
                         />
                       </div>
+                      {conflict && <SectionConflictPanel conflict={conflict} draft={draftContent} onContinue={() => {
+                        if (!conflict.current) return;
+                        editBase.current = { content: conflict.current.content, revision: conflict.current.revision };
+                        writeSectionDraft(draftKey, { content: stripReviewHighlights(editorRef.current?.innerHTML || ''),
+                          baseContent: editBase.current.content, expectedRevision: editBase.current.revision });
+                        setConflict(null);
+                        setSaveError(null);
+                      }} />}
                     </div>
                   );
                 }
@@ -1084,6 +1133,9 @@ function ProtocolSectionComponent(
                 );
                 return (
                   <div key="section-view">
+                    {recoveredDraft && <p className="mb-2 text-sm text-amber-700">An unsaved draft is available.{' '}
+                      <button type="button" className="underline" onClick={() => setIsEditing(true)}>Restore draft</button>
+                    </p>}
                     {editButton}
                     <div className="relative min-h-24" aria-busy={analysisStatus === 'running'}>
                       {analysisStatus === 'running' && <SectionAnalysisOverlay />}
@@ -1192,9 +1244,10 @@ function ProtocolSectionComponent(
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
                   if (!onSaved) return;
-                  const prevContent = section.content || '';
+                  const prevContent = editBase.current.content;
                   const newContent = stripReviewHighlights(editorRef.current?.innerHTML || '');
                   const reason = changeReason.trim();
+                  writeSectionDraft(draftKey, { content: newContent, baseContent: prevContent, expectedRevision: editBase.current.revision, reason });
                   setShowReasonModal(false);
                   setSaveError(null);
                   setIsSaving(true);
@@ -1202,10 +1255,24 @@ function ProtocolSectionComponent(
                     // The editor stays open until the server confirms. On failure the
                     // user's text is still here and can be saved again. The parent owns
                     // persistence and the audit entry.
-                    await onSaved(newContent, prevContent, reason);
+                    const saved = await onSaved(newContent, prevContent, reason, editBase.current.revision);
+                    const remaining = stripReviewHighlights(editorRef.current?.innerHTML || '');
+                    if (remaining !== newContent) {
+                      editBase.current = { content: saved ? saved.content : newContent,
+                        revision: saved ? saved.revision : editBase.current.revision + 1 };
+                      writeSectionDraft(draftKey, { content: remaining, baseContent: editBase.current.content,
+                        expectedRevision: editBase.current.revision, reason });
+                      setIsDirty(true);
+                      setSaveError('The submitted text was saved. Your further changes are still in the editor; save them when ready.');
+                      return;
+                    }
+                    clearSectionDraft(draftKey);
+                    setRecoveredDraft(null);
+                    setConflict(null);
                     setIsDirty(false);
                     setIsEditing(false);
                   } catch (error) {
+                    setConflict(sectionConflict(error));
                     setSaveError(apiErrorMessage(error, 'The server did not confirm the save.'));
                   } finally {
                     setIsSaving(false);

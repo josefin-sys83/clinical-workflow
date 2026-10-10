@@ -97,7 +97,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     await documents.decide(projectId, '1', 'i-1', 'document', actor, attachmentId);
     const pending = (await pool.query('select id,verification_request_id from protocol_section_issue')).rows[0];
 
-    const edited = await protocols.updateSection(projectId, '1', { content: '<p>Edited CIP</p>', reason: 'Clarification' }, actor);
+    const edited = await protocols.updateSection(projectId, '1', { content: '<p>Edited CIP</p>', expectedRevision: (await protocols.getByProject(projectId)).sections[0].revision, reason: 'Clarification' }, actor);
     const analysis = await protocols.beginSectionAnalysis(projectId, '1', edited.content, actor);
     await protocols.finishSectionAnalysis(projectId, '1', analysis.requestId, {
       issues: [{ id: 'i-1', severity: 'blocker', status: 'open', requirementId: 'req-1', description: 'Missing PMCF Plan' }],
@@ -171,7 +171,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
     expect((await pool.query('select satisfied_requirements from protocol_section')).rows[0].satisfied_requirements).toEqual(coverage);
 
     const edited = await protocols.updateSection(projectId, '1', {
-      content: `${content}<p>Updated follow-up details.</p>`, reason: 'Clarification',
+      content: `${content}<p>Updated follow-up details.</p>`, expectedRevision: (await protocols.getByProject(projectId)).sections[0].revision, reason: 'Clarification',
     }, actor);
     expect((await protocols.getByProject(projectId)).sections[0].satisfiedRequirements).toEqual(coverage);
     // Older/focused payloads may omit coverage; they must not erase it.

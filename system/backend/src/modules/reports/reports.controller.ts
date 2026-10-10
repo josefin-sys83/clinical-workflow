@@ -145,7 +145,9 @@ export class ReportsController {
     });
 
     const generatedSectionPatches = Object.fromEntries(
-      sectionDefs.map(s => [s.id, { title: s.title, number: s.number, order: s.number, ...(generatedContents.has(s.id) ? { content: generatedContents.get(s.id), aiDraft: null } : {}) }]),
+      sectionDefs.map(s => [s.id, { title: s.title, number: s.number, order: s.number, ...(generatedContents.has(s.id) ? {
+        content: generatedContents.get(s.id), aiDraft: null, expectedRevision: project.report?.sections?.[s.id]?.revision ?? 0,
+      } : {}) }]),
     );
     const persistedSections = await this.reports.updateSections(
       projectId,
@@ -226,9 +228,10 @@ export class ReportsController {
     // both stored and returned directly in the HTTP response.
     const trimmedContent = requireGeneratedText(content, body.sectionTitle);
 
-    await this.reports.updateSections(
+    const savedSections = await this.reports.updateSections(
       projectId,
-      { [body.sectionId]: { content: trimmedContent, aiDraft: null, title: body.sectionTitle, number: body.sectionNumber, order: body.sectionNumber } },
+      { [body.sectionId]: { content: trimmedContent, aiDraft: null, title: body.sectionTitle, number: body.sectionNumber,
+        order: body.sectionNumber, expectedRevision: project.report?.sections?.[body.sectionId]?.revision ?? 0 } },
       req.user,
       [{
         type: 'report.section.ai.generated',
@@ -246,7 +249,8 @@ export class ReportsController {
       }],
     );
 
-    return { sectionId: body.sectionId, content: trimmedContent };
+    return { sectionId: body.sectionId, content: savedSections[body.sectionId].content,
+      revision: savedSections[body.sectionId].revision, updatedAt: savedSections[body.sectionId].updatedAt };
   }
 
   @Post('/:projectId/analyze-report-section')

@@ -10,6 +10,8 @@ export type SectionRow = {
   position: number;
   helper_text: string | null;
   content: string | null;
+  revision?: number;
+  updated_at?: DatabaseDate;
   status: string;
   ai_draft: string | null;
   user_edited: boolean;
@@ -184,6 +186,8 @@ function buildSection(
     // A missing property must not overwrite the frontend's template; '' still means deliberately cleared.
     ...(section.helper_text == null ? {} : { helperText: section.helper_text }), // { helperText: 'Guidance' } or {}.
     ...(section.content == null ? {} : { content: section.content }), // { content: '<p>Saved text</p>' } or {}.
+    revision: section.revision,
+    updatedAt: iso(section.updated_at),
     state: section.status, // 'draft', 'under-review', 'approved', or 'locked'.
     aiDraft: section.ai_draft, // '<p>Suggested text</p>' or null.
     userEdited: section.user_edited, // true or false.

@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { assertSectionRevision } from '../../common/section-revision';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../db/pg';
@@ -221,6 +222,7 @@ export class ProtocolsService {
     sectionId: string,
     values: {
       content: string;
+      expectedRevision: number;
       previousContent?: string;
       reason?: string;
       approvalStatus?: string;
@@ -787,6 +789,7 @@ export class ProtocolsService {
     value: any,
     actor: AuditActor | undefined,
     client: PoolClient,
+    requireRevision = false,
   ): Promise<void> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw new BadRequestException('Protocol must be an object');
@@ -799,6 +802,21 @@ export class ProtocolsService {
     }
     const protocolId = await this.ensureForProject(projectId, client);
     await client.query(`select id from protocol where id = $1 for update`, [protocolId]);
+    if (requireRevision && Array.isArray(value.sections)) {
+      const { rows } = await client.query(
+        'select section_key, content, revision, updated_at from protocol_section where protocol_id=$1 for update', [protocolId],
+      );
+      // A browser snapshot must not delete a section created after it loaded.
+      for (const row of rows) {
+        if (!value.sections.some((section: any) => String(section.id) === row.section_key)) {
+          assertSectionRevision(row.section_key, 0, row);
+        }
+      }
+      for (const section of value.sections) {
+        assertSectionRevision(String(section.id), section.revision,
+          rows.find(row => row.section_key === String(section.id)));
+      }
+    }
     const now = new Date().toISOString();
     const protocol = value;
 
@@ -1296,6 +1314,7 @@ export class ProtocolsService {
     sectionKey: string,
     values: {
       content: string;
+      expectedRevision: number;
       previousContent?: string;
       approvalStatus?: string;
       approvedBy?: string;
@@ -1305,16 +1324,14 @@ export class ProtocolsService {
     client: PoolClient,
   ): Promise<{ title: string; content: string; updatedAt: string; revision: number }> {
     const protocolId = await this.ensureForProject(projectId, client);
-    const previous = await client.query('select content from protocol_section where protocol_id=$1 and section_key=$2', [protocolId, sectionKey]);
-    if (previous.rows[0] && values.previousContent !== undefined &&
-        sanitizeSectionHtml(previous.rows[0].content) !== sanitizeSectionHtml(values.previousContent)) {
-      throw new ConflictException('The section changed while you were editing. Reload before saving.');
-    }
+    const previous = await client.query('select content, revision, updated_at from protocol_section where protocol_id=$1 and section_key=$2 for update', [protocolId, sectionKey]);
+    if (!previous.rows[0]) throw new NotFoundException('Protocol section not found');
+    assertSectionRevision(sectionKey, values.expectedRevision, previous.rows[0]);
     const now = new Date().toISOString();
     const approvedBy = values.approvedBy ?? null;
     const { rows } = await client.query(
       `update protocol_section set
-         revision = case when content is distinct from $3 then revision + 1 else revision end,
+         revision = revision + 1,
          content = $3,
          approval_status = coalesce($4, approval_status),
          approved_by_user_id = coalesce($6, approved_by_user_id),

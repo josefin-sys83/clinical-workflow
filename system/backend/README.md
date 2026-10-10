@@ -72,6 +72,30 @@ Apply [039_project_requirements.sql](db/migrations/039_project_requirements.sql)
 before deploying the requirement table cutover. It migrates the existing JSON list,
 keeps project-scoped assignment IDs and links, and removes the JSON requirement field.
 
+Apply [040_report_section_revision.sql](db/migrations/040_report_section_revision.sql)
+before running the updated backend. It adds `revision` to existing report sections,
+starting at 1; protocol sections already have this column from migration 034.
+Section content saves require `expectedRevision` from the section the editor opened.
+The check and write run together under the project's transaction lock. An outdated
+save returns HTTP 409 with `code: SECTION_REVISION_CONFLICT` and `current` containing
+the saved content, revision and update time. The rejected save changes no content,
+analysis state or audit records. Report content patches use 0 only for a section
+that does not yet exist; metadata-only patches do not require a revision.
+Full protocol snapshots submitted through the project API must include each
+section's `revision` and cannot omit sections created after the snapshot was read.
+
+Protocol and report editors retain the local draft on conflicts and failed saves,
+show it beside the newer text, and require comparison before retrying against the
+newer revision. Drafts are stored separately for each tab, user, project and section
+in session storage for recovery after refresh. Cancel explicitly discards a draft;
+a confirmed save clears it. The conflict panel also offers an HTML draft download.
+
+Run the PostgreSQL concurrency tests against an isolated test database with
+`SECTION_REVISION_TEST_DATABASE_URL=... npm test -- --runInBand common/section-revision.database.spec.ts`.
+The tests create and remove their own schema. With the frontend dev server running,
+run the browser checks using `RESULTS_TEST_PAGE=section-conflicts.html node tests/check-study-results-browser.cjs`
+from `system` (set `RESULTS_TEST_ORIGIN` if the server is not on port 5173).
+
 | Table | Added fields and purpose |
 |---|---|
 | `protocol_attachment` | `requirement_ids` stores directly assigned accepted Scope IDs; `extracted_text` and `extraction_error` cache document extraction. |

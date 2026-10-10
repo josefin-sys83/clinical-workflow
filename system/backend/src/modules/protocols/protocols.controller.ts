@@ -73,6 +73,7 @@ export class ProtocolsController {
       sectionId,
       {
         content: body.content,
+        expectedRevision: body.expectedRevision,
         previousContent: body.previousContent,
         reason: body.reason,
         approvalStatus: body.approvalStatus,

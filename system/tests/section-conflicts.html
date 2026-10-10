@@ -1,0 +1,187 @@
+<!doctype html>
+<html><body><pre id="result">RUNNING</pre><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
+import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
+import ProtocolApp from '/src/modules/Makeprotokoll/App.tsx';
+import { ReportWorkspace } from '/src/modules/Makereport/pages/ReportWorkspace.tsx';
+import '/src/styles/index.css';
+
+const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['author'] };
+const protocolSection = { id: '1', number: '1', title: 'Protocol Overview', content: '<p>Original protocol text</p>',
+  revision: 1, updatedAt: '2026-10-09T00:00:00Z', status: 'draft', aiGenerated: false, analysisStatus: 'succeeded', issues: [], requiredElements: [] };
+const reportSection = { id: 'section-1', title: 'Executive Summary', content: '<p>Original report text</p>',
+  revision: 1, updatedAt: '2026-10-09T00:00:00Z', state: 'draft', analysisStatus: 'succeeded', issues: [], completenessElements: [] };
+const report = { sections: { 'section-1': reportSection }, sectionDefs: [{ id: 'section-1', title: 'Executive Summary', number: 1 }],
+  crossConsistencyChecked: true, crossConsistencyIssues: [] };
+const project = { id: 'fixture', name: 'Revision test', targetMarkets: ['EU'], requirements: [],
+  roles: ['Medical Writer', 'Protocol Lead', 'Clinical Affairs VP'].map(title => ({ title, assignedTo: [user] })),
+  report, data: { projectData: {}, scope: {}, protocol: { status: 'draft', sections: [protocolSection] } } };
+const requests = [];
+const errors = [];
+let stage = 'load';
+let failNextSave = false;
+let analysisCalls = 0;
+let appendDuringSave = false;
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+const response = (payload, status = 200) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+window.fetch = async (input, init = {}) => {
+  const url = String(input);
+  const body = init.body ? JSON.parse(init.body) : {};
+  let payload = {};
+  if ((url.endsWith('/protocol/sections/1') || url.endsWith('/report/sections')) && init.method === 'PATCH') {
+    const isProtocol = url.endsWith('/protocol/sections/1');
+    const patch = isProtocol ? body : body.sections['section-1'];
+    const saved = isProtocol ? protocolSection : reportSection;
+    requests.push({ kind: isProtocol ? 'protocol' : 'report', ...patch });
+    if (appendDuringSave) {
+      appendDuringSave = false;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // An asynchronous editor action can complete while the save is pending.
+      document.querySelector('[contenteditable]').innerHTML += '<p>Later inserted text</p>';
+    }
+    if (failNextSave) { failNextSave = false; return response({ message: 'Connection interrupted. Please retry.' }, 503); }
+    if (patch.expectedRevision !== saved.revision) return response({
+      statusCode: 409, code: 'SECTION_REVISION_CONFLICT', sectionId: saved.id,
+      message: 'This section has changed since you opened it. Your changes have been kept.',
+      current: { content: saved.content, revision: saved.revision, updatedAt: saved.updatedAt },
+    }, 409);
+    saved.content = patch.content;
+    saved.revision++;
+    payload = isProtocol ? { ...saved } : { 'section-1': { ...saved } };
+  } else if (url.endsWith('/projects/fixture')) payload = project;
+  else if (url.endsWith('/report-sections')) payload = { sections: report.sectionDefs, targetMarkets: ['EU'] };
+  else if (url.endsWith('/report')) payload = report;
+  else if (url.endsWith('/workflow')) payload = { steps: { 'report-pdf': { state: 'draft' }, 'protocol-pdf': { state: 'draft' } } };
+  else if (url.endsWith('/milestones')) payload = { milestones: [] };
+  else if (url.endsWith('/attachments') || url.endsWith('/amendments')) payload = [];
+  else if (url.endsWith('/check-synopsis-consistency')) payload = { issues: [] };
+  else if (url.endsWith('/analyze-report-section') || url.endsWith('/analyze-section')) {
+    analysisCalls++;
+    payload = { issues: [], requiredElements: [] };
+  }
+  return response(payload);
+};
+const el = React.createElement;
+let root;
+const mount = Component => {
+  root?.unmount();
+  root = createRoot(document.getElementById('root'));
+  root.render(el(CurrentUserProvider, { user, status: 'ready' }, el(RouterProvider, {
+    router: createMemoryRouter([{ path: '/projects/:projectId', element: el(Component) }], { initialEntries: ['/projects/fixture'] }),
+  })));
+};
+const assert = (value, message) => { if (!value) throw new Error(message); };
+const waitFor = async predicate => {
+  for (let attempt = 0; attempt < 160; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
+  throw new Error(`Timed out: ${stage}; ${errors.join('; ')}`);
+};
+const button = (label, parent = document) => [...parent.querySelectorAll('button')].find(item => item.textContent.trim() === label);
+const editor = () => document.querySelector('[contenteditable="true"]');
+const write = html => {
+  editor().innerHTML = html;
+  editor().dispatchEvent(new Event('input', { bubbles: true }));
+};
+const save = async () => {
+  await waitFor(() => button('Save') && !button('Save').disabled);
+  button('Save').click();
+  await waitFor(() => [...document.querySelectorAll('textarea')].some(item => item.placeholder.includes('Updated')));
+  const reason = [...document.querySelectorAll('textarea')].find(item => item.placeholder.includes('Updated'));
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(reason, 'Reconcile edits');
+  reason.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => button('Confirm') && !button('Confirm').disabled);
+  button('Confirm').click();
+};
+const open = async kind => {
+  if (kind === 'report') {
+    await waitFor(() => document.querySelector('[data-report-section="section-1"] button[aria-expanded]'));
+    const toggle = document.querySelector('[data-report-section="section-1"] button[aria-expanded]');
+    if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  }
+  await waitFor(() => button('Edit'));
+};
+try {
+  for (const kind of ['protocol', 'report']) {
+    const Component = kind === 'protocol' ? ProtocolApp : ReportWorkspace;
+    const saved = kind === 'protocol' ? protocolSection : reportSection;
+    stage = `${kind}: load`;
+    mount(Component);
+    await open(kind);
+    button('Edit').click();
+    await waitFor(editor);
+    write(`<p>My ${kind} draft</p><table><tbody><tr><td>Keep my table</td></tr></tbody></table>`);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    stage = `${kind}: collapsed draft`;
+    const collapse = kind === 'protocol'
+      ? document.querySelector('[data-protocol-section="1"] button[aria-label="Collapse section"]')
+      : document.querySelector('[data-report-section="section-1"] button[aria-expanded]');
+    collapse.click();
+    await waitFor(() => !document.querySelector('[contenteditable]'));
+    const expand = kind === 'protocol'
+      ? document.querySelector('[data-protocol-section="1"] button[aria-label="Expand section"]')
+      : document.querySelector('[data-report-section="section-1"] button[aria-expanded]');
+    expand.click();
+    await waitFor(editor);
+    assert(editor().textContent.includes(`My ${kind} draft`) && editor().querySelector('table'), 'Collapsing the section lost the draft');
+    // Another editor saves after this editor captured its starting revision.
+    saved.content = `<p>Newer ${kind} text from Alice</p>`;
+    saved.revision = 2;
+    stage = `${kind}: conflict`;
+    const analysisBefore = analysisCalls;
+    await save();
+    await waitFor(() => document.querySelector('[data-section-conflict]'));
+    assert(requests.at(-1).expectedRevision === 1, 'Editor did not send its starting revision');
+    assert(editor().textContent.includes(`My ${kind} draft`) && editor().querySelector('table'), 'Conflict discarded rich-text draft');
+    assert(document.querySelector('[data-conflict-current]').textContent.includes('Alice'), 'Newer text is unavailable');
+    assert(document.querySelector('[data-conflict-draft]').textContent.includes(`My ${kind} draft`), 'Comparison lost local draft');
+    assert(saved.content.includes('Alice') && saved.revision === 2, 'Outdated save replaced newer text');
+    assert(analysisCalls === analysisBefore, 'Rejected save started AI analysis');
+    assert(button('Save').disabled, 'Unresolved conflict can be saved without comparison');
+    stage = `${kind}: recover after remount`;
+    mount(Component);
+    await open(kind);
+    await waitFor(() => button('Restore draft'));
+    button('Restore draft').click();
+    await waitFor(() => editor() && document.querySelector('[data-section-conflict]'));
+    assert(editor().textContent.includes(`My ${kind} draft`) && editor().querySelector('table'), 'Recovered draft is missing text or formatting');
+    button('I’ve compared both — continue editing').click();
+    await waitFor(() => !document.querySelector('[data-section-conflict]'));
+    saved.content = `<p>Third ${kind} revision from Carol</p>`;
+    saved.revision = 3;
+    stage = `${kind}: repeated conflict`;
+    await save();
+    await waitFor(() => document.querySelector('[data-conflict-current]')?.textContent.includes('Carol'));
+    assert(requests.at(-1).expectedRevision === 2, 'Reconciliation used the wrong starting revision');
+    assert(editor().textContent.includes(`My ${kind} draft`), 'Repeated conflict lost the draft');
+    button('I’ve compared both — continue editing').click();
+    await waitFor(() => !document.querySelector('[data-section-conflict]'));
+    stage = `${kind}: network failure`;
+    failNextSave = true;
+    await save();
+    await waitFor(() => document.getElementById('root').textContent.includes('Connection interrupted'));
+    assert(editor().textContent.includes(`My ${kind} draft`), 'Network failure closed the editor or discarded text');
+    stage = `${kind}: successful reconciliation`;
+    write(`<p>Combined ${kind} text including Carol and my changes</p>`);
+    await save();
+    await waitFor(() => !document.querySelector('[contenteditable]'));
+    assert(saved.content.includes('Combined') && saved.revision === 4, 'Reconciled text was not saved');
+    assert(!Object.keys(sessionStorage).some(key => key.includes(`"${kind}"`)), 'Successful save left a stale recovery draft');
+    stage = `${kind}: changes arriving during save`;
+    button('Edit').click();
+    await waitFor(editor);
+    write('<p>Submitted before later insertion</p>');
+    appendDuringSave = true;
+    await save();
+    await waitFor(() => editor()?.textContent.includes('Later inserted text') && document.getElementById('root').textContent.includes('further changes'));
+    assert(saved.revision === 5 && !saved.content.includes('Later inserted'), 'Pending-save fixture did not separate submitted and later text');
+    await save();
+    await waitFor(() => !document.querySelector('[contenteditable]'));
+    assert(saved.revision === 6 && saved.content.includes('Later inserted'), 'Later insertion was lost instead of saved with the new revision');
+  }
+  assert(!errors.length, errors.join('; '));
+  document.getElementById('result').textContent = 'PASS: protocol/report outdated saves, newer text comparison, rich-text draft recovery, repeated conflicts, failed-save retention, pending-save draft retention, revision-based reconciliation and no rejected-save analysis';
+} catch (error) { document.getElementById('result').textContent = `FAIL: ${stage}: ${error.message}`; }
+</script></body></html>

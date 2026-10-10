@@ -759,7 +759,7 @@ export class ProjectsService {
         : await listProjectRequirements(id, client);
       const requirementAuditEvents = this.deriveRequirementAuditEvents(beforeRequirements, afterRequirements);
       // Requirements and finding validation share this project lock and transaction.
-      if (hasProtocolPatch) await this.protocols.save(id, incomingProtocol, actor, client);
+      if (hasProtocolPatch) await this.protocols.save(id, incomingProtocol, actor, client, true);
 
       if (patch.roles !== undefined) {
         await this.syncProjectMembers(id, patch.roles, client);

@@ -3,7 +3,11 @@ import { SectionAnalysisOverlay } from '@/shared/editor/SectionAnalysisOverlay';
 import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { hasReportText } from '@/shared/api/reports';
+import { hasReportText, saveReportSections } from '@/shared/api/reports';
+import { apiErrorMessage } from '@/shared/api/http';
+import { SaveStatus } from '@/shared/editor/SaveStatus';
+import { SectionConflictPanel } from '@/shared/editor/SectionConflictPanel';
+import { sectionConflict, sectionDraftKey, readSectionDraft, writeSectionDraft, clearSectionDraft, type SectionConflict } from '@/shared/editor/section-draft';
 import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
 import { ReviewAnchorNotice } from '@/shared/editor/ReviewAnchorNotice';
 
@@ -162,7 +166,12 @@ export function ReportContent({
   const [changeReason, setChangeReason] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [pendingSave, setPendingSave] = useState<{ sectionId: string; newContent: string; previousContent: string } | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [conflict, setConflict] = useState<SectionConflict | null>(null);
+  const [draftContent, setDraftContent] = useState('');
+  const editBase = useRef({ content: '', revision: 0 });
+  const draftKey = (sectionId: string) => sectionDraftKey('report', projectId || '', currentUser.id, sectionId);
+  const [pendingSave, setPendingSave] = useState<{ sectionId: string; newContent: string; previousContent: string; expectedRevision: number } | null>(null);
   const [commentingSection, setCommentingSection] = useState<string | null>(null);
   const [commentText, setCommentText] = useState('');
   const [assetSelectorOpen, setAssetSelectorOpen] = useState(false);
@@ -181,6 +190,13 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const analyzedSectionsRef = useRef<Record<string, string>>({});
 
   const [reportMakeDeadline, setReportMakeDeadline] = useState<{ date: string; status: string } | null>(null);
+
+  useEffect(() => {
+    if (!editingSection || !isDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [editingSection, isDirty]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -274,17 +290,38 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
       const el = editorRefs.current.get(editingSection);
       const sec = sections.find(s => s.id === editingSection);
       if (el && sec) {
+        const recovered = readSectionDraft(draftKey(sec.id));
+        editBase.current = { content: recovered?.baseContent ?? sec.content ?? '',
+          revision: recovered?.expectedRevision ?? sec.revision ?? 0 };
+        setSaveError(null);
+        setIsDirty(!!recovered);
+        setConflict(recovered && recovered.expectedRevision !== (sec.revision ?? 0) ? {
+          sectionId: sec.id, message: 'The saved section changed.',
+          current: { content: sec.content || '', revision: sec.revision ?? 0, updatedAt: sec.updatedAt },
+        } : null);
         const suppressed = new Set(wontFixDescRef.current[sec.id] || []);
         const findings = (sectionAiIssues[sec.id] || []).filter(issue =>
           !suppressed.has(issue.description || issue.message || ''),
         );
         // Initialize once on entry; typing and toolbar updates keep the live DOM.
-        el.innerHTML = renderContent(sec.content || '', findings) || '<p><br></p>';
+        el.innerHTML = renderContent(recovered?.content ?? sec.content ?? '', findings) || '<p><br></p>';
         el.focus();
-        return trackReviewEditor(el, findings, setEditorFindings);
+        const initial = stripReviewHighlights(el.innerHTML);
+        setDraftContent(initial);
+        const stopTracking = trackReviewEditor(el, findings, setEditorFindings);
+        const observer = new MutationObserver(() => {
+          const content = stripReviewHighlights(el.innerHTML);
+          setDraftContent(content);
+          if (content !== initial || recovered || readSectionDraft(draftKey(sec.id))) {
+            setIsDirty(true);
+            writeSectionDraft(draftKey(sec.id), { content, baseContent: editBase.current.content, expectedRevision: editBase.current.revision });
+          }
+        });
+        observer.observe(el, { subtree: true, childList: true, characterData: true, attributes: true });
+        return () => { observer.disconnect(); stopTracking(); };
       }
     }
-  }, [editingSection]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editingSection, editingSection ? expandedSections[editingSection] : false]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── WYSIWYG toolbar helpers ────────────────────────────────────────────────
   const updateActiveFormats = () => {
@@ -302,6 +339,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   };
 
   const execFmt = (cmd: string, value?: string) => {
+    if (isSaving) return;
     if (editingSection) editorRefs.current.get(editingSection)?.focus();
     document.execCommand(cmd, false, value);
     updateActiveFormats();
@@ -315,6 +353,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const handleNormal    = () => execFmt('formatBlock', 'p');
 
   const handleInsertTable = () => {
+    if (isSaving) return;
     const th = (n: number) =>
       `<th style="border:1px solid #d1d5db;padding:6px 12px;background:#f8fafc;font-weight:600;text-align:left;">Column ${n}</th>`;
     const td = () =>
@@ -332,6 +371,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   };
 
   const handleImageInsert = () => {
+    if (isSaving) return;
     const MAX_BYTES = 200 * 1024;
     const MAX_DIM   = 1200;
     const input = document.createElement('input');
@@ -371,6 +411,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   };
 
   const handleFileAttach = (sectionId: string) => {
+    if (isSaving) return;
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.pdf,.doc,.docx';
@@ -414,27 +455,39 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
     }
   };
 
-  const handleSaveSection = async (sectionId: string, newContent: string, previousContent: string, reason: string) => {
+  const handleSaveSection = async (sectionId: string, newContent: string, previousContent: string, reason: string, expectedRevision: number) => {
     setIsSaving(true);
     setSaveError(null);
     analysisRequests.current[sectionId] = (analysisRequests.current[sectionId] || 0) + 1;
     try {
-      const response = await fetch(`${apiBase}/api/projects/${projectId}/report/sections`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sections: { [sectionId]: { content: newContent, previousContent, userEdited: true } } }),
+      writeSectionDraft(draftKey(sectionId), { content: newContent, baseContent: previousContent, expectedRevision, reason });
+      const savedSections = await saveReportSections(projectId!, {
+        [sectionId]: { content: newContent, previousContent, expectedRevision, userEdited: true },
       });
-      if (!response.ok) throw new Error(`Report section save failed (${response.status})`);
-
-      const savedSections = await response.json();
       const saved = savedSections[sectionId];
       onSectionUpdate(sectionId, saved.content, true);
       onSectionAnalysisChange(sectionId, saved, []);
+      const remaining = stripReviewHighlights(editorRefs.current.get(sectionId)?.innerHTML || '');
+      if (remaining !== newContent) {
+        editBase.current = { content: saved.content, revision: saved.revision };
+        writeSectionDraft(draftKey(sectionId), { content: remaining, baseContent: saved.content,
+          expectedRevision: saved.revision, reason });
+        setPendingSave(null);
+        setIsDirty(true);
+        setSaveError('The submitted text was saved. Your further changes are still in the editor; save them when ready.');
+        return;
+      }
+      clearSectionDraft(draftKey(sectionId));
+      setIsDirty(false);
+      setEditingSection(null);
+      setPendingSave(null);
+      setConflict(null);
       // Re-run analysis on the updated content
       const sec2 = sections.find(s => s.id === sectionId);
       analyzeSectionWithAI(sectionId, sec2?.title || sectionId, saved.content);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save section');
+      setConflict(sectionConflict(err));
+      setSaveError(apiErrorMessage(err, err instanceof Error ? err.message : 'Failed to save section'));
       console.error('Failed to save section', err);
     } finally {
       setIsSaving(false);
@@ -953,8 +1006,9 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                         {/* contentEditable editor */}
                         <div
                           ref={(el) => editorRefs.current.set(section.id, el)}
-                          contentEditable
+                          contentEditable={!isSaving}
                           suppressContentEditableWarning
+                          onInput={() => setIsDirty(true)}
                           onKeyUp={updateActiveFormats}
                           onMouseUp={updateActiveFormats}
                           onSelect={updateActiveFormats}
@@ -978,24 +1032,43 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                         {/* Save / Cancel */}
                         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                           <button
+                            disabled={!isDirty || isSaving || !!conflict}
                             onClick={() => {
                               const el = editorRefs.current.get(section.id);
                               const newContent = stripReviewHighlights(el?.innerHTML || '');
-                              setPendingSave({ sectionId: section.id, newContent, previousContent: section.content || '' });
+                              setPendingSave({ sectionId: section.id, newContent, previousContent: editBase.current.content,
+                                expectedRevision: editBase.current.revision });
                               setChangeReason('');
                               setShowReasonModal(true);
                             }}
                             style={{ padding: '0.5rem 1rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}
                           >Save</button>
                           <button
-                            onClick={() => setEditingSection(null)}
+                            disabled={isSaving}
+                            onClick={() => {
+                              if (isDirty && !window.confirm('Discard your unsaved changes?')) return;
+                              clearSectionDraft(draftKey(section.id));
+                              setIsDirty(false); setConflict(null); setSaveError(null); setEditingSection(null);
+                            }}
                             style={{ padding: '0.5rem 1rem', backgroundColor: 'white', color: '#374151', border: '1px solid #d1d5db', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}
                           >Cancel</button>
+                          <SaveStatus state={isSaving ? 'saving' : saveError ? 'failed' : isDirty ? 'dirty' : 'saved'}
+                            error={saveError} revision={section.revision} updatedAt={section.updatedAt} />
                         </div>
+                        {conflict?.sectionId === section.id && <SectionConflictPanel conflict={conflict} draft={draftContent} onContinue={() => {
+                          if (!conflict.current) return;
+                          editBase.current = { content: conflict.current.content, revision: conflict.current.revision };
+                          writeSectionDraft(draftKey(section.id), { content: stripReviewHighlights(editorRefs.current.get(section.id)?.innerHTML || ''),
+                            baseContent: editBase.current.content, expectedRevision: editBase.current.revision });
+                          setConflict(null); setSaveError(null);
+                        }} />}
                       </div>
                     );
                   })() : (
                     <div className="mb-4">
+                      {readSectionDraft(draftKey(section.id)) && <p className="mb-2 text-sm text-amber-700">An unsaved draft is available.{' '}
+                        <button type="button" className="underline" onClick={() => setEditingSection(section.id)}>Restore draft</button>
+                      </p>}
                       {/* Edit button */}
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
                         <button
@@ -1230,6 +1303,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
         onClose={() => setReviewModeModalOpen(false)}
         onProceed={async () => {
           if (!projectId) return;
+          if (editingSection) throw new Error('Save your section draft before entering review. Your changes have been kept.');
           if (isReportBlocked) {
             throw new Error('Finalize or reject the pending protocol amendment before entering Report Review.');
           }
@@ -1239,6 +1313,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
           const sectionSnapshot: Record<string, {
             content: string;
+            expectedRevision: number;
             state: ReportSection['state'];
             wontFixIssues: string[];
             completenessElements: CompletenessElement[];
@@ -1247,6 +1322,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             section.id,
             {
               content: section.content || section.aiDraft || '',
+              expectedRevision: section.revision ?? 0,
               state: section.state,
               wontFixIssues: savedWontFixIssues?.[section.id] || [],
               completenessElements: section.completenessElements || [],
@@ -1262,14 +1338,9 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
             throw new Error(`Wait for these report sections to load, or retry their failed drafts before entering review: ${missingSections.map(section => section.title).join(', ')}.`);
           }
 
-          const saveResponse = await fetch(`/api/projects/${projectId}/report/sections`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sections: sectionSnapshot }),
-          });
-          if (!saveResponse.ok) {
-            const error = await saveResponse.json().catch(() => null);
-            throw new Error(error?.message || 'Could not save the report sections for Review.');
+          const savedSections = await saveReportSections(projectId, sectionSnapshot);
+          for (const [sectionId, saved] of Object.entries(savedSections)) {
+            onSectionAnalysisChange(sectionId, saved, saved.issues || []);
           }
 
           // Complete authoring and hand the populated review step to the reviewer.
@@ -1352,12 +1423,10 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
               <button
                 disabled={!changeReason.trim() || isSaving}
                 onClick={async () => {
-                  const { sectionId, newContent, previousContent } = pendingSave;
+                  const { sectionId, newContent, previousContent, expectedRevision } = pendingSave;
                   const reason = changeReason.trim();
                   setShowReasonModal(false);
-                  setEditingSection(null);
-                  setPendingSave(null);
-                  await handleSaveSection(sectionId, newContent, previousContent, reason);
+                  await handleSaveSection(sectionId, newContent, previousContent, reason, expectedRevision);
                 }}
                 style={{ padding: '0.5rem 1rem', backgroundColor: changeReason.trim() ? '#3b82f6' : '#93c5fd', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: changeReason.trim() ? 'pointer' : 'not-allowed', fontSize: '0.875rem', fontWeight: 500 }}
               >{isSaving ? 'Saving…' : 'Confirm'}</button>
