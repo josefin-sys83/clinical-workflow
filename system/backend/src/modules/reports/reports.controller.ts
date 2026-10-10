@@ -14,6 +14,7 @@ import { UpdateReportSectionsDto } from './dto';
 import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
 import { buildGenerationMetadataLog, buildProjectGenerationContext } from '../projects/project-generation-context';
 import { findingRequirementsText, validateFindingRequirements } from '../projects/finding-requirements';
+import { generationInputs } from '../../common/section-provenance';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
@@ -126,6 +127,7 @@ export class ReportsController {
     };
 
     const sectionDefs = this.getDynamicReportSections(targetMarkets, scope);
+    const inputs = generationInputs(aiProjectData, scope, roles, enrichedSynopsis, protocolSections);
 
     // Sanitize before persistence and before returning generated HTML to the browser.
     const sectionsToGenerate = body.onlyMissing
@@ -163,6 +165,8 @@ export class ReportsController {
         metadata: {
           model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
           sectionsGenerated: sectionsToGenerate.length,
+          sectionIds: sectionsToGenerate.map(s => s.id),
+          generationInputs: inputs,
           targetMarkets,
           deviceName,
           generatedAt: new Date().toISOString(),
@@ -176,6 +180,9 @@ export class ReportsController {
       title: s.title,
       number: s.number,
       content: String(persistedSections[s.id]?.content || persistedSections[s.id]?.aiDraft || ''),
+      revision: persistedSections[s.id]?.revision,
+      updatedAt: persistedSections[s.id]?.updatedAt,
+      provenance: persistedSections[s.id]?.provenance,
     }));
   }
 
@@ -208,6 +215,7 @@ export class ReportsController {
         : '',
     ].filter(Boolean);
     const enrichedSynopsis = { ...rawSynopsis, synopsisText: synopsisTextParts.join('\n') };
+    const inputs = generationInputs(aiProjectData, scope, roles, enrichedSynopsis, protocolSections);
 
     this.logger.log(buildGenerationMetadataLog(
       'report-section', projectId, aiProjectData, scope, roles,
@@ -243,6 +251,7 @@ export class ReportsController {
         metadata: {
           sectionId: body.sectionId,
           sectionTitle: body.sectionTitle,
+          generationInputs: inputs,
           model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
           generatedAt: new Date().toISOString(),
         },
@@ -250,7 +259,8 @@ export class ReportsController {
     );
 
     return { sectionId: body.sectionId, content: savedSections[body.sectionId].content,
-      revision: savedSections[body.sectionId].revision, updatedAt: savedSections[body.sectionId].updatedAt };
+      revision: savedSections[body.sectionId].revision, updatedAt: savedSections[body.sectionId].updatedAt,
+      provenance: savedSections[body.sectionId].provenance };
   }
 
   @Post('/:projectId/analyze-report-section')

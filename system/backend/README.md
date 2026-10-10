@@ -96,6 +96,26 @@ The tests create and remove their own schema. With the frontend dev server runni
 run the browser checks using `RESULTS_TEST_PAGE=section-conflicts.html node tests/check-study-results-browser.cjs`
 from `system` (set `RESULTS_TEST_ORIGIN` if the server is not on port 5173).
 
+Protocol and report section responses also include `provenance`: AI origin,
+generation time, the inputs captured before generation, and the last human content
+editor/date. This is derived from existing audit records; there are no new database
+columns or migrations for the badge. Generation records store readable metadata,
+accepted requirement titles, and protocol section revisions. Source fingerprints
+identify the submitted synopsis/scope without copying their clinical text into
+another record. Human edits preserve the generation inputs; successful regeneration
+replaces them and clears the previous edit attribution. Approval, analysis and
+rejected saves do not change it.
+
+The badge appears in authoring and review headers with expandable input details.
+Both PDF export pages offer an "Include AI badges" checkbox, unchecked by default.
+Checking it adds only the static "AI-generated · edited by [name] on [date]" label
+to section pages; unchecking it removes the label. Input details remain in the app.
+This choice does not alter saved section HTML or
+signatures. Legacy AI sections without
+recorded input details show "Inputs unavailable". A legacy bulk report event without
+section IDs cannot reliably identify which sections were generated, so it is not
+used to label unrelated or manually authored sections.
+
 | Table | Added fields and purpose |
 |---|---|
 | `protocol_attachment` | `requirement_ids` stores directly assigned accepted Scope IDs; `extracted_text` and `extraction_error` cache document extraction. |

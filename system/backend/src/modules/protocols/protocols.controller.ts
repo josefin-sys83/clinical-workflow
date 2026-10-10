@@ -30,6 +30,7 @@ import { acceptedFindingRequirements, validateFindingRequirements } from '../pro
 import { ConflictException } from '@nestjs/common';
 import { isDeepStrictEqual } from 'node:util';
 import { sectionAnalysisHistory } from './protocol-analysis-history';
+import { generationInputs } from '../../common/section-provenance';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, RolesGuard)
@@ -135,6 +136,7 @@ export class ProtocolsController {
     const { aiProjectData, scope, intendedUse } = buildProtocolGenerationContext(project);
     const roles = project.roles || [];
     const synopsisText = sourceSynopsisText(project?.data?.synopsis);
+    const inputs = generationInputs(aiProjectData, scope, roles, synopsisText);
     const targetMarkets = aiProjectData.targetMarkets;
     const deviceCategory = aiProjectData.deviceCategory;
 
@@ -237,7 +239,8 @@ export class ProtocolsController {
         entityType: 'protocol',
         entityId: projectId,
         entityLabel: 'Protocol',
-        metadata: { sections: protocol.sections.length, generatedAt: new Date().toISOString() },
+        metadata: { sections: protocol.sections.length, sectionIds: protocol.sections.map((s: any, index: number) => String(s.id || index + 1)),
+          generationInputs: inputs, generatedAt: new Date().toISOString() },
       },
     );
 

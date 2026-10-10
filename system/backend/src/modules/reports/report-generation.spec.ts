@@ -34,6 +34,10 @@ describe('report generation', () => {
     expect(result.every(s => s.content.trim())).toBe(true);
     expect(result[0].content).toBe('<p>Saved text</p>');
     expect(reports.updateSections.mock.calls[0][4]).toBe(true);
+    const metadata = reports.updateSections.mock.calls[0][3][0].metadata;
+    expect(metadata.sectionIds).not.toContain('section-1');
+    expect(metadata.sectionIds).toHaveLength(10);
+    expect(metadata.generationInputs).toContainEqual({ label: 'Target markets', value: 'EU' });
   });
 
   it.each(['', '   ', '<p><br></p>', '<script>bad()</script>', '<p>&nbsp;</p>'])(
@@ -56,14 +60,15 @@ describe('report generation', () => {
     projects.get.mockResolvedValue({ name: 'Study', roles: [], data: {},
       report: { sections: { 'section-2': { content: 'Original', revision: 7 } } } });
     reports.updateSections.mockResolvedValue({
-      'section-2': { content: '<p>Sanitized saved text</p>', revision: 8, updatedAt: '2026-10-09T00:00:00Z' },
+      'section-2': { content: '<p>Sanitized saved text</p>', revision: 8, updatedAt: '2026-10-09T00:00:00Z',
+        provenance: { aiGenerated: true, inputs: [], editedAt: null } },
     });
     const result = await controller.generateReportSection('project', {
       sectionId: 'section-2', sectionTitle: 'Introduction', sectionNumber: 2,
     }, { user: {} });
     expect(reports.updateSections.mock.calls[0][1]['section-2'].expectedRevision).toBe(7);
     expect(result).toEqual({ sectionId: 'section-2', content: '<p>Sanitized saved text</p>',
-      revision: 8, updatedAt: '2026-10-09T00:00:00Z' });
+      revision: 8, updatedAt: '2026-10-09T00:00:00Z', provenance: { aiGenerated: true, inputs: [], editedAt: null } });
   });
 
   it('uses relational metadata and the intended use saved in scope', async () => {

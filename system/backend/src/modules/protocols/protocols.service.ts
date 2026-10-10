@@ -11,6 +11,7 @@ import { validateFindingRequirements } from '../projects/finding-requirements';
 import { withFindingDocumentLink } from './protocol-finding-state';
 import { reconcileSectionIssues } from './protocol-analysis-history';
 import { satisfiedRequirementsSchema } from './protocol-satisfied-requirements';
+import { loadSectionProvenance, type SectionProvenance } from '../../common/section-provenance';
 
 type Db = { query: PoolClient['query'] };
 type ProtocolAuditEvent = Omit<RecordAuditEvent, 'projectId' | 'actor'>;
@@ -230,7 +231,7 @@ export class ProtocolsService {
       approvedAt?: string;
     },
     actor?: AuditActor,
-  ): Promise<{ ok: true; content: string; updatedAt: string; revision: number }> {
+  ): Promise<{ ok: true; content: string; updatedAt: string; revision: number; provenance: SectionProvenance }> {
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -283,8 +284,11 @@ export class ProtocolsService {
         },
       }, client);
 
+      const provenance = await loadSectionProvenance(projectId, 'protocol', client);
+      const section = await client.query('select ai_generated from protocol_section where protocol_id=(select id from protocol where project_id=$1) and section_key=$2', [projectId, sectionId]);
       await client.query("COMMIT");
-      return { ok: true, content: result.content, updatedAt: result.updatedAt, revision: result.revision };
+      return { ok: true, content: result.content, updatedAt: result.updatedAt, revision: result.revision,
+        provenance: provenance(sectionId, section.rows[0]?.ai_generated === true) };
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
@@ -674,6 +678,7 @@ export class ProtocolsService {
       };
     });
 
+    const provenance = await loadSectionProvenance(projectId, 'protocol', db);
     const sections = sectionsResult.rows.map((row) => ({
       id: row.section_key,
       number: row.section_number ?? row.section_key,
@@ -684,6 +689,7 @@ export class ProtocolsService {
       locked: row.locked,
       reviewCycle: row.review_cycle,
       aiGenerated: row.ai_generated,
+      provenance: provenance(row.section_key, row.ai_generated === true),
       analysisStatus: row.analysis_status,
       analysisError: row.analysis_error,
       analysisRequestId: row.analysis_request_id,

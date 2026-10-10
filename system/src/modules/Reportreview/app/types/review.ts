@@ -19,6 +19,7 @@ export interface FigureData {
 }
 
 export interface ReportSection {
+  provenance?: import('@/shared/editor/SectionOriginBadge').SectionProvenance;
   id: string;
   title: string;
   status: SectionStatus;

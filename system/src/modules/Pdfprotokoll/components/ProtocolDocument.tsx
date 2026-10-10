@@ -2,6 +2,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { Lock, Info, CheckCircle2, ShieldCheck } from 'lucide-react';
 import DOMPurify from 'dompurify';
+import { SectionOriginBadge } from '@/shared/editor/SectionOriginBadge';
 import { WorkflowProgressIndicator } from '@/modules/Makeprotokoll/components/workflow-progress-indicator';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 
@@ -126,6 +127,9 @@ export function ProtocolDocument() {
   const [requestChangesComment, setRequestChangesComment] = useState('');
   const [requestChangesSubmitting, setRequestChangesSubmitting] = useState(false);
   const [hasApprovedAmendments, setHasApprovedAmendments] = useState(false);
+  const [includeAiBadges, setIncludeAiBadges] = useState(false);
+
+  useEffect(() => { setIncludeAiBadges(false); }, [projectId]);
 
   // ── Fetch real project data ────────────────────────────────────────────────
   useEffect(() => {
@@ -529,6 +533,8 @@ export function ProtocolDocument() {
               <div key={section.id || index} style={pageStyle}>
                 <section style={{ marginBottom: '40px' }}>
                   <h2 style={h2Style}>{index + 1}. {section.title}</h2>
+                  {includeAiBadges && <SectionOriginBadge provenance={section.provenance}
+                    aiGenerated={section.aiGenerated === true} displayMode="document" />}
                   {section.content
                     ? hasHtmlMarkup(String(section.content))
                       ? <div style={paraStyle} dangerouslySetInnerHTML={{ __html: sanitizeProtocolHtml(String(section.content)) }} />
@@ -653,6 +659,10 @@ export function ProtocolDocument() {
 
               {/* Proceed + Export */}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '12px' }}>
+                <label data-pdf-export-options style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#374151', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={includeAiBadges} onChange={event => setIncludeAiBadges(event.target.checked)} />
+                  Include AI badges
+                </label>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                   <button
                     onClick={() => {
@@ -663,6 +673,7 @@ export function ProtocolDocument() {
     body * { visibility: hidden !important; }
     #protocol-print-root, #protocol-print-root * { visibility: visible !important; }
     #protocol-print-root { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; }
+    [data-pdf-export-options] { display: none !important; }
     @page { margin: 15mm; size: A4; }
   }
 `;

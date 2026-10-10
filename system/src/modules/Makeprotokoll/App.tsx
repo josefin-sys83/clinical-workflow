@@ -389,7 +389,7 @@ export default function App() {
     //    before/after content and reason. Tracked so protocol generation cannot
     //    start mid-save. Throws on failure, so the editor keeps the user's text.
     const saved = await trackProtocolWork(() =>
-      apiFetch<{ content: string; updatedAt: string; revision: number }>(
+      apiFetch<{ content: string; updatedAt: string; revision: number; provenance: NonNullable<React.ComponentProps<typeof ProtocolSection>['section']['provenance']> }>(
         '/projects/' + projectId + '/protocol/sections/' + sectionId,
         {
           method: 'PATCH',
@@ -414,7 +414,7 @@ export default function App() {
     setProtocol((prev: any) => !prev ? prev : ({
       ...prev,
       sections: prev.sections.map((s: any) => s.id === sectionId
-        ? { ...s, content: saved.content, updatedAt: saved.updatedAt, revision: saved.revision,
+        ? { ...s, content: saved.content, updatedAt: saved.updatedAt, revision: saved.revision, provenance: saved.provenance,
             analysisStatus: 'not-run', analysisError: null }
         : s),
     }));
@@ -786,6 +786,7 @@ export default function App() {
     revision: s.revision,
     comments: s.comments || [],
     aiGenerated: s.aiGenerated !== false,
+    provenance: s.provenance,
     reviewStatus: null,
     locked: protocolSigned && !(protocolPdfState === 'final' && openAmendmentIds.has(s.amendmentId)),
     reviewCycle: 0,

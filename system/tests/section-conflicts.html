@@ -7,6 +7,11 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { CurrentUserProvider } from '/src/shared/auth/CurrentUserContext.tsx';
 import ProtocolApp from '/src/modules/Makeprotokoll/App.tsx';
 import { ReportWorkspace } from '/src/modules/Makereport/pages/ReportWorkspace.tsx';
+import { SectionOriginBadge } from '/src/shared/editor/SectionOriginBadge.tsx';
+import ProtocolReview from '/src/modules/Protocolreview/app/pages/ReviewPageCopy.tsx';
+import ReportReview from '/src/modules/Reportreview/app/pages/ReviewPage.tsx';
+import { ProtocolDocument } from '/src/modules/Pdfprotokoll/components/ProtocolDocument.tsx';
+import { ClinicalInvestigationReport } from '/src/modules/Pdfreport/components/ClinicalInvestigationReport.tsx';
 import '/src/styles/index.css';
 
 const user = { id: 'writer', name: 'Writer', email: 'writer@example.test', roles: ['author'] };
@@ -14,11 +19,15 @@ const protocolSection = { id: '1', number: '1', title: 'Protocol Overview', cont
   revision: 1, updatedAt: '2026-10-09T00:00:00Z', status: 'draft', aiGenerated: false, analysisStatus: 'succeeded', issues: [], requiredElements: [] };
 const reportSection = { id: 'section-1', title: 'Executive Summary', content: '<p>Original report text</p>',
   revision: 1, updatedAt: '2026-10-09T00:00:00Z', state: 'draft', analysisStatus: 'succeeded', issues: [], completenessElements: [] };
+for (const section of [protocolSection, reportSection]) section.provenance = {
+  aiGenerated: true, generatedAt: '2026-10-09T00:00:00Z', editedBy: null, editedAt: null,
+  inputs: [{ label: 'Intended use', value: 'Original generation input' }],
+};
 const report = { sections: { 'section-1': reportSection }, sectionDefs: [{ id: 'section-1', title: 'Executive Summary', number: 1 }],
   crossConsistencyChecked: true, crossConsistencyIssues: [] };
 const project = { id: 'fixture', name: 'Revision test', targetMarkets: ['EU'], requirements: [],
   roles: ['Medical Writer', 'Protocol Lead', 'Clinical Affairs VP'].map(title => ({ title, assignedTo: [user] })),
-  report, data: { projectData: {}, scope: {}, protocol: { status: 'draft', sections: [protocolSection] } } };
+  report, data: { projectData: {}, scope: { intendedUse: 'Changed setup value' }, protocol: { status: 'draft', sections: [protocolSection] } } };
 const requests = [];
 const errors = [];
 let stage = 'load';
@@ -51,6 +60,7 @@ window.fetch = async (input, init = {}) => {
     }, 409);
     saved.content = patch.content;
     saved.revision++;
+    saved.provenance = { ...saved.provenance, editedBy: 'Writer', editedAt: '2026-10-10T12:00:00Z' };
     payload = isProtocol ? { ...saved } : { 'section-1': { ...saved } };
   } else if (url.endsWith('/projects/fixture')) payload = project;
   else if (url.endsWith('/report-sections')) payload = { sections: report.sectionDefs, targetMarkets: ['EU'] };
@@ -104,12 +114,23 @@ const open = async kind => {
   await waitFor(() => button('Edit'));
 };
 try {
+  mount(() => el('div', null,
+    el('div', { 'data-manual': true }, el(SectionOriginBadge, { aiGenerated: false })),
+    el('div', { 'data-legacy': true }, el(SectionOriginBadge, { aiGenerated: true }))));
+  await waitFor(() => document.querySelector('[data-legacy] [data-section-origin]'));
+  assert(!document.querySelector('[data-manual] [data-section-origin]'), 'Manual section received an AI badge');
+  assert(document.querySelector('[data-legacy]').textContent.includes('Inputs unavailable'), 'Legacy inputs were guessed');
   for (const kind of ['protocol', 'report']) {
     const Component = kind === 'protocol' ? ProtocolApp : ReportWorkspace;
     const saved = kind === 'protocol' ? protocolSection : reportSection;
     stage = `${kind}: load`;
     mount(Component);
     await open(kind);
+    const badge = document.querySelector('[data-section-origin]');
+    assert(badge && badge.querySelector('summary').textContent.includes('AI-generated'), 'Generated section has no origin badge');
+    assert(!badge.querySelector('summary').textContent.includes('edited by'), 'Generation itself was marked as a human edit');
+    badge.querySelector('summary').click();
+    assert(badge.open && badge.textContent.includes('Original generation input') && !badge.textContent.includes('Changed setup value'), 'Badge used current setup instead of the saved generation inputs');
     button('Edit').click();
     await waitFor(editor);
     write(`<p>My ${kind} draft</p><table><tbody><tr><td>Keep my table</td></tr></tbody></table>`);
@@ -139,6 +160,7 @@ try {
     assert(document.querySelector('[data-conflict-draft]').textContent.includes(`My ${kind} draft`), 'Comparison lost local draft');
     assert(saved.content.includes('Alice') && saved.revision === 2, 'Outdated save replaced newer text');
     assert(analysisCalls === analysisBefore, 'Rejected save started AI analysis');
+    assert(!document.querySelector('[data-section-origin] summary').textContent.includes('edited by Writer'), 'Rejected save changed badge attribution');
     assert(button('Save').disabled, 'Unresolved conflict can be saved without comparison');
     stage = `${kind}: recover after remount`;
     mount(Component);
@@ -168,6 +190,9 @@ try {
     await save();
     await waitFor(() => !document.querySelector('[contenteditable]'));
     assert(saved.content.includes('Combined') && saved.revision === 4, 'Reconciled text was not saved');
+    assert(document.querySelector('[data-section-origin] summary').textContent.includes('edited by Writer'), 'Successful edit did not update the badge');
+    assert(document.querySelector('[data-section-origin] time[datetime="2026-10-10T12:00:00Z"]'), 'Badge does not show the saved edit date');
+    assert(!saved.content.includes('AI-generated') && !requests.at(-1).content.includes('AI-generated'), 'Badge leaked into section content');
     assert(!Object.keys(sessionStorage).some(key => key.includes(`"${kind}"`)), 'Successful save left a stale recovery draft');
     stage = `${kind}: changes arriving during save`;
     button('Edit').click();
@@ -181,7 +206,66 @@ try {
     await waitFor(() => !document.querySelector('[contenteditable]'));
     assert(saved.revision === 6 && saved.content.includes('Later inserted'), 'Later insertion was lost instead of saved with the new revision');
   }
+  for (const Component of [ProtocolReview, ReportReview]) {
+    stage = 'review badges after reload';
+    mount(Component);
+    await waitFor(() => document.querySelector('[data-section-origin]'));
+    assert(document.querySelector('[data-section-origin] summary').textContent.includes('edited by Writer'), 'Review or reload lost the saved badge');
+    assert(document.querySelector('[data-generation-inputs]').textContent.includes('Original generation input'), 'Review lost generation inputs');
+  }
+  for (const Component of [ProtocolDocument, ClinicalInvestigationReport]) {
+    stage = 'PDF badges excluded by default';
+    mount(Component);
+    await waitFor(() => document.getElementById('root').textContent.includes('Later inserted text'));
+    const checkbox = document.querySelector('[data-pdf-export-options] input');
+    assert(checkbox && !checkbox.checked, 'PDF badge inclusion is not opt-in');
+    assert(!document.querySelector('[data-section-origin]'), 'Badge leaked into PDF view');
+    const authoredContent = Component === ProtocolDocument ? protocolSection.content : reportSection.content;
+    const capturePrint = async expected => {
+      if (Component !== ProtocolDocument) return;
+      const originalPrint = window.print;
+      let printed = false;
+      window.print = () => {
+        printed = true;
+        assert(!!document.querySelector('#protocol-print-root [data-document-origin]') === expected, 'Protocol print ignored the badge choice');
+        assert(document.getElementById('print-override').textContent.includes('[data-pdf-export-options] { display: none'), 'Export checkbox is printed');
+      };
+      try {
+        button('Export Locked PDF').click();
+        await waitFor(() => printed);
+      } finally {
+        window.print = originalPrint;
+        document.getElementById('print-override')?.remove();
+      }
+    };
+    await capturePrint(false);
+    stage = 'PDF badges included by agreement';
+    checkbox.click();
+    await waitFor(() => document.querySelector('[data-document-origin]'));
+    const badge = document.querySelector('[data-document-origin]');
+    assert(badge.textContent.includes('AI-generated') && badge.textContent.includes('edited by Writer'), 'PDF lost origin or edit attribution');
+    assert(badge.querySelector('time[datetime="2026-10-10T12:00:00Z"]'), 'PDF lost the saved edit date');
+    const editedDate = badge.querySelector('time').textContent;
+    assert(badge.textContent === `AI-generated · edited by Writer on ${editedDate}`, 'PDF contains more than the badge label');
+    assert(!badge.querySelector('[data-generation-inputs]'), 'Generation input details leaked into PDF');
+    assert(!badge.querySelector('details,summary,button,input'), 'PDF badge contains interactive controls');
+    if (Component === ClinicalInvestigationReport) {
+      assert(badge.closest('.protocol-page'), 'Report badge is outside the exported pages');
+      assert(!checkbox.closest('.protocol-page'), 'Report export checkbox is inside exported pages');
+    }
+    await capturePrint(true);
+    stage = 'PDF badges can be removed again';
+    checkbox.click();
+    await waitFor(() => !document.querySelector('[data-section-origin]'));
+    await capturePrint(false);
+    assert(authoredContent === (Component === ProtocolDocument ? protocolSection.content : reportSection.content), 'Export choice changed saved section text');
+    checkbox.click();
+    await waitFor(() => document.querySelector('[data-document-origin]'));
+    mount(Component);
+    await waitFor(() => document.querySelector('[data-pdf-export-options] input'));
+    assert(!document.querySelector('[data-pdf-export-options] input').checked && !document.querySelector('[data-section-origin]'), 'New export view reused previous agreement');
+  }
   assert(!errors.length, errors.join('; '));
-  document.getElementById('result').textContent = 'PASS: protocol/report outdated saves, newer text comparison, rich-text draft recovery, repeated conflicts, failed-save retention, pending-save draft retention, revision-based reconciliation and no rejected-save analysis';
+  document.getElementById('result').textContent = 'PASS: protocol/report save conflicts and draft recovery; AI badges, original inputs, saved editor/date, review/reload persistence, manual/legacy behavior and optional PDF badges (default off, include, remove, reset)';
 } catch (error) { document.getElementById('result').textContent = `FAIL: ${stage}: ${error.message}`; }
 </script></body></html>

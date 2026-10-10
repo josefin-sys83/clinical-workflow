@@ -2,6 +2,7 @@ import { FileText } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
+import { SectionOriginBadge } from '@/shared/editor/SectionOriginBadge';
 import { advanceWorkflowStep, WorkflowStepBlockedError } from '@/shared/services/workflowService';
 import { Info, X, FileDown, Lock, CheckCircle2 } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -99,6 +100,10 @@ export function ClinicalInvestigationReport() {
   const [projectData, setProjectData] = useState<any>(null);
   const [roles, setRoles] = useState<any[]>([]);
   const [reportSections, setReportSections] = useState<any[]>([]);
+  const [includeAiBadges, setIncludeAiBadges] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+
+  useEffect(() => { setIncludeAiBadges(false); }, [projectId]);
   const [documentHash, setDocumentHash] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [confirmingAs, setConfirmingAs] = useState<'investigator' | 'sponsor' | null>(null);
@@ -132,6 +137,7 @@ export function ClinicalInvestigationReport() {
           title: titleMap[id] || data.title || id,
           content: data.content || '',
           state: data.state || 'draft',
+          provenance: data.provenance,
         })).filter(s => s.content);
         setReportSections(sectionList);
 
@@ -260,7 +266,8 @@ export function ClinicalInvestigationReport() {
   };
 
   const handleExportPDF = async () => {
-    if (!signatures.investigator || !signatures.sponsor) return;
+    if (!signatures.investigator || !signatures.sponsor || isExportingPDF) return;
+    setIsExportingPDF(true);
 
     try {
       // Show loading state
@@ -371,6 +378,8 @@ export function ClinicalInvestigationReport() {
     } catch (error) {
       console.error('PDF generation failed:', error);
       alert('Failed to generate PDF. Please try again.');
+    } finally {
+      setIsExportingPDF(false);
     }
   };
 
@@ -546,6 +555,7 @@ export function ClinicalInvestigationReport() {
               <div key={section.id} className="protocol-page" style={pageStyle}>
                 <section style={{ marginBottom: '40px' }}>
                   <h2 style={h2Style}>{idx + 1}. {section.title}</h2>
+                  {includeAiBadges && <SectionOriginBadge provenance={section.provenance} displayMode="document" />}
                   <div
                     dangerouslySetInnerHTML={{ __html: sanitizeForRender(section.content.replace(/```html\n?/g, '').replace(/```\n?/g, '')) }}
                     style={{ fontSize: '13px', lineHeight: '1.8', color: '#1a1a1a', fontFamily: 'Georgia, serif' }}
@@ -645,13 +655,18 @@ export function ClinicalInvestigationReport() {
               ))}
 
               {/* Export */}
-              <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px' }}>
+                <label data-pdf-export-options style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#374151', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={includeAiBadges} disabled={isExportingPDF}
+                    onChange={event => setIncludeAiBadges(event.target.checked)} />
+                  Include AI badges
+                </label>
                 <button
                   onClick={handleExportPDF}
-                  disabled={!isReportApproved}
-                  style={{ padding: '10px 20px', background: !isReportApproved ? '#9ca3af' : '#1d4ed8', color: '#fff', border: 'none', borderRadius: '6px', cursor: !isReportApproved ? 'not-allowed' : 'pointer', fontSize: '14px', fontWeight: 500 }}
+                  disabled={!isReportApproved || isExportingPDF}
+                  style={{ padding: '10px 20px', background: !isReportApproved || isExportingPDF ? '#9ca3af' : '#1d4ed8', color: '#fff', border: 'none', borderRadius: '6px', cursor: !isReportApproved || isExportingPDF ? 'not-allowed' : 'pointer', fontSize: '14px', fontWeight: 500 }}
                 >
-                  Export Locked PDF
+                  {isExportingPDF ? 'Exporting…' : 'Export Locked PDF'}
                 </button>
               </div>
             </div>

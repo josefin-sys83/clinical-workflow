@@ -83,6 +83,8 @@ export default function ReviewPageCopy() {
       title: s.title || '',
       status: deriveSectionStatus(s),
       content: s.content || '',
+      provenance: s.provenance,
+      aiGenerated: s.aiGenerated === true,
       reviewStatus: s.reviewStatus as ReportSection['reviewStatus'] | undefined,
     }));
   }, [protocol]);

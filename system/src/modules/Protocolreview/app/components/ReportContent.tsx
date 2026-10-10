@@ -1,4 +1,5 @@
 import { countIssueSeverities } from '@/shared/protocol/issues';
+import { SectionOriginBadge } from '@/shared/editor/SectionOriginBadge';
 import { useEffect, useRef } from 'react';
 import {
   CheckCircle2,
@@ -161,6 +162,7 @@ export function ReportContent({
                   {index + 1}. {section.title}
                 </h2>
                 <div className="flex flex-wrap justify-end items-center gap-2">
+                  <SectionOriginBadge provenance={section.provenance} aiGenerated={section.aiGenerated} />
                   {/* Findings count badge */}
                   {(() => {
                     const sf = findings.filter((f) => f.sectionId === section.id && !f.acceptedRisk);

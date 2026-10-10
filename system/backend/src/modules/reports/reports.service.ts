@@ -12,6 +12,7 @@ import { getPool } from '../../db/pg';
 import { listProjectRequirements } from '../projects/project-requirements';
 import { sanitizeSectionHtml } from '../../common/sanitize-section-html';
 import { assertSectionRevision } from '../../common/section-revision';
+import { loadSectionProvenance } from '../../common/section-provenance';
 import { AuditService, AuditActor, RecordAuditEvent } from '../audit/audit.service';
 import { getReportSectionDefinitions, resolveReportMarkets } from './report-section-definitions';
 
@@ -84,7 +85,9 @@ export class ReportsService {
     sortSections(sectionRows, definitionsById);
 
     const children = await this.loadSectionChildren(report.id, db);
-    const sections = buildSections(sectionRows, definitionsById, children);
+    const provenance = await loadSectionProvenance(projectId, 'report', db);
+    const sections = Object.fromEntries(Object.entries(buildSections(sectionRows, definitionsById, children))
+      .map(([key, section]) => [key, { ...section, provenance: provenance(key, !!section.aiDraft) }]));
     const consistency = await this.loadConsistency(report.id, db);
 
     return {
@@ -215,6 +218,7 @@ export class ReportsService {
     actor: AuditActor,
     action: string,
     fn: (client: PoolClient, reportId: string) => Promise<T>,
+    options?: { metadata?: Record<string, any>; readResult?: (client: PoolClient) => Promise<T> },
   ): Promise<T> {
     const client = await getPool().connect();
     try {
@@ -222,9 +226,10 @@ export class ReportsService {
       await this.lockEditableProject(projectId, client);
       const reportId = await this.ensureForProject(projectId, client, actor);
       const result = await fn(client, reportId);
-      await this.recordReportWrite(projectId, reportId, actor, action, client);
+      await this.recordReportWrite(projectId, reportId, actor, action, client, options?.metadata);
+      const response = options?.readResult ? await options.readResult(client) : result;
       await client.query('COMMIT');
-      return result;
+      return response;
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {});
       throw e;
@@ -253,6 +258,7 @@ export class ReportsService {
     actor: AuditActor,
     action: string,
     client: PoolClient,
+    metadata?: Record<string, any>,
   ) {
     await client.query('update report set updated_at=now(), updated_by_user_id=$2 where id=$1', [
       reportId,
@@ -274,6 +280,7 @@ export class ReportsService {
         entityType: 'report',
         entityId: reportId,
         actor,
+        metadata,
       },
       client,
     );
@@ -288,6 +295,10 @@ export class ReportsService {
   ): Promise<Record<string, any>> {
     if (!patches || Array.isArray(patches) || typeof patches !== 'object')
       throw new BadRequestException('sections must be an object');
+    const contentEditedSectionIds: string[] = [];
+    const writtenSectionIds = new Set<string>();
+    const generatedIds = new Set<string>(auditEvents.filter(event => event.type === 'report.ai.generated' || event.type === 'report.section.ai.generated')
+      .flatMap(event => event.metadata?.sectionIds || [event.metadata?.sectionId || event.entityId]));
     return this.write(projectId, actor, 'report.sections.updated', async (client, reportId) => {
       const definitions = await this.sectionDefinitions(projectId, client);
       for (const [key, patch] of Object.entries(patches)) {
@@ -300,15 +311,24 @@ export class ReportsService {
           );
           if (onlyMissingContent && String(rows[0]?.content || rows[0]?.ai_draft || '').trim()) continue;
           assertSectionRevision(key, patch.expectedRevision, rows[0]);
+          if (!generatedIds.has(key) && sanitizeSectionHtml(rows[0]?.content || '') !== sanitizeSectionHtml(patch.content)) {
+            contentEditedSectionIds.push(key);
+          }
         }
         const sectionId = await this.ensureSection(reportId, key, definition, actor, client);
         await this.updateSectionFields(sectionId, patch, actor, client);
         await this.updateSectionCollections(projectId, sectionId, key, patch, actor, client);
+        writtenSectionIds.add(key);
       }
-      for (const event of auditEvents)
-        await this.audit.record({ ...event, projectId, actor }, client);
-      return (await this.getByProject(projectId, client)).sections;
-    });
+      for (const event of auditEvents) {
+        const metadata = event.type === 'report.ai.generated'
+          ? { ...event.metadata, sectionIds: (event.metadata?.sectionIds || []).filter((key: string) => writtenSectionIds.has(key)) }
+          : event.metadata;
+        await this.audit.record({ ...event, metadata, projectId, actor }, client);
+      }
+      return {} as Record<string, any>;
+    }, { metadata: { contentEditedSectionIds },
+      readResult: async client => (await this.getByProject(projectId, client)).sections });
   }
 
   async beginSectionAnalysis(projectId: string, key: string, content: string, actor: AuditActor) {

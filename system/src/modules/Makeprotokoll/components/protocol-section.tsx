@@ -7,6 +7,7 @@ import { ReviewRemediation } from '@/shared/editor/ReviewRemediation';
 import { FindingDetails } from '@/shared/protocol/FindingDetails';
 import { FindingDocumentControl } from '@/shared/protocol/FindingDocumentControl';
 import { SaveStatus } from '@/shared/editor/SaveStatus';
+import { SectionOriginBadge, type SectionProvenance } from '@/shared/editor/SectionOriginBadge';
 import { SectionConflictPanel } from '@/shared/editor/SectionConflictPanel';
 import { sectionConflict, sectionDraftKey, readSectionDraft, writeSectionDraft, clearSectionDraft, type SectionConflict, type SavedSection } from '@/shared/editor/section-draft';
 import { apiErrorMessage } from '@/shared/api/http';
@@ -77,6 +78,7 @@ interface ProtocolSectionProps {
     updated: string;
     comments: SectionComment[];
     aiGenerated: boolean;
+    provenance?: SectionProvenance;
     reviewStatus: string | null;
     locked?: boolean;
     reviewCycle?: number;
@@ -551,6 +553,7 @@ function ProtocolSectionComponent(
               </h3>
               
               {/* Status Badges */}
+              <SectionOriginBadge provenance={section.provenance} aiGenerated={section.aiGenerated} />
               {(section.aiGenerated || analysisStatus === 'running') && (
                 <span
                   role="status"

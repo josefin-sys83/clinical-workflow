@@ -41,6 +41,7 @@ databaseTests('supporting documents in PostgreSQL', () => {
       create table report(id uuid primary key,project_id uuid);
       create table report_section(id uuid primary key,report_id uuid);
       create table report_section_issue(id uuid primary key,section_id uuid);
+      create table audit_event(id uuid primary key,project_id uuid,type text,entity_id text,actor_name text,metadata jsonb,created_at timestamptz);
       create table standards(id integer generated always as identity primary key,code text,title text);
       create table standard_rules(standard_id integer,always_applies boolean);
       create table project_standards(project_id uuid,standard_id integer not null,created_at timestamptz default now(),primary key(project_id,standard_id));

@@ -1,6 +1,7 @@
 import { apiFetch } from './http';
+import type { SectionProvenance } from '@/shared/editor/SectionOriginBadge';
 
-type GeneratedSection = { sectionId: string; content: string; revision: number; updatedAt?: string };
+type GeneratedSection = { sectionId: string; content: string; revision: number; updatedAt?: string; provenance?: SectionProvenance };
 const generationRequests = new Map<string, Promise<GeneratedSection>>();
 
 export function hasReportText(value: unknown): boolean {

@@ -95,6 +95,7 @@ export default function ReviewPage() {
           // ReportContent/SectionOverview only distinguish 'approved' from everything else
           status: (data.state === 'approved' || data.state === 'locked') ? 'approved' : 'warning',
           content: data.content || '',
+          provenance: data.provenance,
           // Authoring persists "won't fix" decisions by issue description. Review must
           // apply the same suppression or dismissed blockers reappear and disable approval.
           issues: (data.issues || []).filter((issue: any) =>

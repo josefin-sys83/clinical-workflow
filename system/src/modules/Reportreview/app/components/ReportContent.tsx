@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { SectionOriginBadge } from '@/shared/editor/SectionOriginBadge';
 import DOMPurify from 'dompurify';
 import type { ReportSection, RegulatoryFinding } from '../types/review';
 import { TableView } from './TableView';
@@ -161,7 +162,10 @@ export function ReportContent({ sections, onSectionVisible, findings, projectDat
                 <h2 className="text-lg font-medium text-neutral-900">
                   {index + 1}. {section.title}
                 </h2>
-                {getStatusBadge(section.status)}
+                <div className="flex flex-wrap items-center gap-2">
+                  <SectionOriginBadge provenance={section.provenance} />
+                  {getStatusBadge(section.status)}
+                </div>
               </div>
 
               <div className="prose prose-neutral max-w-none">

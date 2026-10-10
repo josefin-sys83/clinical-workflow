@@ -47,6 +47,10 @@ describe('protocol generation', () => {
     expect(result.sections.every((s: any) => s.content && Array.isArray(s.requiredElements))).toBe(true);
     expect(protocols.updateAtomic).toHaveBeenCalledWith('project', expect.any(Function), actor,
       expect.objectContaining({ type: 'protocol.generated', metadata: expect.objectContaining({ sections: 9 }) }));
+    const metadata = protocols.updateAtomic.mock.calls[0][3].metadata;
+    expect(metadata.sectionIds).toEqual(result.sections.map((s: any) => s.id));
+    expect(metadata.generationInputs).toContainEqual({ label: 'Project', value: 'Study' });
+    expect(metadata.generationInputs).toContainEqual({ label: 'Target markets', value: 'EU' });
   });
 
   it('uses the intended use saved in scope', async () => {

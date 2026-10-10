@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 import { getPool } from '../db/pg';
 import { ProtocolsService } from '../modules/protocols/protocols.service';
 import { ReportsService } from '../modules/reports/reports.service';
+import { AuditService } from '../modules/audit/audit.service';
 
 jest.mock('../db/pg', () => ({ getPool: jest.fn() }));
 const connectionString = process.env.SECTION_REVISION_TEST_DATABASE_URL;
@@ -115,5 +116,44 @@ databaseTests('section revision concurrency in PostgreSQL', () => {
     await expect(protocols.updateSection(projectId, '1', {
       content: '<p>Stale editor</p>', previousContent: '<p>Original</p>', expectedRevision: 1,
     }, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it.each(['protocol', 'report'])('persists %s badge attribution and original inputs using the existing audit records', async kind => {
+    const inputs = [{ label: 'Device category', value: 'Original category' }];
+    const sectionId = kind === 'protocol' ? '1' : 'section-1';
+    const generation = kind === 'protocol' ? 'protocol.generated' : 'report.section.ai.generated';
+    const metadata = { sectionIds: [sectionId], sectionId, generationInputs: inputs, generatedAt: '2020-01-01T00:00:00Z' };
+    await pool.query(`insert into audit_event(id,project_id,scope,type,message,entity_type,entity_id,metadata,created_at)
+      values(gen_random_uuid(),$1,'project',$2,'Generated','section',$3,$4,'2020-01-01')`, [projectId, generation, sectionId, metadata]);
+    if (kind === 'protocol') await pool.query('update protocol_section set ai_generated=true where protocol_id=(select id from protocol where project_id=$1)', [projectId]);
+    const realAudit = new AuditService();
+    const protocolService = new ProtocolsService(realAudit);
+    const reportService = new ReportsService(realAudit);
+    const read = async () => kind === 'protocol'
+      ? (await protocolService.getByProject(projectId)).sections[0]
+      : (await reportService.getByProject(projectId)).sections[sectionId];
+    const save = async (content: string, expectedRevision: number) => kind === 'protocol'
+      ? protocolService.updateSection(projectId, sectionId, { content, expectedRevision }, { name: 'Alice' })
+      : (await reportService.updateSections(projectId, { [sectionId]: { content, expectedRevision, userEdited: true } }, { name: 'Alice' }))[sectionId];
+    expect((await read()).provenance).toMatchObject({ aiGenerated: true, inputs, editedAt: null });
+    const saved = await save('<p>Human edited text</p>', 1);
+    expect(saved.provenance).toMatchObject({ aiGenerated: true, inputs, editedBy: 'Alice' });
+    expect(saved.provenance.editedAt).toBeTruthy();
+    expect((await read()).provenance).toEqual(saved.provenance);
+    await expect(save('<p>Outdated save</p>', 1)).rejects.toMatchObject({ status: 409 });
+    expect((await read()).provenance).toEqual(saved.provenance);
+    if (kind === 'report') {
+      await reportService.updateSections(projectId, { [sectionId]: { state: 'approved', content: saved.content, expectedRevision: 2 } }, { name: 'Approver' });
+      expect((await read()).provenance).toEqual(saved.provenance);
+      const regenerated = await reportService.updateSections(projectId, { [sectionId]: { content: '<p>Regenerated text</p>', expectedRevision: 3 } }, { name: 'Generator' }, [{
+        type: 'report.section.ai.generated', message: 'Generated', entityId: sectionId,
+        metadata: { sectionId, generationInputs: [{ label: 'Device category', value: 'New category' }], generatedAt: new Date().toISOString() },
+      }]);
+      expect(regenerated[sectionId].provenance).toMatchObject({ editedBy: null, editedAt: null,
+        inputs: [{ label: 'Device category', value: 'New category' }] });
+    } else {
+      await protocolService.updateAtomic(projectId, current => ({ ...current, sections: current.sections.map((section: any) => ({ ...section, approvalStatus: 'approved' })) }), { name: 'Approver' });
+      expect((await read()).provenance).toEqual(saved.provenance);
+    }
   });
 });

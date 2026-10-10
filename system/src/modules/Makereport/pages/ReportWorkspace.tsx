@@ -310,7 +310,7 @@ export function ReportWorkspace() {
       const result = await generateReportSectionDraft(projectId, section);
       if (!run.active) return;
       setSections(prev => prev.map(s => s.id === sectionId && !hasReportText(s.content) && !hasReportText(s.aiDraft)
-        ? { ...s, aiDraft: result.content, aiDraftGenerated: true, revision: result.revision, updatedAt: result.updatedAt } : s));
+        ? { ...s, aiDraft: result.content, aiDraftGenerated: true, revision: result.revision, updatedAt: result.updatedAt, provenance: result.provenance } : s));
     } catch (error) {
       if (!run.active) return;
       setDraftErrors(prev => ({ ...prev, [sectionId]: apiErrorMessage(error, error instanceof Error ? error.message : 'Draft generation failed. Please retry.') }));
@@ -369,7 +369,7 @@ export function ReportWorkspace() {
       const saved = await saveReportSections(projectId, { [sectionId]: partialData });
       setSectionSaveError(null);
       if (saved[sectionId]) setSections(prev => prev.map(section => section.id === sectionId
-        ? { ...section, revision: saved[sectionId].revision, updatedAt: saved[sectionId].updatedAt } : section));
+        ? { ...section, revision: saved[sectionId].revision, updatedAt: saved[sectionId].updatedAt, provenance: saved[sectionId].provenance } : section));
       return saved;
     } catch (error) {
       setSectionSaveError(apiErrorMessage(error, 'The section could not be saved. Your text has been kept.'));

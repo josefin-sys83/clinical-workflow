@@ -1,3 +1,5 @@
+import type { SectionProvenance } from '@/shared/editor/SectionOriginBadge';
+
 export interface ValidationFinding {
   id: string;
   type: 'warning' | 'blocker' | 'info';
@@ -94,6 +96,7 @@ export interface InsertedAsset {
 }
 
 export interface ReportSection {
+  provenance?: SectionProvenance;
   revision?: number;
   updatedAt?: string;
   analysisStatus?: 'not-run' | 'running' | 'succeeded' | 'failed';

@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify';
 import { hasReportText, saveReportSections } from '@/shared/api/reports';
 import { apiErrorMessage } from '@/shared/api/http';
 import { SaveStatus } from '@/shared/editor/SaveStatus';
+import { SectionOriginBadge } from '@/shared/editor/SectionOriginBadge';
 import { SectionConflictPanel } from '@/shared/editor/SectionConflictPanel';
 import { sectionConflict, sectionDraftKey, readSectionDraft, writeSectionDraft, clearSectionDraft, type SectionConflict } from '@/shared/editor/section-draft';
 import { highlightReviewHtml, stripReviewHighlights, trackReviewEditor, type ReviewFinding } from '@/shared/editor/review-highlights';
@@ -628,6 +629,7 @@ const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
                         </h2>
 
                         {/* State Badge */}
+                        <SectionOriginBadge provenance={section.provenance} aiGenerated={section.aiDraftGenerated === true} />
                         <span
                           className="px-2 py-0.5 rounded border"
                           style={{
